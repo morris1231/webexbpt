@@ -26,8 +26,7 @@ def get_halo_headers():
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
-        # Gebruik exacte scope zoals je Postman teruggeeft
-        "scope": "openid email profile offline_access roles all"
+        "scope": "all"   # ✅ juist zoals in Postman
     }
 
     encoded = urllib.parse.urlencode(payload)
@@ -46,7 +45,7 @@ def get_halo_headers():
     resp = requests.post(
         HALO_AUTH_URL,
         headers=headers,
-        data=encoded.encode("utf-8"),  # stuur raw urlencoded string
+        data=encoded.encode("utf-8"),  # raw urlencoded
         timeout=15
     )
 
