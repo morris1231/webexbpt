@@ -20,13 +20,14 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔑 Halo Access Token ophalen met DEBUG
+
+# 🔑 Halo Access Token ophalen
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
-        "scope": "all"   # ✅ juist zoals in Postman
+        "scope": "all"   # ✅ juist, werkt ook in Postman
     }
 
     encoded = urllib.parse.urlencode(payload)
@@ -35,7 +36,6 @@ def get_halo_headers():
         "Accept": "application/json"
     }
 
-    # 🔎 Debug: wat sturen we precies naar Halo?
     print("⚙️ HALO AUTH DEBUG", flush=True)
     print("  URL:", HALO_AUTH_URL, flush=True)
     print("  client_id:", HALO_CLIENT_ID, flush=True)
@@ -45,7 +45,7 @@ def get_halo_headers():
     resp = requests.post(
         HALO_AUTH_URL,
         headers=headers,
-        data=encoded.encode("utf-8"),  # raw urlencoded
+        data=encoded.encode("utf-8"),
         timeout=15
     )
 
@@ -60,15 +60,16 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-# 🎫 Ticket aanmaken in Halo
-def create_halo_ticket(summary, details, priority="Medium"):
+# 🎫 Ticket aanmaken in Halo (alleen summary + details)
+def create_halo_ticket(summary, details):
     headers = get_halo_headers()
     payload = {
         "Summary": summary,
-        "Details": details,
-        "TypeID": 1,  # pas aan naar geldige TypeID in jouw Halo config
-        "Priority": priority
+        "Details": details
+        # 🚫 Geen priority, geen type → Helpdesk regelt dit later
     }
+    print("📤 Halo Ticket Payload:", payload, flush=True)
+
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
     resp.raise_for_status()
@@ -166,7 +167,7 @@ def webex_webhook():
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(summary, details, priority="Medium")
+        ticket = create_halo_ticket(summary, details)
         ticket_id = ticket.get("ID", "onbekend")
 
         send_message(
