@@ -3,11 +3,9 @@ import requests
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 app = Flask(__name__)
 
-# Env variabelen
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
@@ -19,7 +17,7 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ✅ HALO AUTH HEADERS OPHALEN
+# ✅ OAuth token ophalen
 def get_halo_headers():
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = {
@@ -34,13 +32,13 @@ def get_halo_headers():
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-# ✅ TICKET MAKEN
+# ✅ Nieuw ticket maken in Halo
 def create_halo_ticket(summary, details, priority="Medium"):
     headers = get_halo_headers()
     payload = {
         "Summary": summary,
         "Details": details,
-        "TypeID": 1,       # let op: aanpassen naar een geldige ticket type id in Halo
+        "TypeID": 1,
         "Priority": priority
     }
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -48,14 +46,14 @@ def create_halo_ticket(summary, details, priority="Medium"):
     resp.raise_for_status()
     return resp.json()
 
-# ✅ WEBEX BERICHT STUREN
+# ✅ Bericht sturen naar Webex
 def send_message(room_id, text):
     resp = requests.post("https://webexapis.com/v1/messages",
                          headers=WEBEX_HEADERS,
-                         json={"roomId": room_id, "text": text})
-    print("📤 Webex send message resp:", resp.status_code, resp.text, flush=True)
+                         json={"roomId": room_id, "markdown": text})
+    print("📤 Webex message resp:", resp.status_code, resp.text, flush=True)
 
-# ✅ ADAPTIVE CARD STUREN (NL)
+# ✅ Adaptive Card in NL
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -81,10 +79,7 @@ def send_adaptive_card(room_id):
                         }
                     ],
                     "actions": [
-                        {
-                            "type": "Action.Submit",
-                            "title": "Versturen"
-                        }
+                        {"type": "Action.Submit", "title": "Versturen"}
                     ]
                 }
             }
@@ -92,9 +87,9 @@ def send_adaptive_card(room_id):
     }
     resp = requests.post("https://webexapis.com/v1/messages",
                          headers=WEBEX_HEADERS, json=card)
-    print("📤 Webex send card resp:", resp.status_code, resp.text, flush=True)
+    print("📤 Webex card resp:", resp.status_code, resp.text, flush=True)
 
-# ✅ WEBEX WEBHOOK
+# ✅ Webex webhook entrypoint
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
@@ -103,53 +98,47 @@ def webex_webhook():
 
     if resource == "messages":
         msg_id = data["data"]["id"]
-        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}",
-                           headers=WEBEX_HEADERS).json()
+        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
         room_id = msg["roomId"]
         sender = msg.get("personEmail")
 
-        # Negeer eigen bot berichten
+        # Eigen bot berichten negeren
         if sender and sender.endswith("@webex.bot"):
-            print("🤖 Bericht van bot genegeerd")
             return {"status": "ignored"}
 
-        print("📩 Binnenkomende tekst:", text, flush=True)
-
-        if "nieuwe melding" in text:   # triggerwoord
+        if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
     elif resource == "attachmentActions":
-        # Formulier verzonden
         action_id = data["data"]["id"]
-        form = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
-                            headers=WEBEX_HEADERS).json()
+        form = requests.get(
+            f"https://webexapis.com/v1/attachment/actions/{action_id}",
+            headers=WEBEX_HEADERS).json()
         inputs = form["inputs"]
-        print("📥 Formulier data:", inputs, flush=True)
 
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
 
-        # Ticket details samenstellen
-        summary = "Melding via Webex"
-        details = f"Naam: {naam}\n\nProbleem:\n{omschrijving}"
+        # Ticket details
+        summary = omschrijving if omschrijving else "Melding via Webex"
+        details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(
-            summary,
-            details,
-            priority="Medium"   # vast → helpdesk kan later aanpassen
-        )
+        # ✅ Ticket maken in Halo
+        ticket = create_halo_ticket(summary, details, priority="Medium")
+        ticket_id = ticket.get("ID", "onbekend")
 
+        # ✅ Antwoord sturen in Webex
         send_message(data["data"]["roomId"],
-                     f"✅ Ticket aangemaakt in Halo met ID: {ticket.get('ID', 'onbekend')}")
+                     f"✅ Ticket **#{ticket_id}** is aangemaakt in Halo.\n\nOnderwerp: {summary}")
 
     return {"status": "ok"}
 
-# ✅ HEALTHCHECK ENDPOINT
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Webex → Halo Bot draait"}
 
-if __name__ == "__main__":   # goede Python check
+# ✅ Start
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
