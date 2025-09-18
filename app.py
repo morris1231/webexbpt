@@ -44,8 +44,11 @@ def create_halo_ticket(summary, details, priority="Medium", user=None):
     return resp.json()
 
 def send_message(room_id, text):
-    requests.post("https://webexapis.com/v1/messages",
-                  headers=WEBEX_HEADERS, json={"roomId": room_id, "text": text})
+    requests.post(
+        "https://webexapis.com/v1/messages",
+        headers=WEBEX_HEADERS,
+        json={"roomId": room_id, "text": text}
+    )
 
 def send_adaptive_card(room_id):
     card = {
@@ -91,14 +94,26 @@ def webex_webhook():
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
-        room_id = msg["roomId"]
+        room_id = msg.get("roomId")
+        sender = msg.get("personEmail")
+
+        # Ignore messages from the bot itself
+        if sender and sender.endswith("@webex.bot"):
+            print("🤖 Ignored bot’s own message")
+            return {"status": "ignored"}
+
+        print("📩 Message text:", text, flush=True)
+
         if "new ticket" in text:
             send_adaptive_card(room_id)
+            print("📝 Sent Adaptive Card to:", room_id, flush=True)
 
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        form = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS).json()
+        form = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
+                            headers=WEBEX_HEADERS).json()
         inputs = form["inputs"]
+        print("📥 Adaptive Card inputs:", inputs, flush=True)
 
         ticket = create_halo_ticket(
             inputs.get("summary"),
@@ -106,8 +121,10 @@ def webex_webhook():
             inputs.get("priority", "Medium"),
             inputs.get("name")
         )
-        send_message(data["data"]["roomId"],
-                     f"✅ Halo ticket created with ID: {ticket.get('ID', 'unknown')}")
+        send_message(
+            data["data"]["roomId"],
+            f"✅ Halo ticket created with ID: {ticket.get('ID', 'unknown')}"
+        )
 
     return {"status": "ok"}
 
@@ -115,6 +132,6 @@ def webex_webhook():
 def health():
     return {"status": "ok", "message": "Webex → Halo Bot running"}
 
-if __name__ == "__main__":
+if __name__ == "__main__":   # ✅ fixed!
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
