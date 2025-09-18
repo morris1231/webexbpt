@@ -3,11 +3,11 @@ import requests
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Environment variabelen laden
+# 🔄 Load .env
 load_dotenv()
 app = Flask(__name__)
 
-# 🌐 Environment vars netjes opschonen
+# 🚀 ENV Vars (stripped netjes)
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN", "").strip().strip('"').strip("'")
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip().strip('"').strip("'")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip().strip('"').strip("'")
@@ -19,7 +19,7 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔑 Halo OAuth‑token ophalen
+# 🔑 Halo Access Token ophalen
 def get_halo_headers():
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = {
@@ -28,30 +28,28 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    print("⚙️ [Halo Auth Debug]", flush=True)
-    print("  URL:", HALO_AUTH_URL, flush=True)
     try:
         resp = requests.post(HALO_AUTH_URL, headers=headers, data=payload, timeout=15)
-        print("🔑 Halo auth raw response:", resp.status_code, resp.text[:500], flush=True)
+        print("🔑 Halo auth:", resp.status_code, resp.text[:300], flush=True)
         resp.raise_for_status()
     except Exception as e:
-        print("❌ Request naar Halo fout:", str(e), flush=True)
+        print("❌ Halo auth fout:", str(e), flush=True)
         raise
 
     token = resp.json().get("access_token")
     if not token:
-        raise RuntimeError("Halo gaf geen access_token terug.")
+        raise RuntimeError("Halo gaf geen access_token terug!")
 
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-# 🎫 Halo Ticket aanmaken
+# 🎫 Ticket aanmaken in Halo
 def create_halo_ticket(summary, details, priority="Medium"):
     headers = get_halo_headers()
     payload = {
         "Summary": summary,
         "Details": details,
-        "TypeID": 1,   # pas aan naar juiste TypeID in jouw Halo
+        "TypeID": 1,   # Zet dit naar jouw juiste TypeID
         "Priority": priority
     }
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -67,10 +65,10 @@ def send_message(room_id, text):
         headers=WEBEX_HEADERS,
         json={"roomId": room_id, "markdown": text}
     )
-    print("📤 Webex message resp:", resp.status_code, resp.text, flush=True)
+    print("📤 Webex msg resp:", resp.status_code, resp.text, flush=True)
 
 
-# 📝 Adaptive Card sturen
+# 📝 AdaptiveCard sturen
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -94,47 +92,51 @@ def send_adaptive_card(room_id):
     }
     resp = requests.post("https://webexapis.com/v1/messages",
                          headers=WEBEX_HEADERS, json=card)
-    print("📤 Webex send card resp:", resp.status_code, resp.text, flush=True)
+    print("📤 Webex card resp:", resp.status_code, resp.text, flush=True)
 
 
-# 🔔 Webex Webhook Handler
+# 🔔 Webex Webhook handler
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
     print("🚀 Webex event ontvangen:", data, flush=True)
 
     resource = data.get("resource")
+    event_type = data.get("event")
+    print(f"📡 Resource={resource}, Event={event_type}", flush=True)
 
-    # 1️⃣ Nieuw tekstbericht ontvangen
+    # 1️⃣ Berichten event
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(
             f"https://webexapis.com/v1/messages/{msg_id}",
             headers=WEBEX_HEADERS
         ).json()
+        print("📩 Message details:", msg, flush=True)
 
         text = msg.get("text", "").lower()
-        room_id = msg["roomId"]
+        room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
-        # Bot negeert eigen berichten
         if sender and sender.endswith("@webex.bot"):
-            print("🤖 Eigen bot bericht genegeerd")
-            return {"status": "ignored"}
-
-        print("📩 Bericht tekst:", text, flush=True)
+            return {"status": "ignored"}  # eigen bot bericht negeren
 
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 2️⃣ Adaptive Card (formulier) ingestuurd
+    # 2️⃣ Formulier ingestuurd (AdaptiveCard Submit)
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
+        print(f"📌 Adaptive submit ontvangen, ID={action_id}", flush=True)
+
         form_resp = requests.get(
             f"https://webexapis.com/v1/attachment/actions/{action_id}",
             headers=WEBEX_HEADERS
         )
-        print("📥 Form response raw:", form_resp.status_code, form_resp.text[:500], flush=True)
+        print("📥 Form raw:", form_resp.status_code, form_resp.text[:300], flush=True)
+
+        if not form_resp.ok:
+            return {"status": "error", "reason": "Kon formulier niet ophalen"}, 400
 
         form = form_resp.json()
         inputs = form.get("inputs", {})
@@ -143,15 +145,12 @@ def webex_webhook():
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
 
-        # Ticketgegevens
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        # Halo ticket aanmaken
         ticket = create_halo_ticket(summary, details, priority="Medium")
         ticket_id = ticket.get("ID", "onbekend")
 
-        # Bevestiging naar Webex
         send_message(
             data["data"]["roomId"],
             f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
@@ -166,7 +165,7 @@ def health():
     return {"status": "ok", "message": "Webex → Halo Bot draait"}
 
 
-# ▶️ Start de Flask app
+# ▶️ Start Flask
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
