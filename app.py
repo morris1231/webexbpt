@@ -3,11 +3,10 @@ import requests
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# Load environment vars
+# Load env vars
 load_dotenv()
 app = Flask(__name__)
 
-# Read env vars
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
@@ -36,12 +35,7 @@ def get_halo_headers():
 
 def create_halo_ticket(summary, details, priority="Medium", user=None):
     headers = get_halo_headers()
-    payload = {
-        "Summary": summary,
-        "Details": details,
-        "TypeID": 1,      # Adjust to your Halo config if needed
-        "Priority": priority
-    }
+    payload = {"Summary": summary, "Details": details, "TypeID": 1, "Priority": priority}
     if user:
         payload["User"] = user
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -50,14 +44,10 @@ def create_halo_ticket(summary, details, priority="Medium", user=None):
     return resp.json()
 
 def send_message(room_id, text):
-    requests.post(
-        "https://webexapis.com/v1/messages",
-        headers=WEBEX_HEADERS,
-        json={"roomId": room_id, "text": text}
-    )
+    requests.post("https://webexapis.com/v1/messages",
+                  headers=WEBEX_HEADERS, json={"roomId": room_id, "text": text})
 
 def send_adaptive_card(room_id):
-    """Send Adaptive Card into Webex room"""
     card = {
         "roomId": room_id,
         "attachments": [
@@ -98,7 +88,6 @@ def webex_webhook():
     resource = data.get("resource")
 
     if resource == "messages":
-        # User sent a text message
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
@@ -107,12 +96,8 @@ def webex_webhook():
             send_adaptive_card(room_id)
 
     elif resource == "attachmentActions":
-        # User submitted Adaptive Card form
         action_id = data["data"]["id"]
-        form = requests.get(
-            f"https://webexapis.com/v1/attachment/actions/{action_id}",
-            headers=WEBEX_HEADERS
-        ).json()
+        form = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS).json()
         inputs = form["inputs"]
 
         ticket = create_halo_ticket(
@@ -121,10 +106,8 @@ def webex_webhook():
             inputs.get("priority", "Medium"),
             inputs.get("name")
         )
-        send_message(
-            data["data"]["roomId"],
-            f"✅ Halo ticket created with ID: {ticket.get('ID', 'unknown')}"
-        )
+        send_message(data["data"]["roomId"],
+                     f"✅ Halo ticket created with ID: {ticket.get('ID', 'unknown')}")
 
     return {"status": "ok"}
 
@@ -132,6 +115,6 @@ def webex_webhook():
 def health():
     return {"status": "ok", "message": "Webex → Halo Bot running"}
 
-if __name__ == "__main__":   # ✅ fixed
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
