@@ -37,7 +37,8 @@ def get_halo_headers():
 def create_halo_ticket(summary, details, priority="Medium", user=None):
     headers = get_halo_headers()
     payload = {"Summary": summary, "Details": details, "TypeID": 1, "Priority": priority}
-    if user: payload["User"] = user
+    if user:
+        payload["User"] = user
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text, flush=True)
     resp.raise_for_status()
@@ -61,45 +62,4 @@ def send_adaptive_card(room_id):
                         {"type": "Input.Text", "id": "summary", "placeholder": "Problem summary"},
                         {"type": "Input.Text", "id": "details", "isMultiline": True, "placeholder": "Details"},
                         {"type": "Input.ChoiceSet", "id": "priority", "choices": [
-                            {"title": "Low", "value": "Low"},
-                            {"title": "Medium", "value": "Medium"},
-                            {"title": "High", "value": "High"}
-                        ]}
-                    ],
-                    "actions": [{"type": "Action.Submit", "title": "Submit"}]
-                }
-            }
-        ]
-    }
-    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
-
-@app.route("/webex", methods=["POST"])
-def webex_webhook():
-    data = request.json
-    print("🚀 Webex event:", data, flush=True)
-
-    resource = data.get("resource")
-    if resource == "messages":
-        # User sent text
-        msg_id = data["data"]["id"]
-        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
-        text = msg.get("text", "").lower()
-        room_id = msg["roomId"]
-        if "new ticket" in text:
-            send_adaptive_card(room_id)
-    elif resource == "attachmentActions":
-        action_id = data["data"]["id"]
-        form = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS).json()
-        inputs = form["inputs"]
-        ticket = create_halo_ticket(inputs.get("summary"), inputs.get("details"),
-                                    inputs.get("priority", "Medium"), inputs.get("name"))
-        send_message(data["data"]["roomId"], f"✅ Halo ticket created with ID: {ticket.get('ID', 'unknown')}")
-    return {"status": "ok"}
-
-@app.route("/", methods=["GET"])
-def health():
-    return {"status": "ok", "message": "Webex → Halo Bot running"}
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+                            {"title": "
