@@ -1,5 +1,6 @@
 import os
 import requests
+import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
@@ -7,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 app = Flask(__name__)
 
-# 🚀 ENV Vars (stripped netjes)
+# 🌐 Environment variables (stripped netjes)
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN", "").strip().strip('"').strip("'")
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip().strip('"').strip("'")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip().strip('"').strip("'")
@@ -19,26 +20,43 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔑 Halo Access Token ophalen
+
+# 🔑 Halo Access Token ophalen (fix versie)
 def get_halo_headers():
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    try:
-        resp = requests.post(HALO_AUTH_URL, headers=headers, data=payload, timeout=15)
-        print("🔑 Halo auth:", resp.status_code, resp.text[:300], flush=True)
-        resp.raise_for_status()
-    except Exception as e:
-        print("❌ Halo auth fout:", str(e), flush=True)
-        raise
 
-    token = resp.json().get("access_token")
+    # Encode exact zoals Postman
+    encoded = urllib.parse.urlencode(payload)
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json"
+    }
+
+    print("⚙️ HALO AUTH DEBUG", flush=True)
+    print("  URL:", HALO_AUTH_URL, flush=True)
+    print("  client_id:", HALO_CLIENT_ID, flush=True)
+    print("  secret length:", len(HALO_CLIENT_SECRET), flush=True)
+    print("  encoded payload:", encoded, flush=True)
+
+    resp = requests.post(
+        HALO_AUTH_URL,
+        headers=headers,
+        data=encoded.encode("utf-8"),
+        timeout=15
+    )
+
+    print("🔑 Halo auth raw resp:", resp.status_code, resp.text[:500], flush=True)
+
+    resp.raise_for_status()
+    data = resp.json()
+    token = data.get("access_token")
     if not token:
-        raise RuntimeError("Halo gaf geen access_token terug!")
+        raise RuntimeError(f"Halo gaf geen access_token terug. Response: {data}")
 
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -49,7 +67,7 @@ def create_halo_ticket(summary, details, priority="Medium"):
     payload = {
         "Summary": summary,
         "Details": details,
-        "TypeID": 1,   # Zet dit naar jouw juiste TypeID
+        "TypeID": 1,   # zet naar juiste TypeID in jouw Halo
         "Priority": priority
     }
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -68,7 +86,7 @@ def send_message(room_id, text):
     print("📤 Webex msg resp:", resp.status_code, resp.text, flush=True)
 
 
-# 📝 AdaptiveCard sturen
+# 📝 Adaptive Card sturen
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -95,7 +113,7 @@ def send_adaptive_card(room_id):
     print("📤 Webex card resp:", resp.status_code, resp.text, flush=True)
 
 
-# 🔔 Webex Webhook handler
+# 🔔 Webex webhook
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
@@ -105,7 +123,7 @@ def webex_webhook():
     event_type = data.get("event")
     print(f"📡 Resource={resource}, Event={event_type}", flush=True)
 
-    # 1️⃣ Berichten event
+    # 1️⃣ Bericht ontvangen
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(
@@ -119,12 +137,12 @@ def webex_webhook():
         sender = msg.get("personEmail")
 
         if sender and sender.endswith("@webex.bot"):
-            return {"status": "ignored"}  # eigen bot bericht negeren
+            return {"status": "ignored"}
 
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 2️⃣ Formulier ingestuurd (AdaptiveCard Submit)
+    # 2️⃣ Adaptive Card Submit
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         print(f"📌 Adaptive submit ontvangen, ID={action_id}", flush=True)
@@ -136,7 +154,7 @@ def webex_webhook():
         print("📥 Form raw:", form_resp.status_code, form_resp.text[:300], flush=True)
 
         if not form_resp.ok:
-            return {"status": "error", "reason": "Kon formulier niet ophalen"}, 400
+            return {"status": "error", "reason": "kon formulier niet ophalen"}, 400
 
         form = form_resp.json()
         inputs = form.get("inputs", {})
