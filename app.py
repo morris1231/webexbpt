@@ -20,54 +20,57 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-
 # 🔑 Halo Access Token ophalen
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
-        "scope": "all"   # ✅ juist, werkt ook in Postman
+        "scope": "all"
     }
 
     encoded = urllib.parse.urlencode(payload)
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json"
-    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
 
-    print("⚙️ HALO AUTH DEBUG", flush=True)
-    print("  URL:", HALO_AUTH_URL, flush=True)
-    print("  client_id:", HALO_CLIENT_ID, flush=True)
-    print("  secret length:", len(HALO_CLIENT_SECRET), flush=True)
-    print("  encoded payload:", encoded, flush=True)
-
-    resp = requests.post(
-        HALO_AUTH_URL,
-        headers=headers,
-        data=encoded.encode("utf-8"),
-        timeout=15
-    )
-
-    print("🔑 Halo auth raw resp:", resp.status_code, resp.text[:500], flush=True)
+    resp = requests.post(HALO_AUTH_URL, headers=headers, data=encoded.encode("utf-8"), timeout=15)
+    print("🔑 Halo auth raw resp:", resp.status_code, resp.text[:200], flush=True)
     resp.raise_for_status()
-
     data = resp.json()
-    token = data.get("access_token")
-    if not token:
-        raise RuntimeError(f"Halo gaf geen access_token terug! Response={data}")
-
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
 
-# 🎫 Ticket aanmaken in Halo (alleen summary + details)
-def create_halo_ticket(summary, details):
+# ⚡ Slim beslissen welk TypeID / PriorityID
+def decide_ticket_type_and_priority(omschrijving: str):
+    text = omschrijving.lower()
+
+    # Default
+    type_id = 1        # Incident
+    priority_id = None # Laat Halo default pakken
+
+    if any(word in text for word in ["wachtwoord", "password", "reset", "inloggen", "unlock"]):
+        type_id = 38   # Password reset
+        priority_id = 3
+
+    elif any(word in text for word in ["storing", "server down", "crash", "internet werkt niet", "niet bereikbaar"]):
+        type_id = 1
+        priority_id = 1  # urgent
+
+    return type_id, priority_id
+
+
+# 🎫 Ticket aanmaken in Halo
+def create_halo_ticket(summary, details, omschrijving):
     headers = get_halo_headers()
+    type_id, priority_id = decide_ticket_type_and_priority(omschrijving)
+
     payload = {
         "Summary": summary,
-        "Details": details
-        # 🚫 Geen priority, geen type → Helpdesk regelt dit later
+        "Details": details,
+        "TypeID": type_id
     }
+    if priority_id:
+        payload["PriorityID"] = priority_id
+
     print("📤 Halo Ticket Payload:", payload, flush=True)
 
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -76,17 +79,13 @@ def create_halo_ticket(summary, details):
     return resp.json()
 
 
-# 💬 Bericht sturen naar Webex
+# 💬 Bericht naar Webex sturen
 def send_message(room_id, text):
-    resp = requests.post(
-        "https://webexapis.com/v1/messages",
-        headers=WEBEX_HEADERS,
-        json={"roomId": room_id, "markdown": text}
-    )
-    print("📤 Webex msg resp:", resp.status_code, resp.text, flush=True)
+    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
+                  json={"roomId": room_id, "markdown": text})
 
 
-# 📋 AdaptiveCard sturen
+# 📋 Adaptive Card sturen
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -108,31 +107,19 @@ def send_adaptive_card(room_id):
             }
         ]
     }
-    resp = requests.post(
-        "https://webexapis.com/v1/messages",
-        headers=WEBEX_HEADERS,
-        json=card
-    )
-    print("📤 Webex card resp:", resp.status_code, resp.text, flush=True)
+    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
 
 # 🔔 Webex webhook
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
-    print("🚀 Webex event ontvangen:", data, flush=True)
-
     resource = data.get("resource")
-    event_type = data.get("event")
-    print(f"📡 Resource={resource}, Event={event_type}", flush=True)
 
-    # 1️⃣ Tekstbericht
+    # Nieuw bericht
     if resource == "messages":
         msg_id = data["data"]["id"]
-        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}",
-                           headers=WEBEX_HEADERS).json()
-        print("📩 Message details:", msg, flush=True)
-
+        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
@@ -143,23 +130,11 @@ def webex_webhook():
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 2️⃣ Adaptive Card ingestuurd
+    # AdaptiveCard submit
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        print(f"📌 Adaptive submit ontvangen, ID={action_id}", flush=True)
-
-        form_resp = requests.get(
-            f"https://webexapis.com/v1/attachment/actions/{action_id}",
-            headers=WEBEX_HEADERS
-        )
-        print("📥 Form raw:", form_resp.status_code, form_resp.text[:300], flush=True)
-
-        if not form_resp.ok:
-            return {"status": "error", "reason": "kon formulier niet ophalen"}, 400
-
-        form = form_resp.json()
-        inputs = form.get("inputs", {})
-        print("📥 Parsed inputs:", inputs, flush=True)
+        form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
+        inputs = form_resp.json().get("inputs", {})
 
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
@@ -167,13 +142,11 @@ def webex_webhook():
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(summary, details)
+        ticket = create_halo_ticket(summary, details, omschrijving)
         ticket_id = ticket.get("ID", "onbekend")
 
-        send_message(
-            data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
-        )
+        send_message(data["data"]["roomId"],
+                     f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}")
 
     return {"status": "ok"}
 
