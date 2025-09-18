@@ -47,6 +47,8 @@ def create_halo_ticket(summary, details):
         "TypeID": 55,       # ⚠️ Zet hier het ID van jouw nieuwe 'webex' type
         "CustomerID": 986,  # Bossers & Cnossen
         "TeamID": 1         # ⚠️ Pas dit aan naar het echte Support Engineering team ID
+        "AssignedAgentID": -1,  # unassigned agent (meestal -1 = Onbekend)
+        "CategoryID": 0         # not set, "geen categorie"
     }
     print("📤 Halo Ticket Payload:", payload, flush=True)
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -137,3 +139,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
