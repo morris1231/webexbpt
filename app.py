@@ -18,6 +18,7 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
+
 def get_halo_headers():
     """Get OAuth bearer token for Halo"""
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -33,26 +34,29 @@ def get_halo_headers():
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+
 def create_halo_ticket(summary, details, priority="Medium", user=None):
     headers = get_halo_headers()
-    payload = {"Summary": summary, "Details": details, "TypeID": 1, "Priority": priority}
+    payload = {"Summary": summary, "Details": details,
+               "TypeID": 1, "Priority": priority}
     if user:
         payload["User"] = user
-    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
+    resp = requests.post(f"{HALO_API_BASE}/Tickets",
+                         headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text, flush=True)
     resp.raise_for_status()
     return resp.json()
 
+
 def send_message(room_id, text):
-    requests.post(
-        "https://webexapis.com/v1/messages",
-        headers=WEBEX_HEADERS,
-        json={"roomId": room_id, "text": text}
-    )
+    requests.post("https://webexapis.com/v1/messages",
+                  headers=WEBEX_HEADERS, json={"roomId": room_id, "text": text})
+
 
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
+        "markdown": "📋 Please fill in the ticket form below:",  # ✅ fallback text/markdown required
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
@@ -61,9 +65,12 @@ def send_adaptive_card(room_id):
                     "type": "AdaptiveCard",
                     "version": "1.2",
                     "body": [
-                        {"type": "Input.Text", "id": "name", "placeholder": "Your name"},
-                        {"type": "Input.Text", "id": "summary", "placeholder": "Problem summary"},
-                        {"type": "Input.Text", "id": "details", "isMultiline": True, "placeholder": "Details"},
+                        {"type": "Input.Text", "id": "name",
+                            "placeholder": "Your name"},
+                        {"type": "Input.Text", "id": "summary",
+                            "placeholder": "Problem summary"},
+                        {"type": "Input.Text", "id": "details",
+                            "isMultiline": True, "placeholder": "Details"},
                         {
                             "type": "Input.ChoiceSet",
                             "id": "priority",
@@ -81,8 +88,11 @@ def send_adaptive_card(room_id):
             }
         ]
     }
-    requests.post("https://webexapis.com/v1/messages",
-                  headers=WEBEX_HEADERS, json=card)
+    resp = requests.post("https://webexapis.com/v1/messages",
+                         headers=WEBEX_HEADERS, json=card)
+    print("📤 Webex send card resp:", resp.status_code,
+          resp.text, flush=True)  # ✅ log response
+
 
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
@@ -92,12 +102,13 @@ def webex_webhook():
 
     if resource == "messages":
         msg_id = data["data"]["id"]
-        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
+        msg = requests.get(
+            f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
-        room_id = msg.get("roomId")
+        room_id = msg["roomId"]
         sender = msg.get("personEmail")
 
-        # Ignore messages from the bot itself
+        # Ignore bot’s own messages
         if sender and sender.endswith("@webex.bot"):
             print("🤖 Ignored bot’s own message")
             return {"status": "ignored"}
@@ -110,8 +121,9 @@ def webex_webhook():
 
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        form = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
-                            headers=WEBEX_HEADERS).json()
+        form = requests.get(
+            f"https://webexapis.com/v1/attachment/actions/{action_id}",
+            headers=WEBEX_HEADERS).json()
         inputs = form["inputs"]
         print("📥 Adaptive Card inputs:", inputs, flush=True)
 
@@ -128,10 +140,12 @@ def webex_webhook():
 
     return {"status": "ok"}
 
+
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Webex → Halo Bot running"}
 
-if __name__ == "__main__":   # ✅ fixed!
+
+if __name__ == "__main__":  # ✅ fixed
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
