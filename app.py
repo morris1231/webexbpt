@@ -84,7 +84,6 @@ def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None, na
     resp.raise_for_status()
     data = resp.json()
 
-    # Halo returns id of the new ticket
     if isinstance(data, list):
         new_ticket = data[0]
     else:
@@ -108,11 +107,11 @@ def send_message(room_id, text):
                   json={"roomId": room_id, "markdown": text})
 
 
-# 📋 Webex Adaptive Card
+# 📋 Webex Adaptive Card met extra vragenlijst
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Vul je naam, omschrijving, impact en urgentie in om een melding te maken:",
+        "markdown": "✍ Vul de onderstaande velden in om een melding te maken (**niet alles is verplicht**):",
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
@@ -124,16 +123,28 @@ def send_adaptive_card(room_id):
                         {"type": "Input.Text", "id": "name", "placeholder": "Jouw naam"},
                         {"type": "Input.Text", "id": "omschrijving", "isMultiline": True,
                          "placeholder": "Beschrijf hier je probleem"},
+                        {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer speelt dit probleem?"},
+                        {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt er niet (specifiek)?"},
+                        {"type": "Input.Text", "id": "zelfgeprobeerd", "isMultiline": True,
+                         "placeholder": "Wat heb je zelf al geprobeerd?"},
+                        {"type": "Input.Text", "id": "impacttoelichting", "isMultiline": True,
+                         "placeholder": "Hoe ernstig is dit voor jou/het team?"},
+                        # Impact dropdown
                         {"type": "Input.ChoiceSet", "id": "impact", "style": "compact",
                          "value": str(HALO_DEFAULT_IMPACT),
-                         "choices": [{"title": "Company Wide", "value": "1"},
-                                     {"title": "Multiple Users Affected", "value": "2"},
-                                     {"title": "Single User Affected", "value": "3"}]},
+                         "choices": [
+                             {"title": "Company Wide", "value": "1"},
+                             {"title": "Multiple Users Affected", "value": "2"},
+                             {"title": "Single User Affected", "value": "3"}
+                         ]},
+                        # Urgency dropdown
                         {"type": "Input.ChoiceSet", "id": "urgency", "style": "compact",
                          "value": str(HALO_DEFAULT_URGENCY),
-                         "choices": [{"title": "High", "value": "1"},
-                                     {"title": "Medium", "value": "2"},
-                                     {"title": "Low", "value": "3"}]}
+                         "choices": [
+                             {"title": "High", "value": "1"},
+                             {"title": "Medium", "value": "2"},
+                             {"title": "Low", "value": "3"}
+                         ]}
                     ],
                     "actions": [{"type": "Action.Submit", "title": "Versturen"}]
                 }
@@ -172,43 +183,39 @@ def webex_webhook():
 
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
+        sindswanneer = inputs.get("sindswanneer", "")
+        watwerktniet = inputs.get("watwerktniet", "")
+        zelfgeprobeerd = inputs.get("zelfgeprobeerd", "")
+        impact_toelichting = inputs.get("impacttoelichting", "")
+
         impact_id = inputs.get("impact", str(HALO_DEFAULT_IMPACT))
         urgency_id = inputs.get("urgency", str(HALO_DEFAULT_URGENCY))
         room_id = data["data"]["roomId"]
 
         summary = omschrijving if omschrijving else "Melding via Webex"
-        details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(summary, details, impact_id, urgency_id,
-                                    room_id=room_id, naam=naam,
-                                    email=request.json["data"].get("personEmail"))
+        # Description samenstellen, velden alleen toevoegen als ze ingevuld zijn
+        details = f"Naam: {naam}\n\n"
+        if omschrijving: details += f"Omschrijving: {omschrijving}\n\n"
+        if sindswanneer: details += f"Sinds wanneer: {sindswanneer}\n"
+        if watwerktniet: details += f"Wat werkt niet: {watwerktniet}\n"
+        if zelfgeprobeerd: details += f"Zelf geprobeerd: {zelfgeprobeerd}\n"
+        if impact_toelichting: details += f"Impact toelichting: {impact_toelichting}\n"
+
+        sender_email = request.json["data"].get("personEmail", None)
+
+        ticket = create_halo_ticket(
+            summary, details, impact_id, urgency_id,
+            room_id=room_id, naam=naam, email=sender_email
+        )
 
         ref = ticket["ref"]
 
         send_message(
             room_id,
-            f"✅ Ticket **{ref}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n**Impact:** {impact_id}\n**Urgentie:** {urgency_id}"
+            f"✅ Ticket **{ref}** aangemaakt in Halo.\n\n"
+            f"**Onderwerp:** {summary}\n**Impact:** {impact_id}\n**Urgentie:** {urgency_id}"
         )
-    return {"status": "ok"}
-
-
-# 🔄 Halo→Webex synch (tickets/notes feed webhook vanuit Halo instellen)
-@app.route("/halo", methods=["POST"])
-def halo_webhook():
-    data = request.json
-    print("📥 Halo webhook:", json.dumps(data, indent=2), flush=True)
-
-    # voorbeeld: Halo stuurt meestal { "TicketID": 330, "Note": "Engineer reactie", ... }
-    ticket_id = data.get("TicketID")
-    note = data.get("Note") or data.get("Text")
-
-    if ticket_id and note:
-        # TODO: mappen naar juiste Webex room_id → in productiesysteem moet je ticket→room mapping opslaan
-        # Voor demo: stuur naar 1 testroom
-        room_id = os.getenv("WEBEX_TEST_ROOM")
-        if room_id:
-            send_message(room_id, f"💬 Update op ticket {ticket_id} vanuit Halo:\n\n{note}")
-
     return {"status": "ok"}
 
 
