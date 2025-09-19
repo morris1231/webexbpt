@@ -27,10 +27,6 @@ HALO_CUSTOMER_ID = int(os.getenv("HALO_CUSTOMER_ID", "986"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_PRIORITY_ID = int(os.getenv("HALO_PRIORITY_ID", "1"))
 
-# Default values for mandatory fields (names must match exactly in Halo!)
-DEFAULT_IMPACT_ID = int(os.getenv("HALO_IMPACT_ID", "4"))     # e.g. 3 = Medium
-DEFAULT_URGENCY_ID = int(os.getenv("HALO_URGENCY_ID", "4"))   # e.g. 6 = Normal
-
 # 🔑 Get Halo API Token
 def get_halo_headers():
     payload = {
@@ -47,22 +43,20 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
 # 🎫 Create Halo Ticket
-def create_halo_ticket(summary, details):
+def create_halo_ticket(summary, details, impact, urgency):
     headers = get_halo_headers()
 
     payload = [
         {
+            "Summary": summary,
+            "Description": details,
             "TypeID": HALO_TICKET_TYPE_ID,
             "CustomerID": HALO_CUSTOMER_ID,
             "TeamID": HALO_TEAM_ID,
             "PriorityID": HALO_PRIORITY_ID,
-            "Faults": [],
-            "CustomFields": [
-                {"Name": "Summary", "Value": summary},
-                {"Name": "Details", "Value": details},
-                {"Name": "Impact", "Value": DEFAULT_IMPACT},
-                {"Name": "Urgency", "Value": DEFAULT_URGENCY}
-            ]
+            "Impact": impact,     # ✅ impact comes from card
+            "Urgency": urgency,   # ✅ urgency comes from card
+            "Faults": []
         }
     ]
 
@@ -77,11 +71,11 @@ def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
 
-# 📋 Webex: Send Adaptive Card
+# 📋 Webex: Adaptive Card with Impact & Urgency dropdowns
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Vul je naam en probleemomschrijving in om een melding te maken:",
+        "markdown": "✍ Vul je gegevens in om een melding te maken:",
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
@@ -92,7 +86,30 @@ def send_adaptive_card(room_id):
                     "body": [
                         {"type": "Input.Text", "id": "name", "placeholder": "Jouw naam"},
                         {"type": "Input.Text", "id": "omschrijving", "isMultiline": True,
-                         "placeholder": "Beschrijf hier je probleem"}
+                         "placeholder": "Beschrijf hier je probleem"},
+                        {
+                            "type": "Input.ChoiceSet",
+                            "id": "impact",
+                            "style": "compact",
+                            "value": "Single User Affected",   # default
+                            "choices": [
+                                {"title": "Single User Affected", "value": "Single User Affected"},
+                                {"title": "Multiple Users Affected", "value": "Multiple Users Affected"},
+                                {"title": "Critical (System Down)", "value": "Critical (System Down)"}
+                            ]
+                        },
+                        {
+                            "type": "Input.ChoiceSet",
+                            "id": "urgency",
+                            "style": "compact",
+                            "value": "Low",   # default
+                            "choices": [
+                                {"title": "Low", "value": "Low"},
+                                {"title": "Normal", "value": "Normal"},
+                                {"title": "High", "value": "High"},
+                                {"title": "Immediate", "value": "Immediate"}
+                            ]
+                        }
                     ],
                     "actions": [{"type": "Action.Submit", "title": "Versturen"}]
                 }
@@ -132,15 +149,18 @@ def webex_webhook():
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
 
+        impact = inputs.get("impact", "Single User Affected")
+        urgency = inputs.get("urgency", "Low")
+
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(summary, details)
+        ticket = create_halo_ticket(summary, details, impact, urgency)
         ticket_id = ticket[0].get("ID", "onbekend")  # Halo returns array
 
         send_message(
             data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n\n**Impact:** {impact}\n**Urgentie:** {urgency}"
         )
 
     return {"status": "ok"}
@@ -154,5 +174,3 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
-
