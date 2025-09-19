@@ -38,15 +38,14 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-# 🎫 Create Halo ticket (Bossers & Cnossen)
+# 🎫 Create Halo ticket
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        "Faults": [],  # ✅ must always be array
         "CustomFields": [
             {
-                "FieldName": "CustomerID",  # Bossers & Cnossen
+                "FieldName": "CustomerID",   # Bossers & Cnossen
                 "Value": "986"
             },
             {
@@ -112,6 +111,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
+    # 📩 Handle new chat messages
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -124,6 +124,7 @@ def webex_webhook():
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
+    # 📥 Handle Adaptive Card submissions
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(
