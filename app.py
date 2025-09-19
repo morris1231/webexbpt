@@ -41,15 +41,12 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-# 🎫 Create Halo ticket (Bossers & Cnossen)
+# 🎫 Create Halo ticket (uses only Summary + Details, per TicketType field list)
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
         "CustomFields": {
-            "CustomerID": 986,     # Bossers & Cnossen
-            "TeamID": 1,           # ⚠️ your Support Team
-            "PriorityID": 1,       # ⚠️ adjust as needed
             "Summary": summary,
             "Details": details
         }
@@ -107,6 +104,7 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
+        # Skip self-messages
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
@@ -134,7 +132,7 @@ def webex_webhook():
 
         send_message(
             data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo voor Bossers & Cnossen.\n\n**Onderwerp:** {summary}"
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
         )
 
     return {"status": "ok"}
