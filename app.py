@@ -51,19 +51,19 @@ def get_halo_headers():
 def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None):
     headers = get_halo_headers()
 
-    # ✅ Always send ImpactLevelID and UrgencyLevelID
+    # ✅ Correct fieldnames: Impact & Urgency
     ticket = {
         "Summary": summary,
         "Description": details,
         "TypeID": HALO_TICKET_TYPE_ID,
         "CustomerID": HALO_CUSTOMER_ID,
         "TeamID": HALO_TEAM_ID,
-        "ImpactLevelID": int(impact_id),
-        "UrgencyLevelID": int(urgency_id),
+        "Impact": int(impact_id),
+        "Urgency": int(urgency_id),
         "Faults": []   # must be an array
     }
 
-    payload = [ticket]  # Halo expects an array of tickets
+    payload = [ticket]  # ✔ Halo expects an array
 
     print("📤 Halo Ticket Payload:", json.dumps(payload, indent=2), flush=True)
 
