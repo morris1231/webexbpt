@@ -40,18 +40,15 @@ def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        "Summary": summary,         # ✅ standard field
+        "Summary": summary,         # Standard field
         "TypeID": 55,              # ⚠️ jouw Ticket Type ID
-        "CustomerID": 986,         # ⚠️ jouw klant ID
-        "TeamID": 1,               # ⚠️ jouw Team ID
-        "PriorityID": 1,           # ⚠️ pas dit aan indien nodig
-        "Faults": [],              # ✅ verplicht array
-        "CustomFields": [          # ✅ jouw Ticket Type 'Details' veld
-            {
-                "Name": "Details",
-                "Value": details
-            }
-        ]
+        "CustomerID": 986,         # ⚠️ jouw customer ID
+        "TeamID": 1,               # ⚠️ jouw team ID
+        "PriorityID": 1,           # Required in many configs
+        "Faults": [],              # Must always be array
+        "CustomFields": {          # ✅ Correct "Details" as object, not array
+            "Details": details
+        }
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
