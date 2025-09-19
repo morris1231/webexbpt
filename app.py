@@ -51,33 +51,32 @@ def get_halo_headers():
 def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None):
     headers = get_halo_headers()
 
-    # 🔧 Base payload (Faults MUST be array)
-    base_payload = {
+    # ✅ Base ticket object
+    base_ticket = {
         "Summary": summary,
         "Description": details,
         "TypeID": HALO_TICKET_TYPE_ID,
         "CustomerID": HALO_CUSTOMER_ID,
         "TeamID": HALO_TEAM_ID,
-        "Faults": []
+        "Faults": []   # must be array
     }
 
-    # First attempt with ImpactID/UrgencyID
-    payload1 = dict(base_payload)
-    payload1["ImpactID"] = int(impact_id)
-    payload1["UrgencyID"] = int(urgency_id)
+    # --- Attempt 1: ImpactID / UrgencyID ---
+    payload1 = [dict(base_ticket)]
+    payload1[0]["ImpactID"] = int(impact_id)
+    payload1[0]["UrgencyID"] = int(urgency_id)
 
     print("📤 Halo Ticket Payload Attempt1:", json.dumps(payload1, indent=2), flush=True)
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload1)
 
+    # --- Retry with ImpactLevelID / UrgencyLevelID ---
     if resp.status_code == 400:
-        # Retry with LevelID variant
-        payload2 = dict(base_payload)
-        payload2["ImpactLevelID"] = int(impact_id)
-        payload2["UrgencyLevelID"] = int(urgency_id)
+        payload2 = [dict(base_ticket)]
+        payload2[0]["ImpactLevelID"] = int(impact_id)
+        payload2[0]["UrgencyLevelID"] = int(urgency_id)
 
         print("⚠️ 400 from Halo, retrying with LevelID fields...")
         print("📤 Halo Ticket Payload Attempt2:", json.dumps(payload2, indent=2), flush=True)
-
         resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload2)
 
     if resp.status_code >= 400:
@@ -186,7 +185,7 @@ def webex_webhook():
 
         ticket = create_halo_ticket(summary, details, impact_id, urgency_id, room_id=data["data"]["roomId"])
 
-        # Halo can return array or object, handle both
+        # Halo sometimes returns array, sometimes object
         if isinstance(ticket, list):
             ticket_id = ticket[0].get("ID", "onbekend")
         else:
