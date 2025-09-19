@@ -38,18 +38,16 @@ def get_halo_headers():
 # 🎫 Ticket aanmaken in Halo
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
+
+    # ✅ FIX: remove Faults/Services/Assets unless required
     payload = {
         "Summary": summary,
         "Details": details,
-        "TypeID": 55,         # ⚠️ ID van jouw Webex ticket type
-        "CustomerID": 986,    # Bossers & Cnossen
-        "TeamID": 1,          # ⚠️ zet hier het echte Support Engineering team ID
-
-        # ⬇️ Lege arrays meegeven zodat Halo de JSON correct accepteert
-        "Faults": [],
-        "Services": [],
-        "Assets": []
+        "TypeID": 55,        # ⚠️ jouw ticket type ID
+        "CustomerID": 986,   # ⚠️ jouw klant ID
+        "TeamID": 1          # ⚠️ jouw team ID
     }
+
     print("📤 Halo Ticket Payload:", payload, flush=True)
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
@@ -110,8 +108,8 @@ def webex_webhook():
         action_id = data["data"]["id"]
         form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
         inputs = form_resp.json().get("inputs", {})
-        print("📥 Parsed inputs:", inputs, flush=True)
 
+        print("📥 Parsed inputs:", inputs, flush=True)
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
 
