@@ -4,7 +4,7 @@ import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Load environment variables
+# 🔄 Load env vars
 load_dotenv()
 app = Flask(__name__)
 
@@ -14,6 +14,8 @@ HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL = os.getenv("HALO_AUTH_URL", "").strip()
 HALO_API_BASE = os.getenv("HALO_API_BASE", "").strip()
+HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))  # default 55
+HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))                  # required
 
 WEBEX_HEADERS = {
     "Authorization": f"Bearer {WEBEX_TOKEN}",
@@ -41,22 +43,39 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-# 🎫 Create Halo ticket (Summary + Details only!)
+# 📋 Fetch available fields for TicketType
+def get_tickettype_fields(ticket_type_id):
+    headers = get_halo_headers()
+    url = f"{HALO_API_BASE}/TicketTypes/{ticket_type_id}"
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    fields = [f["Name"] for f in data.get("Fields", [])]
+    print("📋 Available TicketType fields from Halo:", fields, flush=True)
+    return fields
+
+# 🎫 Dynamically create Halo ticket
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
-    payload = {
-        "CustomFields": [
-            {
-                "Name": "Summary",
-                "Value": summary
-            },
-            {
-                "Name": "Details",
-                "Value": details
-            }
-        ]
-    }
+    valid_fields = get_tickettype_fields(HALO_TICKET_TYPE_ID)
+    custom_fields = []
+
+    if "Summary" in valid_fields:
+        custom_fields.append({"Name": "Summary", "Value": summary})
+
+    if "Details" in valid_fields:
+        custom_fields.append({"Name": "Details", "Value": details})
+
+    if "TeamID" in valid_fields:
+        custom_fields.append({"Name": "TeamID", "Value": str(HALO_TEAM_ID)})
+    else:
+        # if TeamID is NOT a custom field, pass it at root
+        payload = {
+            "TeamID": HALO_TEAM_ID,
+            "CustomFields": custom_fields
+        }
+    payload = {"CustomFields": custom_fields} if "TeamID" in valid_fields else payload
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -64,7 +83,7 @@ def create_halo_ticket(summary, details):
     resp.raise_for_status()
     return resp.json()
 
-# 💬 Send message into Webex
+# 💬 Helper: send Webex message
 def send_message(room_id, text):
     requests.post(
         "https://webexapis.com/v1/messages",
@@ -72,7 +91,7 @@ def send_message(room_id, text):
         json={"roomId": room_id, "markdown": text}
     )
 
-# 📋 Send Adaptive Card into Webex
+# 📋 Send Adaptive Card
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -102,7 +121,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Handle chat messages
+    # 📩 New message
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -110,14 +129,13 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
-        # Avoid bot replying to itself
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Handle Adaptive Card submissions
+    # 📥 Adaptive Card Submit
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(
