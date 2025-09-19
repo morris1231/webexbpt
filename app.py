@@ -29,35 +29,29 @@ def get_halo_headers():
         "scope": "all"
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
-
     resp = requests.post(HALO_AUTH_URL, headers=headers, data=urllib.parse.urlencode(payload))
     print("🔑 Halo auth:", resp.status_code, resp.text[:200], flush=True)
     resp.raise_for_status()
     data = resp.json()
     return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
-# 🎫 Ticket aanmaken in Halo (with required/default fields)
+# 🎫 Ticket aanmaken in Halo
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
     payload = {
         "Summary": summary,
         "Details": details,
-        "TypeID": 55,         # TODO: Replace with your actual Webex ticket type id
-        "CustomerID": 986,    # Bossers & Cnossen
-        "TeamID": 1,          # TODO: Replace with your Support Engineering team ID
-        "AssignedAgentID": -1,  # -1 = Unassigned
-        "CategoryID": 0,        # 0 = Not set
-        "ImpactID": 4,          # TODO: Replace with valid ID from /api/Impacts
-        "UrgencyID": 5          # TODO: Replace with valid ID from /api/Urgencies
+        "TypeID": 55,        # ⚠️ Vervang 55 met het ID van jouw nieuwe "Webex" TicketType
+        "CustomerID": 986,   # Bossers & Cnossen
+        "TeamID": 1          # ⚠️ Zet hier het juiste Support Engineering team ID
     }
     print("📤 Halo Ticket Payload:", payload, flush=True)
-
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
     resp.raise_for_status()
     return resp.json()
 
-# 💬 Bericht naar Webex sturen
+# 💬 Bericht sturen naar Webex
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
@@ -86,13 +80,13 @@ def send_adaptive_card(room_id):
     }
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
-# 🔔 Webex webhook
+# 🔔 Webex webhook endpoint
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Chat message
+    # 📩 Berichten in Webex
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -100,30 +94,34 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
-        # Ignore messages from the bot itself
+        # Negeer eigen bot berichten
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Adaptive Card submit
+    # 📥 Adaptive Card submit verwerken
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
         inputs = form_resp.json().get("inputs", {})
+
         print("📥 Parsed inputs:", inputs, flush=True)
 
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
+
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
         ticket = create_halo_ticket(summary, details)
         ticket_id = ticket.get("ID", "onbekend")
 
-        send_message(data["data"]["roomId"],
-                     f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}")
+        send_message(
+            data["data"]["roomId"],
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
+        )
 
     return {"status": "ok"}
 
@@ -136,4 +134,3 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
