@@ -39,13 +39,19 @@ def get_halo_headers():
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
-    # ✅ FIX: use "Description" instead of "Details"
     payload = {
-        "Summary": summary,
-        "Description": details,   # Correct property name
-        "TypeID": 55,             # Ticket type
-        "CustomerID": 986,        # Customer ID
-        "TeamID": 1               # Team ID
+        "Summary": summary,         # ✅ standard field
+        "TypeID": 55,              # ⚠️ jouw Ticket Type ID
+        "CustomerID": 986,         # ⚠️ jouw klant ID
+        "TeamID": 1,               # ⚠️ jouw Team ID
+        "PriorityID": 1,           # ⚠️ pas dit aan indien nodig
+        "Faults": [],              # ✅ verplicht array
+        "CustomFields": [          # ✅ jouw Ticket Type 'Details' veld
+            {
+                "Name": "Details",
+                "Value": details
+            }
+        ]
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
