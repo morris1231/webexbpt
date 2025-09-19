@@ -4,7 +4,7 @@ import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Load env vars
+# 🔄 Load environment variables
 load_dotenv()
 app = Flask(__name__)
 
@@ -20,7 +20,7 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔑 Get Halo API token
+# 🔑 Halo token
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
@@ -28,47 +28,36 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json"
-    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
     resp = requests.post(HALO_AUTH_URL, headers=headers, data=urllib.parse.urlencode(payload))
     print("🔑 Halo auth:", resp.status_code, resp.text[:200], flush=True)
     resp.raise_for_status()
     data = resp.json()
-    return {
-        "Authorization": f"Bearer {data['access_token']}",
-        "Content-Type": "application/json"
-    }
+    return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
-# 🎫 Create Halo Ticket
+# 🎫 Create Halo ticket
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
         "CustomFields": [
-            {"Name": "Summary", "Value": summary},
-            {"Name": "Details", "Value": details}
+            {"Name": "summary", "Value": summary},
+            {"Name": "description", "Value": details}
         ]
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
-
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
-
     resp.raise_for_status()
     return resp.json()
 
-# 💬 Send message into Webex
+# 💬 Send Webex message
 def send_message(room_id, text):
-    requests.post(
-        "https://webexapis.com/v1/messages",
-        headers=WEBEX_HEADERS,
-        json={"roomId": room_id, "markdown": text}
-    )
+    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
+                  json={"roomId": room_id, "markdown": text})
 
-# 📋 Send Adaptive Card into Webex
+# 📋 Send Adaptive Card
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -92,13 +81,13 @@ def send_adaptive_card(room_id):
     }
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
-# 🔔 Webex webhook endpoint
+# 🔔 Webex webhook
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Handle Incoming Messages
+    # 📩 Chat message
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -112,13 +101,10 @@ def webex_webhook():
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Handle Adaptive Card submissions
+    # 📥 Adaptive Card submission
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        form_resp = requests.get(
-            f"https://webexapis.com/v1/attachment/actions/{action_id}",
-            headers=WEBEX_HEADERS
-        )
+        form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
         inputs = form_resp.json().get("inputs", {})
 
         print("📥 Parsed inputs:", inputs, flush=True)
