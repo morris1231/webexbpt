@@ -21,11 +21,13 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL = os.getenv("HALO_AUTH_URL", "").strip()
 HALO_API_BASE = os.getenv("HALO_API_BASE", "").strip()
 
-# TicketType + IDs from .env
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_CUSTOMER_ID = int(os.getenv("HALO_CUSTOMER_ID", "986"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
-HALO_PRIORITY_ID = int(os.getenv("HALO_PRIORITY_ID", "1"))
+
+# Defaults (if user doesn't pick in card)
+HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))    # default: Single User
+HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))  # default: Low
 
 # 🔑 Get Halo API Token
 def get_halo_headers():
@@ -45,7 +47,6 @@ def get_halo_headers():
 # 🎫 Create Halo Ticket
 def create_halo_ticket(summary, details, impact_id, urgency_id):
     headers = get_halo_headers()
-
     payload = [
         {
             "Summary": summary,
@@ -53,13 +54,12 @@ def create_halo_ticket(summary, details, impact_id, urgency_id):
             "TypeID": HALO_TICKET_TYPE_ID,
             "CustomerID": HALO_CUSTOMER_ID,
             "TeamID": HALO_TEAM_ID,
-            "PriorityID": HALO_PRIORITY_ID,
-            "ImpactID": int(impact_id),    # ✅ Correct integer IDs
-            "UrgencyID": int(urgency_id),  # ✅ Correct integer IDs
+            # ✅ Priority left out → calculated automatically by Halo
+            "ImpactID": int(impact_id),
+            "UrgencyID": int(urgency_id),
             "Faults": []
         }
     ]
-
     print("📤 Halo Ticket Payload:", payload, flush=True)
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
@@ -86,8 +86,8 @@ def send_adaptive_card(room_id):
                     "body": [
                         {"type": "Input.Text", "id": "name", "placeholder": "Jouw naam"},
                         {
-                            "type": "Input.Text", 
-                            "id": "omschrijving", 
+                            "type": "Input.Text",
+                            "id": "omschrijving",
                             "isMultiline": True,
                             "placeholder": "Beschrijf hier je probleem"
                         },
@@ -95,22 +95,22 @@ def send_adaptive_card(room_id):
                             "type": "Input.ChoiceSet",
                             "id": "impact",
                             "style": "compact",
-                            "value": "1",   # default ImpactID
+                            "value": str(HALO_DEFAULT_IMPACT),  # default from .env
                             "choices": [
-                                {"title": "Single User Affected", "value": "3"},
+                                {"title": "Company Wide", "value": "1"},
                                 {"title": "Multiple Users Affected", "value": "2"},
-                                {"title": "Critical (System Down)", "value": "1"}
+                                {"title": "Single User Affected", "value": "3"}
                             ]
                         },
                         {
                             "type": "Input.ChoiceSet",
                             "id": "urgency",
                             "style": "compact",
-                            "value": "1",   # default UrgencyID
+                            "value": str(HALO_DEFAULT_URGENCY),  # default from .env
                             "choices": [
-                                {"title": "Low", "value": "3"},
-                                {"title": "Normal", "value": "2"},
-                                {"title": "Immediate", "value": "1"}
+                                {"title": "High", "value": "1"},
+                                {"title": "Medium", "value": "2"},
+                                {"title": "Low", "value": "3"}
                             ]
                         }
                     ],
@@ -134,6 +134,7 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
+        # avoid bot loop
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
@@ -147,13 +148,12 @@ def webex_webhook():
             headers=WEBEX_HEADERS
         )
         inputs = form_resp.json().get("inputs", {})
-
         print("📥 Parsed inputs:", inputs, flush=True)
+
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
-
-        impact_id = inputs.get("impact", "3")     # default to Single User Affected (ID 3)
-        urgency_id = inputs.get("urgency", "3")  # default to Low (ID 3)
+        impact_id = inputs.get("impact", str(HALO_DEFAULT_IMPACT))
+        urgency_id = inputs.get("urgency", str(HALO_DEFAULT_URGENCY))
 
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
