@@ -4,21 +4,28 @@ import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Load env vars
+# 🔄 Environment variables
 load_dotenv()
 app = Flask(__name__)
 
-# 🌐 Environment variables
+# 🌐 Webex
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN", "").strip()
+WEBEX_HEADERS = {
+    "Authorization": f"Bearer {WEBEX_TOKEN}",
+    "Content-Type": "application/json"
+}
+
+# 🌐 Halo
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL = os.getenv("HALO_AUTH_URL", "").strip()
 HALO_API_BASE = os.getenv("HALO_API_BASE", "").strip()
 
-WEBEX_HEADERS = {
-    "Authorization": f"Bearer {WEBEX_TOKEN}",
-    "Content-Type": "application/json"
-}
+# ✅ Config IDs (adjust if needed)
+HALO_TICKET_TYPE_ID = 55     # Webex TicketType ID
+HALO_CUSTOMER_ID = 986       # Bossers & Cnossen
+HALO_TEAM_ID = 1             # Support Engineering
+HALO_PRIORITY_ID = 1         # Default Priority
 
 # 🔑 Get Halo API token
 def get_halo_headers():
@@ -39,31 +46,31 @@ def get_halo_headers():
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
-    payload = {
-        "Summary": summary,
-        "Description": details,
-        "TypeID": 55,       # ⚠️ Your TicketType ID
-        "CustomerID": 986,  # ⚠️ Your Customer ID
-        "TeamID": 1,        # ⚠️ Your Team ID
-        "PriorityID": 1,    # ⚠️ Default Priority
-        "Faults": []        # Must always be an array
-    }
+    # ✅ IMPORTANT: Payload as an ARRAY with CustomerID!
+    payload = [
+        {
+            "Summary": summary,
+            "Description": details,
+            "TypeID": HALO_TICKET_TYPE_ID,
+            "CustomerID": HALO_CUSTOMER_ID,  # Bossers & Cnossen triggers SLA rules
+            "TeamID": HALO_TEAM_ID,
+            "PriorityID": HALO_PRIORITY_ID,
+            "Faults": []
+        }
+    ]
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
-
-    # ✅ Use /Tickets/Save (correct endpoint)
-    resp = requests.post(f"{HALO_API_BASE}/Tickets/Save", headers=headers, json=payload)
+    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
-
     resp.raise_for_status()
     return resp.json()
 
-# 💬 Send Webex message
+# 💬 Send message into Webex
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
 
-# 📋 Send Adaptive Card
+# 📋 Send Adaptive Card into Webex
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -93,7 +100,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 New Messages
+    # 📩 Normal messages
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -107,7 +114,7 @@ def webex_webhook():
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Adaptive Card submissions
+    # 📥 Adaptive Card submission
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(
@@ -123,12 +130,13 @@ def webex_webhook():
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
+        # ✅ Create ticket in Halo
         ticket = create_halo_ticket(summary, details)
-        ticket_id = ticket.get("ID", "onbekend")
+        ticket_id = ticket[0].get("ID", "onbekend")  # Halo returns array
 
         send_message(
             data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo (Bossers & Cnossen).\n\n**Onderwerp:** {summary}"
         )
 
     return {"status": "ok"}
