@@ -51,33 +51,23 @@ def get_halo_headers():
 def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None):
     headers = get_halo_headers()
 
-    # ✅ Base ticket object
-    base_ticket = {
+    # ✅ Always send ImpactLevelID and UrgencyLevelID
+    ticket = {
         "Summary": summary,
         "Description": details,
         "TypeID": HALO_TICKET_TYPE_ID,
         "CustomerID": HALO_CUSTOMER_ID,
         "TeamID": HALO_TEAM_ID,
-        "Faults": []   # must be array
+        "ImpactLevelID": int(impact_id),
+        "UrgencyLevelID": int(urgency_id),
+        "Faults": []   # must be an array
     }
 
-    # --- Attempt 1: ImpactID / UrgencyID ---
-    payload1 = [dict(base_ticket)]
-    payload1[0]["ImpactID"] = int(impact_id)
-    payload1[0]["UrgencyID"] = int(urgency_id)
+    payload = [ticket]  # Halo expects an array of tickets
 
-    print("📤 Halo Ticket Payload Attempt1:", json.dumps(payload1, indent=2), flush=True)
-    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload1)
+    print("📤 Halo Ticket Payload:", json.dumps(payload, indent=2), flush=True)
 
-    # --- Retry with ImpactLevelID / UrgencyLevelID ---
-    if resp.status_code == 400:
-        payload2 = [dict(base_ticket)]
-        payload2[0]["ImpactLevelID"] = int(impact_id)
-        payload2[0]["UrgencyLevelID"] = int(urgency_id)
-
-        print("⚠️ 400 from Halo, retrying with LevelID fields...")
-        print("📤 Halo Ticket Payload Attempt2:", json.dumps(payload2, indent=2), flush=True)
-        resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload2)
+    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
 
     if resp.status_code >= 400:
         err_msg = f"❌ Kon geen Halo-ticket aanmaken. Fout: {resp.status_code} - {resp.text}"
