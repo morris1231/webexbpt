@@ -20,7 +20,7 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔑 Halo token ophalen
+# 🔑 Ophalen Halo API token
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
@@ -39,13 +39,13 @@ def get_halo_headers():
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
-    # ✅ FIX: remove Faults/Services/Assets unless required
+    # ✅ FIX: use "Description" instead of "Details"
     payload = {
         "Summary": summary,
-        "Details": details,
-        "TypeID": 55,        # ⚠️ jouw ticket type ID
-        "CustomerID": 986,   # ⚠️ jouw klant ID
-        "TeamID": 1          # ⚠️ jouw team ID
+        "Description": details,   # Correct property name
+        "TypeID": 55,             # Ticket type
+        "CustomerID": 986,        # Customer ID
+        "TeamID": 1               # Team ID
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
