@@ -41,15 +41,21 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-# 🎫 Create Halo ticket (uses only Summary + Details, per TicketType field list)
+# 🎫 Create Halo ticket (Summary + Details only!)
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        "CustomFields": {
-            "Summary": summary,
-            "Details": details
-        }
+        "CustomFields": [
+            {
+                "Name": "Summary",
+                "Value": summary
+            },
+            {
+                "Name": "Details",
+                "Value": details
+            }
+        ]
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
@@ -104,14 +110,14 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
-        # Skip self-messages
+        # Avoid bot replying to itself
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Handle Adaptive Card submission
+    # 📥 Handle Adaptive Card submissions
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(
