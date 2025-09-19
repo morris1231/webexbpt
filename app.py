@@ -26,12 +26,11 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_CUSTOMER_ID = int(os.getenv("HALO_CUSTOMER_ID", "986"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 
-# Defaults when user does not choose in Webex card
-HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))    # default Single User
-HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))  # default Low
+HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
+HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
 
-# 🔑 Get Halo API Token
+# 🔑 Halo API Token
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
@@ -41,20 +40,18 @@ def get_halo_headers():
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
     resp = requests.post(HALO_AUTH_URL, headers=headers, data=urllib.parse.urlencode(payload))
-    print("🔑 Halo auth:", resp.status_code, resp.text[:200], flush=True)
     resp.raise_for_status()
     data = resp.json()
     return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
 
-# 🔎 Zoek Halo UserID op via e-mail
+# 🔎 Zoek UserID in Halo adhv email
 def get_halo_user_id_by_email(email):
     if not email:
         return None
     headers = get_halo_headers()
     url = f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'"
     resp = requests.get(url, headers=headers)
-    print(f"🔎 Zoek user op email {email}: {resp.status_code}", flush=True)
     if resp.status_code == 200:
         data = resp.json()
         if isinstance(data, list) and len(data) > 0:
@@ -66,7 +63,6 @@ def get_halo_user_id_by_email(email):
 def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None, naam="Onbekend", email=None):
     headers = get_halo_headers()
 
-    # Probeer UserID op te zoeken
     user_id = get_halo_user_id_by_email(email)
 
     ticket = {
@@ -79,25 +75,31 @@ def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None, na
         "Urgency": int(urgency_id),
         "Faults": []
     }
-
     if user_id:
-        ticket["UserID"] = user_id  # ✅ Koppel ticket aan echte gebruiker in Halo
+        ticket["UserID"] = user_id
 
-    payload = [ticket]  # Halo verwacht een array
-
-    print("📤 Halo Ticket Payload:", json.dumps(payload, indent=2), flush=True)
+    payload = [ticket]
 
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
+    resp.raise_for_status()
+    data = resp.json()
 
-    if resp.status_code >= 400:
-        err_msg = f"❌ Kon geen Halo-ticket aanmaken. Fout: {resp.status_code} - {resp.text}"
-        print("❌ Halo ticket error:", resp.text[:500], flush=True)
-        if room_id:
-            send_message(room_id, err_msg)
-        resp.raise_for_status()
+    # Halo returns id of the new ticket
+    if isinstance(data, list):
+        new_ticket = data[0]
+    else:
+        new_ticket = data
+    ticket_id = new_ticket.get("id") or new_ticket.get("ID")
 
-    print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
-    return resp.json()
+    # 🔄 Extra API call to fetch proper reference number (INC:0000329)
+    ref = None
+    if ticket_id:
+        detail_resp = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=headers)
+        if detail_resp.status_code == 200:
+            tdata = detail_resp.json()
+            ref = tdata.get("ref") or tdata.get("ticketnumber") or ticket_id
+
+    return {"id": ticket_id, "ref": ref or ticket_id}
 
 
 # 💬 Webex: Send message
@@ -106,7 +108,7 @@ def send_message(room_id, text):
                   json={"roomId": room_id, "markdown": text})
 
 
-# 📋 Webex: Adaptive Card
+# 📋 Webex Adaptive Card
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -120,34 +122,18 @@ def send_adaptive_card(room_id):
                     "version": "1.2",
                     "body": [
                         {"type": "Input.Text", "id": "name", "placeholder": "Jouw naam"},
-                        {
-                            "type": "Input.Text",
-                            "id": "omschrijving",
-                            "isMultiline": True,
-                            "placeholder": "Beschrijf hier je probleem"
-                        },
-                        {
-                            "type": "Input.ChoiceSet",
-                            "id": "impact",
-                            "style": "compact",
-                            "value": str(HALO_DEFAULT_IMPACT),
-                            "choices": [
-                                {"title": "Company Wide", "value": "1"},
-                                {"title": "Multiple Users Affected", "value": "2"},
-                                {"title": "Single User Affected", "value": "3"}
-                            ]
-                        },
-                        {
-                            "type": "Input.ChoiceSet",
-                            "id": "urgency",
-                            "style": "compact",
-                            "value": str(HALO_DEFAULT_URGENCY),
-                            "choices": [
-                                {"title": "High", "value": "1"},
-                                {"title": "Medium", "value": "2"},
-                                {"title": "Low", "value": "3"}
-                            ]
-                        }
+                        {"type": "Input.Text", "id": "omschrijving", "isMultiline": True,
+                         "placeholder": "Beschrijf hier je probleem"},
+                        {"type": "Input.ChoiceSet", "id": "impact", "style": "compact",
+                         "value": str(HALO_DEFAULT_IMPACT),
+                         "choices": [{"title": "Company Wide", "value": "1"},
+                                     {"title": "Multiple Users Affected", "value": "2"},
+                                     {"title": "Single User Affected", "value": "3"}]},
+                        {"type": "Input.ChoiceSet", "id": "urgency", "style": "compact",
+                         "value": str(HALO_DEFAULT_URGENCY),
+                         "choices": [{"title": "High", "value": "1"},
+                                     {"title": "Medium", "value": "2"},
+                                     {"title": "Low", "value": "3"}]}
                     ],
                     "actions": [{"type": "Action.Submit", "title": "Versturen"}]
                 }
@@ -157,7 +143,7 @@ def send_adaptive_card(room_id):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
 
-# 🔔 Webex Webhook
+# 🔔 Webex Endpoint
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
@@ -168,7 +154,7 @@ def webex_webhook():
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
         room_id = msg.get("roomId")
-        sender = msg.get("personEmail")  # Dit is het emailadres van de Webex-gebruiker
+        sender = msg.get("personEmail")
 
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
@@ -183,7 +169,6 @@ def webex_webhook():
             headers=WEBEX_HEADERS
         )
         inputs = form_resp.json().get("inputs", {})
-        print("📥 Parsed inputs:", inputs, flush=True)
 
         naam = inputs.get("name", "Onbekend")
         omschrijving = inputs.get("omschrijving", "")
@@ -194,38 +179,35 @@ def webex_webhook():
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        # ✅ sender email van de gebruiker in Webex doorgeven
-        sender_email = request.json["data"].get("personEmail", None)
+        ticket = create_halo_ticket(summary, details, impact_id, urgency_id,
+                                    room_id=room_id, naam=naam,
+                                    email=request.json["data"].get("personEmail"))
 
-        ticket = create_halo_ticket(
-            summary,
-            details,
-            impact_id,
-            urgency_id,
-            room_id=room_id,
-            naam=naam,
-            email=sender_email
-        )
-
-        # Halo returns either array or single object
-        if isinstance(ticket, list):
-            ticket_obj = ticket[0]
-        else:
-            ticket_obj = ticket
-
-        # Check multiple possible return keys for Ticket number
-        ticket_id = (
-            ticket_obj.get("ID")
-            or ticket_obj.get("TicketID")
-            or ticket_obj.get("TicketNumber")
-            or ticket_obj.get("Ref")
-            or "onbekend"
-        )
+        ref = ticket["ref"]
 
         send_message(
             room_id,
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n**Impact:** {impact_id}\n**Urgentie:** {urgency_id}"
+            f"✅ Ticket **{ref}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n**Impact:** {impact_id}\n**Urgentie:** {urgency_id}"
         )
+    return {"status": "ok"}
+
+
+# 🔄 Halo→Webex synch (tickets/notes feed webhook vanuit Halo instellen)
+@app.route("/halo", methods=["POST"])
+def halo_webhook():
+    data = request.json
+    print("📥 Halo webhook:", json.dumps(data, indent=2), flush=True)
+
+    # voorbeeld: Halo stuurt meestal { "TicketID": 330, "Note": "Engineer reactie", ... }
+    ticket_id = data.get("TicketID")
+    note = data.get("Note") or data.get("Text")
+
+    if ticket_id and note:
+        # TODO: mappen naar juiste Webex room_id → in productiesysteem moet je ticket→room mapping opslaan
+        # Voor demo: stuur naar 1 testroom
+        room_id = os.getenv("WEBEX_TEST_ROOM")
+        if room_id:
+            send_message(room_id, f"💬 Update op ticket {ticket_id} vanuit Halo:\n\n{note}")
 
     return {"status": "ok"}
 
@@ -233,10 +215,9 @@ def webex_webhook():
 # ❤️ Healthcheck
 @app.route("/", methods=["GET"])
 def health():
-    return {"status": "ok", "message": "Webex → Halo Bot draait"}
+    return {"status": "ok", "message": "Webex ⇌ Halo Bot draait"}
 
 
-# ▶️ Run Flask
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
