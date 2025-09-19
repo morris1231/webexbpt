@@ -30,6 +30,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))    # default Single User
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))  # default Low
 
+
 # 🔑 Get Halo API Token
 def get_halo_headers():
     payload = {
@@ -47,10 +48,10 @@ def get_halo_headers():
 
 
 # 🎫 Create Halo Ticket
-def create_halo_ticket(summary, details, impact_id, urgency_id):
+def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None):
     headers = get_halo_headers()
 
-    # First try with ImpactID/UrgencyID
+    # 🔧 Base payload (Faults MUST be array)
     base_payload = {
         "Summary": summary,
         "Description": details,
@@ -60,6 +61,7 @@ def create_halo_ticket(summary, details, impact_id, urgency_id):
         "Faults": []
     }
 
+    # First attempt with ImpactID/UrgencyID
     payload1 = dict(base_payload)
     payload1["ImpactID"] = int(impact_id)
     payload1["UrgencyID"] = int(urgency_id)
@@ -68,7 +70,7 @@ def create_halo_ticket(summary, details, impact_id, urgency_id):
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload1)
 
     if resp.status_code == 400:
-        # Retry with ImpactLevelID/UrgencyLevelID
+        # Retry with LevelID variant
         payload2 = dict(base_payload)
         payload2["ImpactLevelID"] = int(impact_id)
         payload2["UrgencyLevelID"] = int(urgency_id)
@@ -78,8 +80,14 @@ def create_halo_ticket(summary, details, impact_id, urgency_id):
 
         resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload2)
 
+    if resp.status_code >= 400:
+        err_msg = f"❌ Kon geen Halo-ticket aanmaken. Fout: {resp.status_code} - {resp.text}"
+        print("❌ Halo ticket error:", resp.text[:500], flush=True)
+        if room_id:
+            send_message(room_id, err_msg)
+        resp.raise_for_status()
+
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
-    resp.raise_for_status()
     return resp.json()
 
 
@@ -176,8 +184,13 @@ def webex_webhook():
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(summary, details, impact_id, urgency_id)
-        ticket_id = ticket.get("ID") or (ticket[0].get("ID") if isinstance(ticket, list) else "onbekend")
+        ticket = create_halo_ticket(summary, details, impact_id, urgency_id, room_id=data["data"]["roomId"])
+
+        # Halo can return array or object, handle both
+        if isinstance(ticket, list):
+            ticket_id = ticket[0].get("ID", "onbekend")
+        else:
+            ticket_id = ticket.get("ID", "onbekend")
 
         send_message(
             data["data"]["roomId"],
