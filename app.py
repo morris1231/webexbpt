@@ -28,8 +28,8 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_PRIORITY_ID = int(os.getenv("HALO_PRIORITY_ID", "1"))
 
 # Default values for mandatory fields (names must match exactly in Halo!)
-DEFAULT_IMPACT = os.getenv("HALO_IMPACT", "Medium")     # e.g. "Critical", "High", "Medium", "Low"
-DEFAULT_URGENCY = os.getenv("HALO_URGENCY", "Normal")   # e.g. "Immediate", "Normal", "Low"
+DEFAULT_IMPACT = os.getenv("HALO_IMPACT", "5")     # e.g. "Critical", "High", "Medium", "Low"
+DEFAULT_URGENCY = os.getenv("HALO_URGENCY", "5")   # e.g. "Immediate", "Normal", "Low"
 
 # 🔑 Get Halo API Token
 def get_halo_headers():
@@ -154,3 +154,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
