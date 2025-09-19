@@ -43,14 +43,19 @@ def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        # Root-level fields must be minimal
-        "TeamID": 1,         # ⚠️ your correct team ID 
-        "PriorityID": 1,     # ⚠️ adjust as required
-        "Faults": [],        # ✅ must be array
-        "CustomFields": [    # 🔑 ALL fields from your TicketType go here
+        "Faults": [],  # ✅ must always be array
+        "CustomFields": [
             {
-                "FieldName": "CustomerID",   # Bossers & Cnossen
+                "FieldName": "CustomerID",  # Bossers & Cnossen
                 "Value": "986"
+            },
+            {
+                "FieldName": "TeamID",
+                "Value": "1"
+            },
+            {
+                "FieldName": "PriorityID",
+                "Value": "1"
             },
             {
                 "FieldName": "Summary",
@@ -69,7 +74,7 @@ def create_halo_ticket(summary, details):
     resp.raise_for_status()
     return resp.json()
 
-# 💬 Send a message into Webex
+# 💬 Send message into Webex
 def send_message(room_id, text):
     requests.post(
         "https://webexapis.com/v1/messages",
@@ -107,7 +112,6 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Handle new chat messages
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -117,11 +121,9 @@ def webex_webhook():
 
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
-
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Handle Adaptive Card submissions
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(
