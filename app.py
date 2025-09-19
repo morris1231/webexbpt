@@ -43,11 +43,15 @@ def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        "CustomerID": 986,   # Bossers & Cnossen
-        "TeamID": 1,         # ⚠️ replace with your correct TeamID
-        "PriorityID": 1,     # ⚠️ adjust default priority if needed
-        "Faults": [],        # ✅ must always be array
-        "CustomFields": [    # ✅ as defined in your Ticket Type
+        # Root-level fields must be minimal
+        "TeamID": 1,         # ⚠️ your correct team ID 
+        "PriorityID": 1,     # ⚠️ adjust as required
+        "Faults": [],        # ✅ must be array
+        "CustomFields": [    # 🔑 ALL fields from your TicketType go here
+            {
+                "FieldName": "CustomerID",   # Bossers & Cnossen
+                "Value": "986"
+            },
             {
                 "FieldName": "Summary",
                 "Value": summary
@@ -143,7 +147,7 @@ def webex_webhook():
 
     return {"status": "ok"}
 
-# ❤️ Healthcheck endpoint
+# ❤️ Healthcheck
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Webex → Halo Bot draait"}
