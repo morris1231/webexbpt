@@ -47,8 +47,8 @@ def create_halo_ticket(summary, details):
         "TeamID": 1,          # TODO: Replace with your Support Engineering team ID
         "AssignedAgentID": -1,  # -1 = Unassigned
         "CategoryID": 0,        # 0 = Not set
-        "ImpactID": 1,          # TODO: Replace with valid ID from /api/Impacts
-        "UrgencyID": 1          # TODO: Replace with valid ID from /api/Urgencies
+        "ImpactID": 4,          # TODO: Replace with valid ID from /api/Impacts
+        "UrgencyID": 5          # TODO: Replace with valid ID from /api/Urgencies
     }
     print("📤 Halo Ticket Payload:", payload, flush=True)
 
@@ -136,3 +136,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
