@@ -33,22 +33,29 @@ def get_halo_headers():
     print("🔑 Halo auth:", resp.status_code, resp.text[:200], flush=True)
     resp.raise_for_status()
     data = resp.json()
-    return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {data['access_token']}",
+        "Content-Type": "application/json"
+    }
 
 # 🎫 Ticket aanmaken in Halo
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
+    # ✅ Correct schema — CustomFields must be array of objects
     payload = {
-        "Summary": summary,         # Standard field
-        "TypeID": 55,              # ⚠️ jouw Ticket Type ID
-        "CustomerID": 986,         # ⚠️ jouw customer ID
-        "TeamID": 1,               # ⚠️ jouw team ID
-        "PriorityID": 1,           # Required in many configs
-        "Faults": [],              # Must always be array
-        "CustomFields": {          # ✅ Correct "Details" as object, not array
-            "Details": details
-        }
+        "Summary": summary,
+        "TypeID": 55,        # ⚠️ jouw Ticket Type ID
+        "CustomerID": 986,   # ⚠️ jouw CustomerID
+        "TeamID": 1,         # ⚠️ jouw TeamID
+        "PriorityID": 1,     # ✅ required in many configs
+        "Faults": [],        # ✅ must always be an array
+        "CustomFields": [
+            {
+                "FieldName": "Details",   # from your Ticket Type
+                "Value": details
+            }
+        ]
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
@@ -59,8 +66,11 @@ def create_halo_ticket(summary, details):
 
 # 💬 Bericht sturen naar Webex
 def send_message(room_id, text):
-    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
-                  json={"roomId": room_id, "markdown": text})
+    requests.post(
+        "https://webexapis.com/v1/messages",
+        headers=WEBEX_HEADERS,
+        json={"roomId": room_id, "markdown": text}
+    )
 
 # 📋 Adaptive Card sturen
 def send_adaptive_card(room_id):
@@ -109,7 +119,10 @@ def webex_webhook():
     # 📥 Adaptive card submit verwerken
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
+        form_resp = requests.get(
+            f"https://webexapis.com/v1/attachment/actions/{action_id}",
+            headers=WEBEX_HEADERS
+        )
         inputs = form_resp.json().get("inputs", {})
 
         print("📥 Parsed inputs:", inputs, flush=True)
