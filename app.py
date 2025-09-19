@@ -28,7 +28,10 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json"
+    }
     resp = requests.post(HALO_AUTH_URL, headers=headers, data=urllib.parse.urlencode(payload))
     print("🔑 Halo auth:", resp.status_code, resp.text[:200], flush=True)
     resp.raise_for_status()
@@ -38,33 +41,18 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-# 🎫 Create Halo ticket
+# 🎫 Create Halo ticket (Bossers & Cnossen)
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        "CustomFields": [
-            {
-                "FieldName": "CustomerID",   # Bossers & Cnossen
-                "Value": "986"
-            },
-            {
-                "FieldName": "TeamID",
-                "Value": "1"
-            },
-            {
-                "FieldName": "PriorityID",
-                "Value": "1"
-            },
-            {
-                "FieldName": "Summary",
-                "Value": summary
-            },
-            {
-                "FieldName": "Details",
-                "Value": details
-            }
-        ]
+        "CustomFields": {
+            "CustomerID": 986,     # Bossers & Cnossen
+            "TeamID": 1,           # ⚠️ your Support Team
+            "PriorityID": 1,       # ⚠️ adjust as needed
+            "Summary": summary,
+            "Details": details
+        }
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
@@ -111,7 +99,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Handle new chat messages
+    # 📩 Handle chat messages
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -121,10 +109,11 @@ def webex_webhook():
 
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
+
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Handle Adaptive Card submissions
+    # 📥 Handle Adaptive Card submission
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(
