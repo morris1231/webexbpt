@@ -4,7 +4,7 @@ import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Load environment variables
+# 🔄 Load env vars
 load_dotenv()
 app = Flask(__name__)
 
@@ -20,7 +20,7 @@ WEBEX_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# 🔑 Halo token
+# 🔑 Get Halo API token
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
@@ -35,20 +35,26 @@ def get_halo_headers():
     data = resp.json()
     return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
-# 🎫 Create Halo ticket
+# 🎫 Create Halo Ticket
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
     payload = {
-        "CustomFields": [
-            {"Name": "summary", "Value": summary},
-            {"Name": "description", "Value": details}
-        ]
+        "Summary": summary,
+        "Description": details,
+        "TypeID": 55,       # ⚠️ Your TicketType ID
+        "CustomerID": 986,  # ⚠️ Your Customer ID
+        "TeamID": 1,        # ⚠️ Your Team ID
+        "PriorityID": 1,    # ⚠️ Default Priority
+        "Faults": []        # Must always be an array
     }
 
     print("📤 Halo Ticket Payload:", payload, flush=True)
-    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
+
+    # ✅ Use /Tickets/Save (correct endpoint)
+    resp = requests.post(f"{HALO_API_BASE}/Tickets/Save", headers=headers, json=payload)
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
+
     resp.raise_for_status()
     return resp.json()
 
@@ -87,7 +93,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Chat message
+    # 📩 New Messages
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -101,10 +107,13 @@ def webex_webhook():
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Adaptive Card submission
+    # 📥 Adaptive Card submissions
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
+        form_resp = requests.get(
+            f"https://webexapis.com/v1/attachment/actions/{action_id}",
+            headers=WEBEX_HEADERS
+        )
         inputs = form_resp.json().get("inputs", {})
 
         print("📥 Parsed inputs:", inputs, flush=True)
