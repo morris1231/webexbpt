@@ -42,17 +42,19 @@ def get_halo_headers():
 def create_halo_ticket(summary, details):
     headers = get_halo_headers()
 
-    # ✅ Correct schema — CustomFields must be array of objects
     payload = {
-        "Summary": summary,
-        "TypeID": 55,        # ⚠️ jouw Ticket Type ID
-        "CustomerID": 986,   # ⚠️ jouw CustomerID
-        "TeamID": 1,         # ⚠️ jouw TeamID
-        "PriorityID": 1,     # ✅ required in many configs
-        "Faults": [],        # ✅ must always be an array
-        "CustomFields": [
+        "TypeID": 55,         # ⚠️ jouw Webex TicketType ID
+        "CustomerID": 986,    # Bossers & Cnossen klant
+        "TeamID": 1,          # ⚠️ jouw Team ID (Support e.g.)
+        "PriorityID": 1,      # ⚠️ standaard prioriteit
+        "Faults": [],         # ✅ verplicht lege array
+        "CustomFields": [     # ✅ zowel Summary als Details zijn TicketType velden!
             {
-                "FieldName": "Details",   # from your Ticket Type
+                "FieldName": "Summary",
+                "Value": summary
+            },
+            {
+                "FieldName": "Details",
                 "Value": details
             }
         ]
@@ -137,7 +139,7 @@ def webex_webhook():
 
         send_message(
             data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo voor Bossers & Cnossen.\n\n**Onderwerp:** {summary}"
         )
 
     return {"status": "ok"}
