@@ -47,23 +47,43 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
 
+# 🔎 Zoek Halo UserID op via e-mail
+def get_halo_user_id_by_email(email):
+    if not email:
+        return None
+    headers = get_halo_headers()
+    url = f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'"
+    resp = requests.get(url, headers=headers)
+    print(f"🔎 Zoek user op email {email}: {resp.status_code}", flush=True)
+    if resp.status_code == 200:
+        data = resp.json()
+        if isinstance(data, list) and len(data) > 0:
+            return data[0].get("ID")
+    return None
+
+
 # 🎫 Create Halo Ticket
-def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None):
+def create_halo_ticket(summary, details, impact_id, urgency_id, room_id=None, naam="Onbekend", email=None):
     headers = get_halo_headers()
 
-    # ✅ Correct fieldnames: Impact & Urgency
+    # Probeer UserID op te zoeken
+    user_id = get_halo_user_id_by_email(email)
+
     ticket = {
         "Summary": summary,
-        "Description": details,
+        "Description": f"Ingediend door: {naam} ({email})\n\n{details}",
         "TypeID": HALO_TICKET_TYPE_ID,
         "CustomerID": HALO_CUSTOMER_ID,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
         "Urgency": int(urgency_id),
-        "Faults": []   # must be an array
+        "Faults": []
     }
 
-    payload = [ticket]  # ✔ Halo expects an array
+    if user_id:
+        ticket["UserID"] = user_id  # ✅ Koppel ticket aan echte gebruiker in Halo
+
+    payload = [ticket]  # Halo verwacht een array
 
     print("📤 Halo Ticket Payload:", json.dumps(payload, indent=2), flush=True)
 
@@ -148,7 +168,7 @@ def webex_webhook():
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "").lower()
         room_id = msg.get("roomId")
-        sender = msg.get("personEmail")
+        sender = msg.get("personEmail")  # Dit is het emailadres van de Webex-gebruiker
 
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
@@ -169,20 +189,41 @@ def webex_webhook():
         omschrijving = inputs.get("omschrijving", "")
         impact_id = inputs.get("impact", str(HALO_DEFAULT_IMPACT))
         urgency_id = inputs.get("urgency", str(HALO_DEFAULT_URGENCY))
+        room_id = data["data"]["roomId"]
 
         summary = omschrijving if omschrijving else "Melding via Webex"
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
-        ticket = create_halo_ticket(summary, details, impact_id, urgency_id, room_id=data["data"]["roomId"])
+        # ✅ sender email van de gebruiker in Webex doorgeven
+        sender_email = request.json["data"].get("personEmail", None)
 
-        # Halo sometimes returns array, sometimes object
+        ticket = create_halo_ticket(
+            summary,
+            details,
+            impact_id,
+            urgency_id,
+            room_id=room_id,
+            naam=naam,
+            email=sender_email
+        )
+
+        # Halo returns either array or single object
         if isinstance(ticket, list):
-            ticket_id = ticket[0].get("ID", "onbekend")
+            ticket_obj = ticket[0]
         else:
-            ticket_id = ticket.get("ID", "onbekend")
+            ticket_obj = ticket
+
+        # Check multiple possible return keys for Ticket number
+        ticket_id = (
+            ticket_obj.get("ID")
+            or ticket_obj.get("TicketID")
+            or ticket_obj.get("TicketNumber")
+            or ticket_obj.get("Ref")
+            or "onbekend"
+        )
 
         send_message(
-            data["data"]["roomId"],
+            room_id,
             f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n**Impact:** {impact_id}\n**Urgentie:** {urgency_id}"
         )
 
