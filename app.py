@@ -4,7 +4,7 @@ import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Load environment
+# 🔄 Load environment variables
 load_dotenv()
 app = Flask(__name__)
 
@@ -41,9 +41,14 @@ def create_halo_ticket(summary, details):
     payload = {
         "Summary": summary,
         "Details": details,
-        "TypeID": 55,        # ⚠️ Vervang 55 met het ID van jouw nieuwe "Webex" TicketType
-        "CustomerID": 986,   # Bossers & Cnossen
-        "TeamID": 1          # ⚠️ Zet hier het juiste Support Engineering team ID
+        "TypeID": 55,         # ⚠️ ID van jouw Webex ticket type
+        "CustomerID": 986,    # Bossers & Cnossen
+        "TeamID": 1,          # ⚠️ zet hier het echte Support Engineering team ID
+
+        # ⬇️ Lege arrays meegeven zodat Halo de JSON correct accepteert
+        "Faults": [],
+        "Services": [],
+        "Assets": []
     }
     print("📤 Halo Ticket Payload:", payload, flush=True)
     resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
@@ -86,7 +91,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 📩 Berichten in Webex
+    # 📩 Gewone chat-berichten
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -94,19 +99,17 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
-        # Negeer eigen bot berichten
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
         if "nieuwe melding" in text:
             send_adaptive_card(room_id)
 
-    # 📥 Adaptive Card submit verwerken
+    # 📥 Adaptive card submit verwerken
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         form_resp = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS)
         inputs = form_resp.json().get("inputs", {})
-
         print("📥 Parsed inputs:", inputs, flush=True)
 
         naam = inputs.get("name", "Onbekend")
