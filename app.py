@@ -4,7 +4,7 @@ import urllib.parse
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# 🔄 Load environment variables
+# 🔄 Load env vars
 load_dotenv()
 app = Flask(__name__)
 
@@ -21,13 +21,15 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL = os.getenv("HALO_AUTH_URL", "").strip()
 HALO_API_BASE = os.getenv("HALO_API_BASE", "").strip()
 
-# 🔑 Mandatory IDs from your environment
+# TicketType + IDs from .env
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_CUSTOMER_ID = int(os.getenv("HALO_CUSTOMER_ID", "986"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_PRIORITY_ID = int(os.getenv("HALO_PRIORITY_ID", "1"))
-HALO_IMPACT_ID = int(os.getenv("HALO_IMPACT_ID", "3"))       # ⚠️ check real ID
-HALO_URGENCY_ID = int(os.getenv("HALO_URGENCY_ID", "6"))     # ⚠️ check real ID
+
+# Default values for mandatory fields (names must match exactly in Halo!)
+DEFAULT_IMPACT = os.getenv("HALO_IMPACT", "Medium")     # e.g. "Critical", "High", "Medium", "Low"
+DEFAULT_URGENCY = os.getenv("HALO_URGENCY", "Normal")   # e.g. "Immediate", "Normal", "Low"
 
 # 🔑 Get Halo API Token
 def get_halo_headers():
@@ -50,15 +52,17 @@ def create_halo_ticket(summary, details):
 
     payload = [
         {
-            "Summary": summary,
-            "Description": details,
             "TypeID": HALO_TICKET_TYPE_ID,
             "CustomerID": HALO_CUSTOMER_ID,
             "TeamID": HALO_TEAM_ID,
             "PriorityID": HALO_PRIORITY_ID,
-            "ImpactID": HALO_IMPACT_ID,     # ✅ Mandatory
-            "UrgencyID": HALO_URGENCY_ID,   # ✅ Mandatory
-            "Faults": []
+            "Faults": [],
+            "CustomFields": [
+                {"Name": "Summary", "Value": summary},
+                {"Name": "Details", "Value": details},
+                {"Name": "Impact", "Value": DEFAULT_IMPACT},
+                {"Name": "Urgency", "Value": DEFAULT_URGENCY}
+            ]
         }
     ]
 
@@ -68,12 +72,12 @@ def create_halo_ticket(summary, details):
     resp.raise_for_status()
     return resp.json()
 
-# 💬 Webex messaging
+# 💬 Webex: Send message
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
 
-# 📋 Adaptive Card
+# 📋 Webex: Send Adaptive Card
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -97,7 +101,7 @@ def send_adaptive_card(room_id):
     }
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
-# 🔔 Webex webhook
+# 🔔 Webex: Webhook endpoint
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
@@ -136,7 +140,7 @@ def webex_webhook():
 
         send_message(
             data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo voor Bossers & Cnossen.\n\n**Onderwerp:** {summary}"
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}"
         )
 
     return {"status": "ok"}
