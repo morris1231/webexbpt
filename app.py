@@ -1,6 +1,7 @@
 import os
 import requests
 import urllib.parse
+import json
 from flask import Flask, request
 from dotenv import load_dotenv
 
@@ -25,9 +26,9 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_CUSTOMER_ID = int(os.getenv("HALO_CUSTOMER_ID", "986"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 
-# Defaults (if user doesn't pick in card)
-HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))    # default: Single User
-HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))  # default: Low
+# Defaults when user does not choose in Webex card
+HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))    # default Single User
+HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))  # default Low
 
 # 🔑 Get Halo API Token
 def get_halo_headers():
@@ -44,34 +45,51 @@ def get_halo_headers():
     data = resp.json()
     return {"Authorization": f"Bearer {data['access_token']}", "Content-Type": "application/json"}
 
+
 # 🎫 Create Halo Ticket
 def create_halo_ticket(summary, details, impact_id, urgency_id):
     headers = get_halo_headers()
-    payload = [
-        {
-            "Summary": summary,
-            "Description": details,
-            "TypeID": HALO_TICKET_TYPE_ID,
-            "CustomerID": HALO_CUSTOMER_ID,
-            "TeamID": HALO_TEAM_ID,
-            # ✅ Priority left out → calculated automatically by Halo
-            "ImpactID": int(impact_id),
-            "UrgencyID": int(urgency_id),
-            "Faults": []
-        }
-    ]
-    print("📤 Halo Ticket Payload:", payload, flush=True)
-    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload)
+
+    # First try with ImpactID/UrgencyID
+    base_payload = {
+        "Summary": summary,
+        "Description": details,
+        "TypeID": HALO_TICKET_TYPE_ID,
+        "CustomerID": HALO_CUSTOMER_ID,
+        "TeamID": HALO_TEAM_ID,
+        "Faults": []
+    }
+
+    payload1 = dict(base_payload)
+    payload1["ImpactID"] = int(impact_id)
+    payload1["UrgencyID"] = int(urgency_id)
+
+    print("📤 Halo Ticket Payload Attempt1:", json.dumps(payload1, indent=2), flush=True)
+    resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload1)
+
+    if resp.status_code == 400:
+        # Retry with ImpactLevelID/UrgencyLevelID
+        payload2 = dict(base_payload)
+        payload2["ImpactLevelID"] = int(impact_id)
+        payload2["UrgencyLevelID"] = int(urgency_id)
+
+        print("⚠️ 400 from Halo, retrying with LevelID fields...")
+        print("📤 Halo Ticket Payload Attempt2:", json.dumps(payload2, indent=2), flush=True)
+
+        resp = requests.post(f"{HALO_API_BASE}/Tickets", headers=headers, json=payload2)
+
     print("🎫 Halo ticket resp:", resp.status_code, resp.text[:500], flush=True)
     resp.raise_for_status()
     return resp.json()
+
 
 # 💬 Webex: Send message
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
 
-# 📋 Webex: Adaptive Card with Impact & Urgency dropdowns
+
+# 📋 Webex: Adaptive Card
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
@@ -95,7 +113,7 @@ def send_adaptive_card(room_id):
                             "type": "Input.ChoiceSet",
                             "id": "impact",
                             "style": "compact",
-                            "value": str(HALO_DEFAULT_IMPACT),  # default from .env
+                            "value": str(HALO_DEFAULT_IMPACT),
                             "choices": [
                                 {"title": "Company Wide", "value": "1"},
                                 {"title": "Multiple Users Affected", "value": "2"},
@@ -106,7 +124,7 @@ def send_adaptive_card(room_id):
                             "type": "Input.ChoiceSet",
                             "id": "urgency",
                             "style": "compact",
-                            "value": str(HALO_DEFAULT_URGENCY),  # default from .env
+                            "value": str(HALO_DEFAULT_URGENCY),
                             "choices": [
                                 {"title": "High", "value": "1"},
                                 {"title": "Medium", "value": "2"},
@@ -121,7 +139,8 @@ def send_adaptive_card(room_id):
     }
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
-# 🔔 Webex: Webhook endpoint
+
+# 🔔 Webex Webhook
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
@@ -134,7 +153,6 @@ def webex_webhook():
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
 
-        # avoid bot loop
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
 
@@ -159,19 +177,21 @@ def webex_webhook():
         details = f"Naam: {naam}\n\nOmschrijving:\n{omschrijving}"
 
         ticket = create_halo_ticket(summary, details, impact_id, urgency_id)
-        ticket_id = ticket[0].get("ID", "onbekend")  # Halo returns array
+        ticket_id = ticket.get("ID") or (ticket[0].get("ID") if isinstance(ticket, list) else "onbekend")
 
         send_message(
             data["data"]["roomId"],
-            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n**ImpactID:** {impact_id}\n**UrgencyID:** {urgency_id}"
+            f"✅ Ticket **#{ticket_id}** aangemaakt in Halo.\n\n**Onderwerp:** {summary}\n**Impact:** {impact_id}\n**Urgentie:** {urgency_id}"
         )
 
     return {"status": "ok"}
+
 
 # ❤️ Healthcheck
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Webex → Halo Bot draait"}
+
 
 # ▶️ Run Flask
 if __name__ == "__main__":
