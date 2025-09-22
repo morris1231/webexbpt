@@ -20,7 +20,7 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # 👈 jouw Public Note ID
 
 ticket_room_map = {}
 
@@ -42,11 +42,11 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    """Zoek gebruiker in Halo via e-mail → return (user_id, customer_id)"""
+    """Zoek Halo gebruiker via email → return (user_id, customer_id)"""
     if not email: return None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
-    print("🔎 Lookup:", r.status_code, r.text[:300])
+    print("🔎 Lookup:", r.status_code, r.text[:200])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
         return user.get("ID"), user.get("CustomerID")
@@ -78,17 +78,17 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id)
     }
 
-    # 👇 Belangrijk: gebruik custom fields
-    if user_id and customer_id:  # klant
+    # ✅ Gebruik custom fields (voor eindgebruikers)
+    if user_id and customer_id:
         ticket["CFStarterCompany"] = customer_id
         ticket["CFRequestUsersAtClientMulti"] = user_id
     elif user_id:  # agent
         ticket["UserID"] = user_id
     else:
-        print("⚠️ Geen user gevonden, ticket valt terug op API user")
+        print("⚠️ Geen gebruiker gevonden, ticket valt terug op API user")
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
-    print("🎫 Ticket resp:", r.status_code, r.text[:300])
+    print("🎫 Ticket resp:", r.status_code, r.text[:200])
     r.raise_for_status()
 
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
@@ -105,13 +105,14 @@ def create_halo_ticket(summary, naam, email,
         note_payload = {
             "TicketID": ticket_id,
             "Details": f"**Formulier ingevuld door {naam}:**\n\n{description}",
-            "IsPrivate": False,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
+            "IsPrivate": False,
             "VisibleToCustomer": True
         }
-        if user_id: note_payload["UserID"] = user_id
+        if user_id: 
+            note_payload["UserID"] = user_id
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Note resp:", nr.status_code, nr.text[:200])
+        print("📝 Vragenlijst note resp:", nr.status_code, nr.text[:200])
 
     return {"id": ticket_id, "ref": ref or ticket_id}
 
@@ -120,12 +121,12 @@ def create_halo_ticket(summary, naam, email,
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     h = get_halo_headers()
-    user_id, customer_id = get_halo_user_by_email(email) if email else (None, None)
+    user_id, _ = get_halo_user_by_email(email) if email else (None, None)
     payload = {
         "TicketID": ticket_id,
         "Details": f"{sender} schreef:\n{text}",
-        "IsPrivate": False,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
+        "IsPrivate": False,
         "VisibleToCustomer": True
     }
     if user_id: payload["UserID"] = user_id
@@ -133,7 +134,7 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     print("💬 Note resp:", r.status_code, r.text[:200])
 
 # ------------------------------------------------------------------------------
-# Webex
+# Webex helpers
 # ------------------------------------------------------------------------------
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages",
@@ -228,15 +229,15 @@ def webex_webhook():
 def halo_webhook():
     data = request.json
     t_id = data.get("TicketID")
-    if not t_id or t_id not in ticket_room_map: return {"status":"ok"}
+    if not t_id or t_id not in ticket_room_map: 
+        return {"status":"ok"}
 
-    # laatste publieke note ophalen
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
         last = sorted(actions, key=lambda x: x.get("Time",""), reverse=True)[0]
-        note = last.get("Details") or last.get("Note")
+        note = last.get("Details")
         created_by = last.get("User",{}).get("Name","Onbekend")
         if note and not last.get("IsPrivate",False):
             send_message(ticket_room_map[t_id],
