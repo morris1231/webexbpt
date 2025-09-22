@@ -21,8 +21,9 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "0"))  # External Note ID
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))      # Fallback user
+# ✅ Altijd dit ID gebruiken (Public/External Note)
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))
 
 ticket_room_map = {}
 
@@ -43,6 +44,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
+    """Zoek of user bestaat met dit e‑mailadres in Halo"""
     if not email:
         return None, None, None
     h = get_halo_headers()
@@ -56,14 +58,12 @@ def get_halo_user_by_email(email):
 # Safe POST wrapper
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
-    print("➡️ Payload verstuurd:", json.dumps(payload, indent=2))
+    print("➡️ Payload naar Halo:", json.dumps(payload, indent=2))
     r = requests.post(url, headers=headers, json=payload)
     print("⬅️ Halo response:", r.status_code, r.text)
 
     if r.status_code != 200 and room_id:
-        send_message(room_id, f"⚠️ Halo fout {r.status_code}:\n```\n{r.text}\n```")
-
-    # Let op: NIET crashen, gewoon doorgaan
+        send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
     return r
 
 # ------------------------------------------------------------------------------
@@ -86,13 +86,12 @@ def create_halo_ticket(summary, naam, email,
         "CFReportedUser": f"{naam} ({email})",
         "CFReportedCompany": str(customer_id) if customer_id else ""
     }
-
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
-    print("🎫 Ticket response:", r.status_code, r.text[:200])
     r.raise_for_status()
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
+    # Vragenlijst note
     qa_note = (
         f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
         f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -103,7 +102,6 @@ def create_halo_ticket(summary, naam, email,
         f"- Impact: {impact_id}\n"
         f"- Urgency: {urgency_id}\n"
     )
-
     note_payload = {
         "TicketID": int(ticket_id),
         "Details": qa_note,
@@ -112,7 +110,7 @@ def create_halo_ticket(summary, naam, email,
         "VisibleToCustomer": True,
         "UserID": int(user_id or HALO_FALLBACK_USERID)
     }
-    safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload)
+    safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload, room_id=None)
     return {"id": ticket_id, "ref": ticket_id}
 
 # ------------------------------------------------------------------------------
@@ -122,7 +120,6 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None
     h = get_halo_headers()
     user_id, _, _ = get_halo_user_by_email(email) if email else (None, None, None)
     note_text = f"{sender} ({email}) schreef:\n{text}" if email else text
-
     payload = {
         "TicketID": int(ticket_id),
         "Details": note_text,
@@ -144,7 +141,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Formulier voor nieuwe melding",
+        "markdown": "✍ Formulier voor nieuwe melding:",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
@@ -172,7 +169,6 @@ def send_adaptive_card(room_id):
 def webex_webhook():
     data = request.json
     resource = data.get("resource")
-
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -183,6 +179,7 @@ def webex_webhook():
             return {"status": "ignored"}
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
+            send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te starten.")
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
@@ -219,9 +216,9 @@ def halo_webhook():
     t_id = data.get("TicketID") or data.get("Request", {}).get("ID")
     if not t_id or int(t_id) not in ticket_room_map:
         return {"status": "ignored"}
-
     h = get_halo_headers()
-    # Ticketstatus
+
+    # Status updates
     t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h)
     if t_detail.status_code == 200:
         status = t_detail.json().get("StatusName") or t_detail.json().get("Status")
