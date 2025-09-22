@@ -21,9 +21,9 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ Zorg dat je dit in .env goed hebt (ID's uit Halo configuratie)
+# ✅ Zorg dat je deze goed zet in .env
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External Note ID
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "3778"))       # fallback user ID
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Fallback user ID
 
 ticket_room_map = {}
 
@@ -52,6 +52,21 @@ def get_halo_user_by_email(email):
         user = r.json()[0]
         return user.get("ID"), user.get("CustomerID"), user.get("Name")
     return None, None, None
+
+# ------------------------------------------------------------------------------
+# Safe POST wrapper voor /Actions
+# ------------------------------------------------------------------------------
+def safe_post_action(url, headers, payload, room_id=None):
+    """Post action naar Halo en logt foutmeldingen."""
+    r = requests.post(url, headers=headers, json=payload)
+    if r.status_code != 200:
+        msg = f"❌ Halo Actions error {r.status_code}: {r.text}"
+        print(msg)
+        print("➡️ Payload was:", json.dumps(payload, indent=2))
+        if room_id:  # terugmelden naar Webex
+            send_message(room_id, f"⚠️ Fout bij opslaan in Halo:\n```\n{r.text}\n```")
+    r.raise_for_status()
+    return r
 
 # ------------------------------------------------------------------------------
 # Ticket creation
@@ -108,17 +123,14 @@ def create_halo_ticket(summary, naam, email,
             "UserID": int(user_id or HALO_FALLBACK_USERID)
         }
 
-        nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Vragenlijst note response:", nr.status_code, nr.text)
-        print("📝 Payload verstuurd:", json.dumps(note_payload, indent=2))
-        nr.raise_for_status()
+        safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload)
 
     return {"id": ticket_id, "ref": ref or ticket_id}
 
 # ------------------------------------------------------------------------------
 # Notes
 # ------------------------------------------------------------------------------
-def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
+def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
     h = get_halo_headers()
     user_id, _, _ = get_halo_user_by_email(email) if email else (None, None, None)
     note_text = f"{sender} ({email}) schreef:\n{text}" if email else text
@@ -132,10 +144,7 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
         "UserID": int(user_id or HALO_FALLBACK_USERID)
     }
 
-    r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
-    print("💬 Note response:", r.status_code, r.text)
-    print("💬 Payload verstuurd:", json.dumps(payload, indent=2))
-    r.raise_for_status()
+    safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=payload, room_id=room_id)
 
 # ------------------------------------------------------------------------------
 # Webex helpers
@@ -155,7 +164,7 @@ def send_adaptive_card(room_id):
             "content": {
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard",
-                "version": "1.2",  # ✅ stabiele versie in Webex
+                "version": "1.2",
                 "body": [
                     {"type": "Input.Text", "id": "name", "placeholder": "Naam"},
                     {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
@@ -198,7 +207,7 @@ def webex_webhook():
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
-                    add_note_to_ticket(t_id, text, sender, email=sender)
+                    add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id)
 
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
@@ -247,7 +256,7 @@ def halo_webhook():
         if status:
             send_message(ticket_room_map[int(t_id)], f"🔄 **Status update voor ticket {t_id}:** {status}")
 
-    # Notes ophalen
+    # Laatste note ophalen
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
