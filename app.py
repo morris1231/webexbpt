@@ -38,21 +38,22 @@ def get_halo_headers():
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(payload))
     r.raise_for_status()
-    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
+    token = r.json().get('access_token')
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    """Zoek Halo user met email → return (user_id, customer_id)"""
+    """Zoek gebruiker in Halo via e-mail → return (user_id, customer_id)"""
     if not email: return None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
-    print("🔎 Halo lookup:", r.status_code, r.text[:200])
+    print("🔎 Lookup:", r.status_code, r.text[:300])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
         return user.get("ID"), user.get("CustomerID")
     return None, None
 
 # ------------------------------------------------------------------------------
-# Ticket aanmaken
+# Ticket creation
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, naam, email,
                        omschrijving="", sindswanneer="", watwerktniet="",
@@ -77,19 +78,19 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id)
     }
 
-    # 🎯 Juiste koppeling gebruiker/klant/agent
+    # 👇 Belangrijk: gebruik custom fields
     if user_id and customer_id:  # klant
-        ticket["CustomerID"] = customer_id
-        ticket["CustomerUserID"] = user_id
+        ticket["CFStarterCompany"] = customer_id
+        ticket["CFRequestUsersAtClientMulti"] = user_id
     elif user_id:  # agent
         ticket["UserID"] = user_id
-    else:  # fallback
-        print("⚠️ Geen gebruiker gevonden, ticket wordt API-user")
+    else:
+        print("⚠️ Geen user gevonden, ticket valt terug op API user")
 
-    # Create ticket
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
-    print("🎫 Ticket resp:", r.status_code, r.text[:200])
+    print("🎫 Ticket resp:", r.status_code, r.text[:300])
     r.raise_for_status()
+
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
@@ -103,7 +104,7 @@ def create_halo_ticket(summary, naam, email,
         # Voeg vragenlijst toe als Public Note
         note_payload = {
             "TicketID": ticket_id,
-            "Details": f"**Ingevuld formulier door {naam}:**\n\n{description}",
+            "Details": f"**Formulier ingevuld door {naam}:**\n\n{description}",
             "IsPrivate": False,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
             "VisibleToCustomer": True
@@ -132,7 +133,7 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     print("💬 Note resp:", r.status_code, r.text[:200])
 
 # ------------------------------------------------------------------------------
-# Webex helpers
+# Webex
 # ------------------------------------------------------------------------------
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages",
@@ -217,6 +218,7 @@ def webex_webhook():
                                     omschrijving, sindswanneer,
                                     watwerktniet, zelfgeprobeerd,
                                     impacttoelichting, impact_id, urgency_id)
+
         ticket_room_map[ticket["id"]] = room_id
         send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**\n\n**Onderwerp:** {summary}")
 
