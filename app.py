@@ -21,8 +21,9 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External Note type ID
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # fallback user ID
+# ✅ Zorg dat je dit in .env goed hebt (ID's uit Halo configuratie)
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External Note ID
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "3778"))       # fallback user ID
 
 ticket_room_map = {}
 
@@ -86,7 +87,7 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Vragenlijst note maken
+        # Vragenlijst note
         qa_note = (
             f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
             f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -103,15 +104,13 @@ def create_halo_ticket(summary, naam, email,
             "Details": qa_note,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
             "IsPrivate": False,
-            "VisibleToCustomer": True
+            "VisibleToCustomer": True,
+            "UserID": int(user_id or HALO_FALLBACK_USERID)
         }
-        if user_id:
-            note_payload["UserID"] = user_id
-        elif HALO_FALLBACK_USERID:
-            note_payload["UserID"] = HALO_FALLBACK_USERID
 
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Questions note response:", nr.status_code, nr.text)
+        print("📝 Vragenlijst note response:", nr.status_code, nr.text)
+        print("📝 Payload verstuurd:", json.dumps(note_payload, indent=2))
         nr.raise_for_status()
 
     return {"id": ticket_id, "ref": ref or ticket_id}
@@ -129,15 +128,13 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
         "Details": note_text,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
-        "VisibleToCustomer": True
+        "VisibleToCustomer": True,
+        "UserID": int(user_id or HALO_FALLBACK_USERID)
     }
-    if user_id:
-        payload["UserID"] = user_id
-    elif HALO_FALLBACK_USERID:
-        payload["UserID"] = HALO_FALLBACK_USERID
 
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
     print("💬 Note response:", r.status_code, r.text)
+    print("💬 Payload verstuurd:", json.dumps(payload, indent=2))
     r.raise_for_status()
 
 # ------------------------------------------------------------------------------
@@ -158,7 +155,7 @@ def send_adaptive_card(room_id):
             "content": {
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard",
-                "version": "1.2",
+                "version": "1.2",  # ✅ stabiele versie in Webex
                 "body": [
                     {"type": "Input.Text", "id": "name", "placeholder": "Naam"},
                     {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
@@ -205,7 +202,8 @@ def webex_webhook():
 
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
+        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
+                              headers=WEBEX_HEADERS).json().get("inputs", {})
         naam = inputs.get("name", "Onbekend")
         email = inputs.get("email", "")
         omschrijving = inputs.get("omschrijving", "")
@@ -249,7 +247,7 @@ def halo_webhook():
         if status:
             send_message(ticket_room_map[int(t_id)], f"🔄 **Status update voor ticket {t_id}:** {status}")
 
-    # Laatste note ophalen
+    # Notes ophalen
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
