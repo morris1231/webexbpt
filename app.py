@@ -40,6 +40,16 @@ def get_halo_headers():
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
+def get_halo_user_by_email(email):
+    """Zoek Halo gebruiker via e-mail → return (user_id, customer_id, name)."""
+    if not email: return None, None, None
+    h = get_halo_headers()
+    r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
+    if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
+        user = r.json()[0]
+        return user.get("ID"), user.get("CustomerID"), user.get("Name")
+    return None, None, None
+
 # ------------------------------------------------------------------------------
 # Ticket creation
 # ------------------------------------------------------------------------------
@@ -48,21 +58,25 @@ def create_halo_ticket(summary, naam, email,
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3):
     h = get_halo_headers()
+    user_id, customer_id, user_name = get_halo_user_by_email(email)
 
-    # Beschrijving incl. melder
-    description = (
+    # Tekst in het Details veld
+    details_text = (
         f"👤 Ticket aangemaakt door: {naam} ({email})\n\n"
         f"📌 Probleem: {summary}\n\n"
     )
-    if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
+    if omschrijving: details_text += f"Omschrijving: {omschrijving}\n\n"
 
+    # Payload met juiste velden
     ticket = {
         "Summary": summary,
-        "Description": description,
+        "Details": details_text,          # ✅ gebruik 'Details' veld
         "TypeID": HALO_TICKET_TYPE_ID,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
-        "Urgency": int(urgency_id)
+        "Urgency": int(urgency_id),
+        "CFReportedUser": f"{naam} ({email})",
+        "CFReportedCompany": str(customer_id) if customer_id else ""
     }
 
     # Ticket aanmaken
@@ -79,7 +93,7 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Vraag/antwoord lijst als note toevoegen
+        # Eerste note: vragenlijst
         qa_note = (
             f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
             f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -119,10 +133,11 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     print("💬 Note response:", r.status_code, r.text[:200])
 
 # ------------------------------------------------------------------------------
-# Webex helpers
+# Webex Helpers
 # ------------------------------------------------------------------------------
 def send_message(room_id, text):
-    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
+    requests.post("https://webexapis.com/v1/messages",
+                  headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
 
 def send_adaptive_card(room_id):
@@ -169,6 +184,7 @@ def webex_webhook():
 
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
+            send_message(room_id, "✍ Vul het formulier hierboven in om een ticket te starten.")
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
@@ -197,11 +213,9 @@ def webex_webhook():
                                     impacttoelichting, impact_id, urgency_id)
 
         ticket_room_map[ticket["id"]] = room_id
-        send_message(room_id,
-                     f"✅ Ticket aangemaakt: **{ticket['ref']}**\n\n**Onderwerp:** {summary}")
+        send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**\n\n**Onderwerp:** {summary}")
 
     return {"status":"ok"}
-
 
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
@@ -219,13 +233,12 @@ def halo_webhook():
         created_by = last.get("User",{}).get("Name","Onbekend")
         if note and not last.get("IsPrivate",False):
             send_message(ticket_room_map[t_id],
-                         f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
+                f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
     return {"status":"ok"}
 
 @app.route("/", methods=["GET"])
 def health():
     return {"status":"ok","message":"Bot draait!"}
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
