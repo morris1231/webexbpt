@@ -21,7 +21,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# Zet dit in je .env op het juiste ID van de Public Note action type (Halo Admin → Configuration → Action Types)
+# Public Note action type uit Halo Admin → ID invullen in .env
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
 
 ticket_room_map = {}
@@ -44,9 +44,8 @@ def get_halo_headers():
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
-
 def get_halo_user_by_email(email):
-    """Zoek user bij email → return (UserID, CustomerID)"""
+    """Zoek Halo gebruiker (user of klant) met e-mail"""
     if not email:
         return None, None
     h = get_halo_headers()
@@ -54,7 +53,7 @@ def get_halo_user_by_email(email):
     print("🔎 Lookup user:", r.status_code, r.text[:200])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
-        return user.get("ID"), user.get("CustomerID")
+        return user.get("ID"), user.get("CustomerID")  # Agents hebben vaak GEEN CustomerID
     return None, None
 
 # ------------------------------------------------------------------------------
@@ -67,7 +66,7 @@ def create_halo_ticket(summary, naam, email,
     h = get_halo_headers()
     user_id, customer_id = get_halo_user_by_email(email)
 
-    # Bouw de vragenlijst tekst
+    # Beschrijving / vragenlijst
     description = f"Ingediend door: {naam} ({email})\n\n"
     if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
     if sindswanneer: description += f"Sinds wanneer: {sindswanneer}\n"
@@ -84,10 +83,15 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id),
         "Faults": []
     }
-    if customer_id:
+
+    # 👇 Zorg dat juiste persoon aanmaker wordt
+    if user_id and customer_id:
+        # klant
         ticket["CustomerID"] = customer_id
-    if user_id:
         ticket["CustomerUserID"] = user_id
+    elif user_id:
+        # agent
+        ticket["UserID"] = user_id
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     print("🎫 Ticket response:", r.status_code, r.text[:200])
@@ -98,12 +102,13 @@ def create_halo_ticket(summary, naam, email,
     ref = None
 
     if ticket_id:
+        # Ticket details om ref/ticketnummer op te halen
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
         if detail.status_code == 200:
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Voeg altijd een Public Note toe
+        # Public note met formulier-info
         note_payload = [{
             "TicketID": ticket_id,
             "Note": f"**Ingevuld formulier door {naam}:**\n\n{description}",
@@ -134,11 +139,9 @@ def add_note_to_ticket(ticket_id, text, sender="Webex"):
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
     print("💬 Note response:", r.status_code, r.text[:200])
 
-
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                   json={"roomId": room_id, "markdown": text})
-
 
 def send_adaptive_card(room_id):
     card = {
@@ -229,7 +232,6 @@ def webex_webhook():
 
     return {"status": "ok"}
 
-
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
@@ -246,13 +248,10 @@ def halo_webhook():
 
     return {"status": "ok"}
 
-
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Bot draait!"}
 
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-    
