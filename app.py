@@ -20,14 +20,16 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# 🔔 ActionTypeID from Halo Admin > Config > Action Types (for Public Notes)
+# ⚠️ Set this in .env: ID of "Public Note" ActionType from Halo Admin > Action Types
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
 
-# Map: TicketID <-> Webex Room
+# Ticket ↔ Room mapping in memory
 ticket_room_map = {}
 
+# ============================================================
+# Helpers
+# ============================================================
 
-# 🔑 Get Halo access headers
 def get_halo_headers():
     payload = {
         "grant_type": "client_credentials",
@@ -35,17 +37,15 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    r = requests.post(
-        HALO_AUTH_URL,
+    r = requests.post(HALO_AUTH_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data=urllib.parse.urlencode(payload)
-    )
+        data=urllib.parse.urlencode(payload))
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 
-# 🔎 Lookup Halo user by email (returns ID + CustomerID)
 def get_halo_user_by_email(email):
+    """Lookup user by email → return (UserID, CustomerID) or (None, None)"""
     if not email:
         return None, None
     h = get_halo_headers()
@@ -56,7 +56,10 @@ def get_halo_user_by_email(email):
     return None, None
 
 
-# 🎫 Ticket creation (with dynamic Customer/User + add Note)
+# ============================================================
+# Ticket creation
+# ============================================================
+
 def create_halo_ticket(summary, naam, email,
                        omschrijving="", sindswanneer="", watwerktniet="",
                        zelfgeprobeerd="", impacttoelichting="",
@@ -65,7 +68,7 @@ def create_halo_ticket(summary, naam, email,
     h = get_halo_headers()
     user_id, customer_id = get_halo_user_by_email(email)
 
-    # Build description from form
+    # Build description
     description = f"Ingediend door: {naam} ({email})\n\n"
     if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
     if sindswanneer: description += f"Sinds wanneer: {sindswanneer}\n"
@@ -82,19 +85,17 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id),
         "Faults": []
     }
-
     if customer_id:
         ticket["CustomerID"] = customer_id
     if user_id:
         ticket["CustomerUserID"] = user_id
 
-    # Create ticket
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     r.raise_for_status()
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    # Get ref number
+    # Ref (INC number)
     ref = None
     if ticket_id:
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
@@ -102,10 +103,10 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Also add the form as Public Note so it displays in Progress Feed
+        # Also add as Public Note so it's visible in Progress Feed
         note_payload = [{
             "TicketID": ticket_id,
-            "Note": f"**Ingevuld formulier:**\n\n{description}",
+            "Note": f"**Ingevuld formulier door {naam}:**\n\n{description}",
             "IsPrivate": False,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC
         }]
@@ -114,8 +115,12 @@ def create_halo_ticket(summary, naam, email,
     return {"id": ticket_id, "ref": ref or ticket_id}
 
 
-# 💬 Add Note (Webex message -> Halo Progress Feed)
+# ============================================================
+# Notes / Chat handlers
+# ============================================================
+
 def add_note_to_ticket(ticket_id, text, sender="Webex user"):
+    """Send a note from Webex to Halo Progress Feed"""
     h = get_halo_headers()
     payload = [{
         "TicketID": ticket_id,
@@ -123,18 +128,17 @@ def add_note_to_ticket(ticket_id, text, sender="Webex user"):
         "IsPrivate": False,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC
     }]
-    r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
-    print("💬 Note → Halo:", r.status_code, r.text[:200])
+    requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
 
 
-# 📤 Message to Webex
 def send_message(room_id, text):
+    """Send message to Webex room"""
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
         json={"roomId": room_id, "markdown": text})
 
 
-# 📋 Adaptive Card form for Webex
 def send_adaptive_card(room_id):
+    """Send the incident form adaptive card into Webex"""
     card = {
         "roomId": room_id,
         "markdown": "✍ Vul onderstaande info in (email verplicht, rest optioneel):",
@@ -165,7 +169,10 @@ def send_adaptive_card(room_id):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
 
-# 🔔 Webex webhook handler
+# ============================================================
+# Flask Endpoints
+# ============================================================
+
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
@@ -184,7 +191,7 @@ def webex_webhook():
             send_adaptive_card(room_id)
         else:
             for t_id, rid in ticket_room_map.items():
-                if rid==room_id:
+                if rid == room_id:
                     add_note_to_ticket(t_id, text, sender)
 
     elif resource=="attachmentActions":
@@ -221,17 +228,17 @@ def webex_webhook():
     return {"status":"ok"}
 
 
-# 📡 Halo webhook (Halo → Webex sync)
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
     print("Halo webhook:", json.dumps(data, indent=2))
 
     t_id = data.get("TicketID")
+    # Different Halo versions: sometimes { "Event": {...} }, sometimes { "Note": ... }
     event = data.get("Event", {})
-    note = event.get("Text")
-    created_by = event.get("User", {}).get("Name", "Onbekend")
-    is_private = event.get("IsPrivate", False)
+    note = event.get("Text") if event else data.get("Note")
+    created_by = event.get("User", {}).get("Name") if event else data.get("CreatedBy", "Onbekend")
+    is_private = event.get("IsPrivate", False) if event else data.get("IsPrivate", False)
 
     if t_id and note and not is_private and t_id in ticket_room_map:
         send_message(ticket_room_map[t_id],
@@ -239,7 +246,6 @@ def halo_webhook():
     return {"status": "ok"}
 
 
-# Health
 @app.route("/", methods=["GET"])
 def health():
     return {"status":"ok","message":"Webex ⇌ Halo bot draait"}
