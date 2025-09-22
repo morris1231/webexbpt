@@ -21,10 +21,10 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ Gebruik hier jouw Public/External Note ID
+# ✅ Jouw juiste *Public/Customer Visible Note type ID* uit Halo Config → Action Types
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-ticket_room_map = {}
+ticket_room_map = {}  # mapping ticket <-> webex room
 
 # ------------------------------------------------------------------------------
 # Helpers
@@ -44,7 +44,8 @@ def get_halo_headers():
 
 
 def get_halo_user_by_email(email):
-    if not email: return None, None, None
+    if not email:
+        return None, None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
@@ -86,12 +87,13 @@ def create_halo_ticket(summary, naam, email,
 
     ref = None
     if ticket_id:
+        # pak ticket reference
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
         if detail.status_code == 200:
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Eerste note = vragenlijst
+        # Eerste note (vragenlijst)
         qa_note = (
             f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
             f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -140,10 +142,36 @@ def send_message(room_id, text):
     r = requests.post("https://webexapis.com/v1/messages",
                       headers=WEBEX_HEADERS,
                       json={"roomId": room_id, "markdown": text})
-    print("📤 Webex send:", r.status_code)
+    print("📤 Webex send:", r.status_code, r.text)
+
+def send_adaptive_card(room_id):
+    card = {
+        "roomId": room_id,
+        "markdown": "✍ Vul onderstaande info in om melding te maken:",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.3",
+                "body": [
+                    {"type": "Input.Text", "id": "name", "placeholder": "Naam"},
+                    {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
+                    {"type": "Input.Text", "id": "omschrijving", "isMultiline": True, "placeholder": "Probleemomschrijving"},
+                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
+                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
+                    {"type": "Input.Text", "id": "zelfgeprobeerd", "isMultiline": True, "placeholder": "Zelf geprobeerd?"},
+                    {"type": "Input.Text", "id": "impacttoelichting", "isMultiline": True, "placeholder": "Impact toelichting"},
+                    {"type": "Input.Number", "id": "impact", "placeholder": "Impact (1-5)", "value": str(HALO_DEFAULT_IMPACT)},
+                    {"type": "Input.Number", "id": "urgency", "placeholder": "Urgentie (1-5)", "value": str(HALO_DEFAULT_URGENCY)}
+                ],
+                "actions": [{"type": "Action.Submit", "title":"Versturen"}]
+            }
+        }]}
+    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
 # ------------------------------------------------------------------------------
-# Routes
+# Webex webhook endpoint
 # ------------------------------------------------------------------------------
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
@@ -156,8 +184,13 @@ def webex_webhook():
         text = msg.get("text", "").strip()
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
+
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
+
+        if "nieuwe melding" in text.lower():
+            send_adaptive_card(room_id)
+            send_message(room_id, "✍ Vul het formulier hierboven in om een ticket te starten.")
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
@@ -190,7 +223,9 @@ def webex_webhook():
 
     return {"status":"ok"}
 
-
+# ------------------------------------------------------------------------------
+# Halo webhook endpoint
+# ------------------------------------------------------------------------------
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
@@ -207,30 +242,30 @@ def halo_webhook():
 
     h = get_halo_headers()
 
-    # 1️⃣ Controle: Ticket status
-    ticket_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h).json()
-    status = ticket_detail.get("StatusName") or ticket_detail.get("Status")
-    if status:
-        send_message(ticket_room_map[int(t_id)],
-            f"🔄 **Status update voor ticket {t_id}:** {status}")
+    # Status update ophalen
+    t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h)
+    if t_detail.status_code == 200:
+        status = t_detail.json().get("StatusName") or t_detail.json().get("Status")
+        if status:
+            send_message(ticket_room_map[int(t_id)],
+                f"🔄 **Status update voor ticket {t_id}:** {status}")
 
-    # 2️⃣ Controle: Notes (Actions)
+    # Laatste action ophalen (note)
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
         last = sorted(actions, key=lambda x: x.get("ID", 0), reverse=True)[0]
-
         note = last.get("Details") or last.get("Text") or last.get("Note")
         created_by = last.get("User", {}).get("Name", "Onbekend")
         is_private = last.get("IsPrivate", False)
 
         if note and not is_private:
             send_message(ticket_room_map[int(t_id)],
-                f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
+                f"💬 **Halo Update door {created_by}:**\n\n{note}")
 
     return {"status":"ok"}
 
-
+# ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {"status":"ok","message":"Bot draait!"}
