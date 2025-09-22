@@ -9,10 +9,7 @@ load_dotenv()
 app = Flask(__name__)
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN", "").strip()
-WEBEX_HEADERS = {
-    "Authorization": f"Bearer {WEBEX_TOKEN}",
-    "Content-Type": "application/json"
-}
+WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
 
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
@@ -24,7 +21,9 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # jouw External/Public Note ID
+# ✅ Zet deze waarden in .env
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # Public/External Note ID
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Service gebruiker ID
 
 ticket_room_map = {}
 
@@ -44,23 +43,24 @@ def get_halo_headers():
         data=urllib.parse.urlencode(payload)
     )
     r.raise_for_status()
-    return {
-        "Authorization": f"Bearer {r.json()['access_token']}",
-        "Content-Type": "application/json"
-    }
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
-def get_halo_user_id_by_email(email):
-    """Zoekt het UserID in Halo obv Email (moet bestaan)."""
-    h = get_halo_headers()
-    query = f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'"
-    r = requests.get(query, headers=h)
-    if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
-        user = r.json()[0]
-        print(f"✅ User lookup: {email} → UserID {user.get('ID')}")
-        return user.get("ID")
-    else:
-        print(f"❌ User lookup gefaald: {email}")
+def get_halo_user_id(email):
+    """Zoekt UserID in Halo: eerst Email, dan NetworkLogin, dan ADObject"""
+    if not email:
         return None
+    h = get_halo_headers()
+
+    filters = ["Email", "NetworkLogin", "ADObject"]
+    for f in filters:
+        url = f"{HALO_API_BASE}/Users?$filter={f} eq '{email}'"
+        r = requests.get(url, headers=h)
+        if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
+            user = r.json()[0]
+            print(f"✅ Lookup {f}={email} → UserID {user.get('ID')}")
+            return user.get("ID")
+    print(f"❌ Geen user gevonden voor {email}")
+    return None
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
@@ -71,7 +71,7 @@ def safe_post_action(url, headers, payload, room_id=None):
     print("⬅️ Halo response:", r.status_code, r.text)
 
     if r.status_code != 200 and room_id:
-        send_message(room_id, f"⚠️ Halo fout {r.status_code}:\n```\n{r.text}\n```")
+        send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
 
     return r
 
@@ -83,12 +83,8 @@ def create_halo_ticket(summary, naam, email,
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3):
     h = get_halo_headers()
-    user_id = get_halo_user_id_by_email(email)
+    user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
 
-    if not user_id:
-        raise Exception(f"Halo user niet gevonden voor {email}")
-
-    # Ticket
     ticket = {
         "Summary": summary,
         "Details": f"👤 Ticket aangemaakt door {naam} ({email})",
@@ -114,7 +110,6 @@ def create_halo_ticket(summary, naam, email,
         f"- Impact: {impact_id}\n"
         f"- Urgency: {urgency_id}\n"
     )
-
     note_payload = {
         "TicketID": int(ticket_id),
         "Details": qa_note,
@@ -131,11 +126,7 @@ def create_halo_ticket(summary, naam, email,
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
     h = get_halo_headers()
-    user_id = get_halo_user_id_by_email(email) if email else None
-
-    if not user_id:
-        raise Exception(f"Halo user niet gevonden voor {email}")
-
+    user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
     note_text = f"{sender} ({email}) schreef:\n{text}"
     payload = {
         "TicketID": int(ticket_id),
@@ -236,8 +227,8 @@ def halo_webhook():
     t_id = data.get("TicketID") or data.get("Request", {}).get("ID")
     if not t_id or int(t_id) not in ticket_room_map:
         return {"status": "ignored"}
-
     h = get_halo_headers()
+
     # Status updates
     t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h)
     if t_detail.status_code == 200:
