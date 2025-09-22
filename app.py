@@ -21,7 +21,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# Zet het juiste "Public Note" ActionType ID hier
+# Zet juiste "Public Note ActionType ID"
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
 
 ticket_room_map = {}
@@ -66,7 +66,7 @@ def create_halo_ticket(summary, naam, email,
     h = get_halo_headers()
     user_id, customer_id = get_halo_user_by_email(email)
 
-    # Beschrijving / vragenlijst
+    # Vragenlijst beschrijving
     description = f"Ingediend door: {naam} ({email})\n\n"
     if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
     if sindswanneer: description += f"Sinds wanneer: {sindswanneer}\n"
@@ -84,7 +84,7 @@ def create_halo_ticket(summary, naam, email,
         "Faults": []
     }
 
-    # Zet juiste aanmaker
+    # Koppel juiste aanmaker
     if user_id and customer_id:
         ticket["CustomerID"] = customer_id
         ticket["CustomerUserID"] = user_id
@@ -105,7 +105,7 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # ✅ Public Note toevoegen (LET OP: geen array maar object)
+        # Voeg vragenlijst als Public Note toe
         note_payload = {
             "TicketID": ticket_id,
             "TypeID": HALO_TICKET_TYPE_ID,
@@ -233,18 +233,26 @@ def webex_webhook():
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
-    print("📥 Halo webhook:", json.dumps(data, indent=2))
+    print("📥 Halo webhook (trigger):", json.dumps(data, indent=2))
     t_id = data.get("TicketID")
-    event = data.get("Event", {})
 
-    # 🔧 Pak zowel Text als Note afhankelijk van Halo versie
-    note = event.get("Text") or event.get("Note") or data.get("Note")
-    created_by = event.get("User", {}).get("Name") if event else data.get("CreatedBy", "Onbekend")
-    is_private = event.get("IsPrivate", False) if event else data.get("IsPrivate", False)
+    if not t_id or t_id not in ticket_room_map:
+        return {"status": "ok"}
 
-    if t_id and note and not is_private and t_id in ticket_room_map:
-        send_message(ticket_room_map[t_id],
-                     f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
+    # 👉 Haal laatste Actions/Notes op
+    h = get_halo_headers()
+    r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
+    if r.status_code == 200:
+        actions = r.json()
+        if actions and isinstance(actions, list):
+            last = sorted(actions, key=lambda x: x.get("Time", ""), reverse=True)[0]
+            note = last.get("Note")
+            created_by = last.get("User", {}).get("Name", "Onbekend")
+            is_private = last.get("IsPrivate", False)
+
+            if note and not is_private:
+                send_message(ticket_room_map[t_id],
+                    f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
 
     return {"status": "ok"}
 
