@@ -9,7 +9,10 @@ load_dotenv()
 app = Flask(__name__)
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN", "").strip()
-WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
+WEBEX_HEADERS = {
+    "Authorization": f"Bearer {WEBEX_TOKEN}",
+    "Content-Type": "application/json"
+}
 
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
@@ -21,8 +24,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External/Public Note
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Service account
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # jouw External/Public Note ID
 
 ticket_room_map = {}
 
@@ -36,45 +38,40 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    r = requests.post(HALO_AUTH_URL,
-                      headers={"Content-Type": "application/x-www-form-urlencoded"},
-                      data=urllib.parse.urlencode(payload))
+    r = requests.post(
+        HALO_AUTH_URL,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=urllib.parse.urlencode(payload)
+    )
     r.raise_for_status()
-    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {r.json()['access_token']}",
+        "Content-Type": "application/json"
+    }
 
-def get_halo_user_by_email(email):
-    """Probeer eerst Email match, anders NetworkLogin, zo niet: None"""
-    if not email:
-        return None, None, None
+def get_halo_user_id_by_email(email):
+    """Zoekt het UserID in Halo obv Email (moet bestaan)."""
     h = get_halo_headers()
-
-    # 1. Lookup op Email
-    r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
+    query = f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'"
+    r = requests.get(query, headers=h)
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
-        print(f"👤 Email lookup {email} → UserID {user.get('ID')}")
-        return user.get("ID"), user.get("CustomerID"), user.get("Name")
-
-    # 2. Lookup op NetworkLogin
-    r2 = requests.get(f"{HALO_API_BASE}/Users?$filter=NetworkLogin eq '{email}'", headers=h)
-    if r2.status_code == 200 and isinstance(r2.json(), list) and len(r2.json()) > 0:
-        user = r2.json()[0]
-        print(f"👤 NetworkLogin lookup {email} → UserID {user.get('ID')}")
-        return user.get("ID"), user.get("CustomerID"), user.get("Name")
-
-    print(f"⚠️ Geen user gevonden voor {email}")
-    return None, None, None
+        print(f"✅ User lookup: {email} → UserID {user.get('ID')}")
+        return user.get("ID")
+    else:
+        print(f"❌ User lookup gefaald: {email}")
+        return None
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
-    print("➡️ Payload:", json.dumps(payload, indent=2))
+    print("➡️ Payload naar Halo:", json.dumps(payload, indent=2))
     r = requests.post(url, headers=headers, json=payload)
     print("⬅️ Halo response:", r.status_code, r.text)
 
     if r.status_code != 200 and room_id:
-        send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
+        send_message(room_id, f"⚠️ Halo fout {r.status_code}:\n```\n{r.text}\n```")
 
     return r
 
@@ -86,8 +83,12 @@ def create_halo_ticket(summary, naam, email,
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3):
     h = get_halo_headers()
-    user_id, customer_id, _ = get_halo_user_by_email(email)
+    user_id = get_halo_user_id_by_email(email)
 
+    if not user_id:
+        raise Exception(f"Halo user niet gevonden voor {email}")
+
+    # Ticket
     ticket = {
         "Summary": summary,
         "Details": f"👤 Ticket aangemaakt door {naam} ({email})",
@@ -95,8 +96,7 @@ def create_halo_ticket(summary, naam, email,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
         "Urgency": int(urgency_id),
-        "CFReportedUser": f"{naam} ({email})",
-        "CFReportedCompany": str(customer_id) if customer_id else ""
+        "CFReportedUser": f"{naam} ({email})"
     }
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     r.raise_for_status()
@@ -114,13 +114,14 @@ def create_halo_ticket(summary, naam, email,
         f"- Impact: {impact_id}\n"
         f"- Urgency: {urgency_id}\n"
     )
+
     note_payload = {
         "TicketID": int(ticket_id),
         "Details": qa_note,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
         "VisibleToCustomer": True,
-        "UserID": int(user_id or HALO_FALLBACK_USERID)
+        "UserID": int(user_id)
     }
     safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload)
     return {"id": ticket_id, "ref": ticket_id}
@@ -130,15 +131,19 @@ def create_halo_ticket(summary, naam, email,
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
     h = get_halo_headers()
-    user_id, _, _ = get_halo_user_by_email(email) if email else (None, None, None)
-    note_text = f"{sender} ({email}) schreef:\n{text}" if email else text
+    user_id = get_halo_user_id_by_email(email) if email else None
+
+    if not user_id:
+        raise Exception(f"Halo user niet gevonden voor {email}")
+
+    note_text = f"{sender} ({email}) schreef:\n{text}"
     payload = {
         "TicketID": int(ticket_id),
         "Details": note_text,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
         "VisibleToCustomer": True,
-        "UserID": int(user_id or HALO_FALLBACK_USERID)
+        "UserID": int(user_id)
     }
     safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=payload, room_id=room_id)
 
@@ -181,6 +186,7 @@ def send_adaptive_card(room_id):
 def webex_webhook():
     data = request.json
     resource = data.get("resource")
+
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -230,8 +236,8 @@ def halo_webhook():
     t_id = data.get("TicketID") or data.get("Request", {}).get("ID")
     if not t_id or int(t_id) not in ticket_room_map:
         return {"status": "ignored"}
-    h = get_halo_headers()
 
+    h = get_halo_headers()
     # Status updates
     t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h)
     if t_detail.status_code == 200:
