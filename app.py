@@ -20,7 +20,7 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # 👈 jouw Public Note ID
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # jouw Public Note ID
 
 ticket_room_map = {}
 
@@ -78,17 +78,20 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id)
     }
 
-    # ✅ Gebruik custom fields (voor eindgebruikers)
+    # ✅ Fix: stuur ALLE mogelijke velden mee voor klant
     if user_id and customer_id:
+        ticket["CustomerID"] = customer_id
+        ticket["CustomerUserID"] = user_id
+        ticket["RaisedByUserID"] = user_id
         ticket["CFStarterCompany"] = customer_id
         ticket["CFRequestUsersAtClientMulti"] = user_id
     elif user_id:  # agent
         ticket["UserID"] = user_id
     else:
-        print("⚠️ Geen gebruiker gevonden, ticket valt terug op API user")
+        print("⚠️ Geen gebruiker gevonden, ticket blijft API-user")
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
-    print("🎫 Ticket resp:", r.status_code, r.text[:200])
+    print("🎫 Ticket resp:", r.status_code, r.text[:300])
     r.raise_for_status()
 
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
@@ -109,8 +112,7 @@ def create_halo_ticket(summary, naam, email,
             "IsPrivate": False,
             "VisibleToCustomer": True
         }
-        if user_id: 
-            note_payload["UserID"] = user_id
+        if user_id: note_payload["UserID"] = user_id
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
         print("📝 Vragenlijst note resp:", nr.status_code, nr.text[:200])
 
