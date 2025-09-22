@@ -21,7 +21,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# Public Note action type uit Halo Admin → ID invullen in .env
+# Zet het juiste "Public Note" ActionType ID hier
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
 
 ticket_room_map = {}
@@ -53,7 +53,7 @@ def get_halo_user_by_email(email):
     print("🔎 Lookup user:", r.status_code, r.text[:200])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
-        return user.get("ID"), user.get("CustomerID")  # Agents hebben vaak GEEN CustomerID
+        return user.get("ID"), user.get("CustomerID")
     return None, None
 
 # ------------------------------------------------------------------------------
@@ -84,13 +84,11 @@ def create_halo_ticket(summary, naam, email,
         "Faults": []
     }
 
-    # 👇 Zorg dat juiste persoon aanmaker wordt
+    # Zet juiste aanmaker
     if user_id and customer_id:
-        # klant
         ticket["CustomerID"] = customer_id
         ticket["CustomerUserID"] = user_id
     elif user_id:
-        # agent
         ticket["UserID"] = user_id
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
@@ -102,23 +100,23 @@ def create_halo_ticket(summary, naam, email,
     ref = None
 
     if ticket_id:
-        # Ticket details om ref/ticketnummer op te halen
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
         if detail.status_code == 200:
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Public note met formulier-info
-        note_payload = [{
+        # ✅ Public Note toevoegen (LET OP: geen array maar object)
+        note_payload = {
             "TicketID": ticket_id,
+            "TypeID": HALO_TICKET_TYPE_ID,
             "Note": f"**Ingevuld formulier door {naam}:**\n\n{description}",
             "IsPrivate": False,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
             "VisibleToCustomer": True,
             "VisibleToAllUsers": True
-        }]
+        }
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Note response:", nr.status_code, nr.text[:200])
+        print("📝 Note response:", nr.status_code, nr.text)
 
     return {"id": ticket_id, "ref": ref or ticket_id}
 
@@ -126,18 +124,18 @@ def create_halo_ticket(summary, naam, email,
 # Notes / Chat
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex"):
-    """Normale berichten syncen als Public Notes"""
     h = get_halo_headers()
-    payload = [{
+    payload = {
         "TicketID": ticket_id,
+        "TypeID": HALO_TICKET_TYPE_ID,
         "Note": f"{sender} schreef:\n{text}",
         "IsPrivate": False,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "VisibleToCustomer": True,
         "VisibleToAllUsers": True
-    }]
+    }
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
-    print("💬 Note response:", r.status_code, r.text[:200])
+    print("💬 Note response:", r.status_code, r.text)
 
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
@@ -238,7 +236,9 @@ def halo_webhook():
     print("📥 Halo webhook:", json.dumps(data, indent=2))
     t_id = data.get("TicketID")
     event = data.get("Event", {})
-    note = event.get("Text") if event else data.get("Note")
+
+    # 🔧 Pak zowel Text als Note afhankelijk van Halo versie
+    note = event.get("Text") or event.get("Note") or data.get("Note")
     created_by = event.get("User", {}).get("Name") if event else data.get("CreatedBy", "Onbekend")
     is_private = event.get("IsPrivate", False) if event else data.get("IsPrivate", False)
 
