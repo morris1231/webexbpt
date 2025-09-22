@@ -21,7 +21,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# 🔔 Public note Action Type ID (haal dit uit Halo Admin > Action Types!)
+# 🔔 Public note Action Type ID (uit Halo Admin > Action Types)
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
 
 # TicketID ↔ RoomID mapping
@@ -39,7 +39,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type":"application/json"}
 
 
-# 🔎 Zoek UserID via e-mail
+# 🔎 Zoek UserID in Halo adhv email
 def get_halo_user_id_by_email(email):
     if not email: return None
     h = get_halo_headers()
@@ -58,7 +58,7 @@ def create_halo_ticket(summary, naam, email,
     h = get_halo_headers()
     user_id = get_halo_user_id_by_email(email)
 
-    # ✍️ Description met vragenlijst
+    # ✍️ Beschrijving met vragenlijst
     description = f"Ingediend door: {naam} ({email})\n\n"
     if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
     if sindswanneer: description += f"Sinds wanneer: {sindswanneer}\n"
@@ -85,7 +85,7 @@ def create_halo_ticket(summary, naam, email,
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    # ref ophalen (INC:0000xxx)
+    # Ref ophalen (INC:0000xxx)
     ref = None
     if ticket_id:
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
@@ -97,11 +97,11 @@ def create_halo_ticket(summary, naam, email,
 
 
 # 💬 Note toevoegen (Webex → Halo)
-def add_note_to_ticket(ticket_id, text):
+def add_note_to_ticket(ticket_id, text, sender="Webex user"):
     h = get_halo_headers()
     payload = [{
         "TicketID": ticket_id,
-        "Note": text,
+        "Note": f"{sender} schreef:\n{text}",
         "IsPrivate": False,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC
     }]
@@ -153,7 +153,7 @@ def webex_webhook():
     data = request.json
     resource = data.get("resource")
 
-    # 1. Normaal bericht uit Webex room
+    # 1. Normaal tekstbericht uit Webex room
     if resource=="messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -168,7 +168,7 @@ def webex_webhook():
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid==room_id:
-                    add_note_to_ticket(t_id, f"{sender} zegt:\n{text}")
+                    add_note_to_ticket(t_id, text, sender)
 
     # 2. Adaptive Card ingevuld
     elif resource=="attachmentActions":
@@ -192,7 +192,7 @@ def webex_webhook():
         ticket = create_halo_ticket(summary, naam, email,
                                     omschrijving, sindswanneer,
                                     watwerktniet, zelfgeprobeerd,
-                                    impacttoelichting,
+                                    impact_toelichting,
                                     impact_id, urgency_id)
 
         ticket_room_map[ticket["id"]] = room_id
@@ -204,20 +204,22 @@ def webex_webhook():
     return {"status":"ok"}
 
 
-# 📡 Halo webhook (voor Notes → Webex)
+# 📡 Halo webhook (Halo → Webex)
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
     print("Halo webhook:", json.dumps(data, indent=2))
-    t_id = data.get("TicketID") or data.get("ticketId")
-    note = data.get("Note") or data.get("ActionText")
-    created_by = data.get("CreatedBy") or (data.get("Action",{}).get("User",{}).get("Name")) or "Onbekend"
-    is_private = str(data.get("IsPrivate","false")).lower() == "true"
+    t_id = data.get("TicketID")
+    event = data.get("Event", {})
+
+    note = event.get("Text")
+    created_by = event.get("User", {}).get("Name", "Onbekend")
+    is_private = event.get("IsPrivate", False)
 
     if t_id and note and not is_private and t_id in ticket_room_map:
         send_message(ticket_room_map[t_id],
             f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
-    return {"status":"ok"}
+    return {"status": "ok"}
 
 
 @app.route("/", methods=["GET"])
