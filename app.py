@@ -21,9 +21,8 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ Altijd dit ID gebruiken (Public/External Note)
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External/Public Note
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Service account
 
 ticket_room_map = {}
 
@@ -44,26 +43,39 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    """Zoek of user bestaat met dit e‑mailadres in Halo"""
+    """Probeer eerst Email match, anders NetworkLogin, zo niet: None"""
     if not email:
         return None, None, None
     h = get_halo_headers()
+
+    # 1. Lookup op Email
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
+        print(f"👤 Email lookup {email} → UserID {user.get('ID')}")
         return user.get("ID"), user.get("CustomerID"), user.get("Name")
+
+    # 2. Lookup op NetworkLogin
+    r2 = requests.get(f"{HALO_API_BASE}/Users?$filter=NetworkLogin eq '{email}'", headers=h)
+    if r2.status_code == 200 and isinstance(r2.json(), list) and len(r2.json()) > 0:
+        user = r2.json()[0]
+        print(f"👤 NetworkLogin lookup {email} → UserID {user.get('ID')}")
+        return user.get("ID"), user.get("CustomerID"), user.get("Name")
+
+    print(f"⚠️ Geen user gevonden voor {email}")
     return None, None, None
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
-    print("➡️ Payload naar Halo:", json.dumps(payload, indent=2))
+    print("➡️ Payload:", json.dumps(payload, indent=2))
     r = requests.post(url, headers=headers, json=payload)
     print("⬅️ Halo response:", r.status_code, r.text)
 
     if r.status_code != 200 and room_id:
         send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
+
     return r
 
 # ------------------------------------------------------------------------------
@@ -91,7 +103,7 @@ def create_halo_ticket(summary, naam, email,
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    # Vragenlijst note
+    # vragenlijst note
     qa_note = (
         f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
         f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -110,7 +122,7 @@ def create_halo_ticket(summary, naam, email,
         "VisibleToCustomer": True,
         "UserID": int(user_id or HALO_FALLBACK_USERID)
     }
-    safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload, room_id=None)
+    safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload)
     return {"id": ticket_id, "ref": ticket_id}
 
 # ------------------------------------------------------------------------------
@@ -141,7 +153,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Formulier voor nieuwe melding:",
+        "markdown": "✍ Vul het formulier hieronder in:",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
@@ -175,8 +187,10 @@ def webex_webhook():
         text = msg.get("text", "").strip()
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
+
         if sender and sender.endswith("@webex.bot"):
             return {"status": "ignored"}
+
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
             send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te starten.")
@@ -225,7 +239,7 @@ def halo_webhook():
         if status:
             send_message(ticket_room_map[int(t_id)], f"🔄 Status update: {status}")
 
-    # Notes ophalen
+    # Notes
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
