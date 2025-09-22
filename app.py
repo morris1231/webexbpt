@@ -20,6 +20,8 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
+
+# Zet juiste "Public Note ActionType ID" uit Halo Admin
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "1"))
 
 ticket_room_map = {}
@@ -34,8 +36,9 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    r = requests.post(HALO_AUTH_URL, headers={"Content-Type": "application/x-www-form-urlencoded"},
-                      data=urllib.parse.urlencode(payload))
+    r = requests.post(HALO_AUTH_URL,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=urllib.parse.urlencode(payload))
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
@@ -51,11 +54,14 @@ def get_halo_user_by_email(email):
 # ------------------------------------------------------------------------------
 # Tickets
 # ------------------------------------------------------------------------------
-def create_halo_ticket(summary, naam, email, omschrijving="", sindswanneer="", watwerktniet="",
-                       zelfgeprobeerd="", impacttoelichting="", impact_id=3, urgency_id=3):
+def create_halo_ticket(summary, naam, email,
+                       omschrijving="", sindswanneer="", watwerktniet="",
+                       zelfgeprobeerd="", impacttoelichting="",
+                       impact_id=3, urgency_id=3):
     h = get_halo_headers()
     user_id, customer_id = get_halo_user_by_email(email)
 
+    # Vragenlijst als description
     description = f"Ingediend door: {naam} ({email})\n\n"
     if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
     if sindswanneer: description += f"Sinds wanneer: {sindswanneer}\n"
@@ -72,12 +78,12 @@ def create_halo_ticket(summary, naam, email, omschrijving="", sindswanneer="", w
         "Urgency": int(urgency_id)
     }
 
-    # Koppel juiste aanmaker
+    # Juiste aanmaker
     if user_id and customer_id:
         ticket["CustomerID"] = customer_id
-        ticket["CustomerUserID"] = user_id
+        ticket["RaisedByUserID"] = user_id   # belangrijk!
     elif user_id:
-        ticket["UserID"] = user_id
+        ticket["UserID"] = user_id           # agent
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     r.raise_for_status()
@@ -90,10 +96,10 @@ def create_halo_ticket(summary, naam, email, omschrijving="", sindswanneer="", w
         if detail.status_code == 200:
             ref = detail.json().get("ref") or detail.json().get("ticketnumber")
 
-        # Voeg vragenlijst als Note toe
+        # Voeg vragenlijst toe als Public Note (Details i.p.v. Note!)
         note_payload = {
             "TicketID": ticket_id,
-            "Note": f"**Ingevuld formulier door {naam}:**\n\n{description}",
+            "Details": f"**Ingevuld formulier door {naam}:**\n\n{description}",
             "IsPrivate": False,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
             "VisibleToCustomer": True
@@ -108,7 +114,7 @@ def add_note_to_ticket(ticket_id, text, sender="Webex"):
     h = get_halo_headers()
     payload = {
         "TicketID": ticket_id,
-        "Note": f"{sender} schreef:\n{text}",
+        "Details": f"{sender} schreef:\n{text}",  # 👈 belangrijk, Details i.p.v. Note
         "IsPrivate": False,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "VisibleToCustomer": True
@@ -212,13 +218,13 @@ def halo_webhook():
     t_id = data.get("TicketID")
     if not t_id or t_id not in ticket_room_map: return {"status":"ok"}
 
-    # Ophalen laatste publieke note
+    # Fetch laatste publieke note
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
         last = sorted(actions, key=lambda x: x.get("Time",""), reverse=True)[0]
-        note = last.get("Note")
+        note = last.get("Details") or last.get("Note")
         created_by = last.get("User",{}).get("Name","Onbekend")
         is_private = last.get("IsPrivate", False)
         if note and not is_private:
