@@ -20,7 +20,7 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # Public Note ActionType ID
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External/Public Note ID
 
 ticket_room_map = {}
 
@@ -38,18 +38,18 @@ def get_halo_headers():
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(payload))
     r.raise_for_status()
-    token = r.json()['access_token']
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    if not email: return None, None
+    """Look up user by email → returns (userID, customerID, userName)"""
+    if not email: return None, None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
     print("🔎 Lookup:", r.status_code, r.text[:200])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
-        return user.get("ID"), user.get("CustomerID")
-    return None, None
+        return user.get("ID"), user.get("CustomerID"), user.get("Name")
+    return None, None, None
 
 # ------------------------------------------------------------------------------
 # Ticket creation
@@ -59,15 +59,15 @@ def create_halo_ticket(summary, naam, email,
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3):
     h = get_halo_headers()
-    user_id, customer_id = get_halo_user_by_email(email)
+    user_id, customer_id, user_name = get_halo_user_by_email(email)
 
-    description = f"Ingediend door: {naam} ({email})\n\n"
+    description = (
+        f"👤 Submitted by: {naam} ({email})\n\n"
+        f"📌 Problem: {summary}\n\n"
+    )
     if omschrijving: description += f"Omschrijving: {omschrijving}\n\n"
-    if sindswanneer: description += f"Sinds wanneer: {sindswanneer}\n"
-    if watwerktniet: description += f"Wat werkt niet: {watwerktniet}\n"
-    if zelfgeprobeerd: description += f"Zelf geprobeerd: {zelfgeprobeerd}\n"
-    if impacttoelichting: description += f"Impact toelichting: {impacttoelichting}\n"
 
+    # Build ticket payload
     ticket = {
         "Summary": summary,
         "Description": description,
@@ -77,14 +77,14 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id)
     }
 
-    # ✅ Koppel juiste persoon
+    # ✅ Fill your new custom fields
     if user_id and customer_id:
-        ticket["CustomerID"] = customer_id
-        ticket["CustomerUserID"] = user_id
+        ticket["CFReportedUser"] = f"{user_name} ({email})"
+        ticket["CFReportedCompany"] = str(customer_id)
     elif user_id:
-        ticket["UserID"] = user_id
+        ticket["CFReportedUser"] = f"{user_name or naam} ({email})"
     else:
-        print("⚠️ Geen user gevonden, ticket zal door API-user aangemaakt worden")
+        ticket["CFReportedUser"] = f"{naam} ({email})"
 
     # Create ticket
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
@@ -100,15 +100,25 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Voeg vragenlijst toe als Public Note
+        # Add questionnaire as Public Note
+        qa_note = (
+            f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
+            f"- Probleemomschrijving: {omschrijving or '—'}\n"
+            f"- Sinds wanneer: {sindswanneer or '—'}\n"
+            f"- Wat werkt niet: {watwerktniet or '—'}\n"
+            f"- Zelf geprobeerd: {zelfgeprobeerd or '—'}\n"
+            f"- Impact toelichting: {impacttoelichting or '—'}\n"
+            f"- Impact: {impact_id}\n"
+            f"- Urgency: {urgency_id}\n"
+        )
+
         note_payload = {
             "TicketID": ticket_id,
-            "Details": f"**Formulier ingevuld door {naam}:**\n\n{description}",
+            "Details": qa_note,
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
             "IsPrivate": False,
             "VisibleToCustomer": True
         }
-        if user_id: note_payload["UserID"] = user_id
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
         print("📝 Formulier note resp:", nr.status_code, nr.text[:200])
 
@@ -119,8 +129,6 @@ def create_halo_ticket(summary, naam, email,
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     h = get_halo_headers()
-    user_id, _ = get_halo_user_by_email(email) if email else (None, None)
-
     payload = {
         "TicketID": ticket_id,
         "Details": f"{sender} schreef:\n{text}",
@@ -128,9 +136,6 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
         "IsPrivate": False,
         "VisibleToCustomer": True
     }
-    if user_id:
-        payload["UserID"] = user_id
-
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
     print("💬 Note resp:", r.status_code, r.text[:200])
 
@@ -145,7 +150,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Vul onderstaande info in (formulier):",
+        "markdown": "✍ Vul onderstaande info in:",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
@@ -158,12 +163,12 @@ def send_adaptive_card(room_id):
                     {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?"},
                     {"type":"Input.Text","id":"zelfgeprobeerd","isMultiline":True,"placeholder":"Wat probeerde je al?"},
                     {"type":"Input.Text","id":"impacttoelichting","isMultiline":True,"placeholder":"Hoe ernstig is dit?"},
-                    {"type":"Input.ChoiceSet","id":"impact","style":"compact","value":str(HALO_DEFAULT_IMPACT),
+                    {"type":"Input.ChoiceSet","id":"impact","style":"compact",
                      "choices":[
                         {"title":"Company Wide","value":"1"},
                         {"title":"Multiple Users","value":"2"},
                         {"title":"Single User","value":"3"}]},
-                    {"type":"Input.ChoiceSet","id":"urgency","style":"compact","value":str(HALO_DEFAULT_URGENCY),
+                    {"type":"Input.ChoiceSet","id":"urgency","style":"compact",
                      "choices":[
                         {"title":"High","value":"1"},
                         {"title":"Medium","value":"2"},
