@@ -38,15 +38,14 @@ def get_halo_headers():
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(payload))
     r.raise_for_status()
-    token = r.json().get('access_token')
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    """Zoek Halo gebruiker via email → return (user_id, customer_id)"""
+    """Zoek Halo user met email → return (user_id, customer_id)"""
     if not email: return None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
-    print("🔎 Lookup user:", r.status_code, r.text[:200])
+    print("🔎 Halo lookup:", r.status_code, r.text[:200])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
         return user.get("ID"), user.get("CustomerID")
@@ -59,7 +58,6 @@ def create_halo_ticket(summary, naam, email,
                        omschrijving="", sindswanneer="", watwerktniet="",
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3):
-
     h = get_halo_headers()
     user_id, customer_id = get_halo_user_by_email(email)
 
@@ -79,19 +77,19 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id)
     }
 
-    # Automatische koppeling aan juiste persoon
-    if user_id and customer_id:             # klant
+    # 🎯 Juiste koppeling gebruiker/klant/agent
+    if user_id and customer_id:  # klant
         ticket["CustomerID"] = customer_id
-        ticket["RaisedByUserID"] = user_id
-    elif user_id:                           # agent
+        ticket["CustomerUserID"] = user_id
+    elif user_id:  # agent
         ticket["UserID"] = user_id
-    else:
-        print("⚠️ Geen gebruiker gevonden, ticket wordt aangemaakt onder API user")
+    else:  # fallback
+        print("⚠️ Geen gebruiker gevonden, ticket wordt API-user")
 
+    # Create ticket
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
-    print("🎫 Ticket response:", r.status_code, r.text[:200])
+    print("🎫 Ticket resp:", r.status_code, r.text[:200])
     r.raise_for_status()
-
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
@@ -102,7 +100,7 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Vragenlijst toevoegen als Public Note
+        # Voeg vragenlijst toe als Public Note
         note_payload = {
             "TicketID": ticket_id,
             "Details": f"**Ingevuld formulier door {naam}:**\n\n{description}",
@@ -112,16 +110,16 @@ def create_halo_ticket(summary, naam, email,
         }
         if user_id: note_payload["UserID"] = user_id
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Vragenlijst note:", nr.status_code, nr.text[:200])
+        print("📝 Note resp:", nr.status_code, nr.text[:200])
 
     return {"id": ticket_id, "ref": ref or ticket_id}
 
 # ------------------------------------------------------------------------------
-# Notes / Chat
+# Notes
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     h = get_halo_headers()
-    user_id, _ = get_halo_user_by_email(email) if email else (None, None)
+    user_id, customer_id = get_halo_user_by_email(email) if email else (None, None)
     payload = {
         "TicketID": ticket_id,
         "Details": f"{sender} schreef:\n{text}",
@@ -129,19 +127,17 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "VisibleToCustomer": True
     }
-    if user_id:
-        payload["UserID"] = user_id
+    if user_id: payload["UserID"] = user_id
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
-    print("💬 Note response:", r.status_code, r.text[:200])
+    print("💬 Note resp:", r.status_code, r.text[:200])
 
 # ------------------------------------------------------------------------------
 # Webex helpers
 # ------------------------------------------------------------------------------
 def send_message(room_id, text):
-    r = requests.post("https://webexapis.com/v1/messages",
-                      headers=WEBEX_HEADERS,
-                      json={"roomId": room_id, "markdown": text})
-    print("📤 Webex send:", r.status_code)
+    requests.post("https://webexapis.com/v1/messages",
+                  headers=WEBEX_HEADERS,
+                  json={"roomId": room_id, "markdown": text})
 
 def send_adaptive_card(room_id):
     card = {
@@ -175,7 +171,6 @@ def send_adaptive_card(room_id):
         }]}
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
 
-
 # ------------------------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------------------------
@@ -203,9 +198,8 @@ def webex_webhook():
 
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        inputs = requests.get(
-            f"https://webexapis.com/v1/attachment/actions/{action_id}",
-            headers=WEBEX_HEADERS).json().get("inputs", {})
+        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
+                              headers=WEBEX_HEADERS).json().get("inputs", {})
 
         naam = inputs.get("name","Onbekend")
         email = inputs.get("email","")
@@ -223,7 +217,6 @@ def webex_webhook():
                                     omschrijving, sindswanneer,
                                     watwerktniet, zelfgeprobeerd,
                                     impacttoelichting, impact_id, urgency_id)
-
         ticket_room_map[ticket["id"]] = room_id
         send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**\n\n**Onderwerp:** {summary}")
 
