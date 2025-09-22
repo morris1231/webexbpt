@@ -20,7 +20,7 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # jouw Public Note ID
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # Public Note ActionType ID
 
 ticket_room_map = {}
 
@@ -38,11 +38,10 @@ def get_halo_headers():
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(payload))
     r.raise_for_status()
-    token = r.json().get('access_token')
+    token = r.json()['access_token']
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    """Zoek Halo gebruiker via email → return (user_id, customer_id)"""
     if not email: return None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
@@ -78,22 +77,19 @@ def create_halo_ticket(summary, naam, email,
         "Urgency": int(urgency_id)
     }
 
-    # ✅ Fix: stuur ALLE mogelijke velden mee voor klant
+    # ✅ Koppel juiste persoon
     if user_id and customer_id:
         ticket["CustomerID"] = customer_id
         ticket["CustomerUserID"] = user_id
-        ticket["RaisedByUserID"] = user_id
-        ticket["CFStarterCompany"] = customer_id
-        ticket["CFRequestUsersAtClientMulti"] = user_id
-    elif user_id:  # agent
+    elif user_id:
         ticket["UserID"] = user_id
     else:
-        print("⚠️ Geen gebruiker gevonden, ticket blijft API-user")
+        print("⚠️ Geen user gevonden, ticket zal door API-user aangemaakt worden")
 
+    # Create ticket
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     print("🎫 Ticket resp:", r.status_code, r.text[:300])
     r.raise_for_status()
-
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
@@ -114,7 +110,7 @@ def create_halo_ticket(summary, naam, email,
         }
         if user_id: note_payload["UserID"] = user_id
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Vragenlijst note resp:", nr.status_code, nr.text[:200])
+        print("📝 Formulier note resp:", nr.status_code, nr.text[:200])
 
     return {"id": ticket_id, "ref": ref or ticket_id}
 
@@ -124,6 +120,7 @@ def create_halo_ticket(summary, naam, email,
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     h = get_halo_headers()
     user_id, _ = get_halo_user_by_email(email) if email else (None, None)
+
     payload = {
         "TicketID": ticket_id,
         "Details": f"{sender} schreef:\n{text}",
@@ -131,7 +128,9 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
         "IsPrivate": False,
         "VisibleToCustomer": True
     }
-    if user_id: payload["UserID"] = user_id
+    if user_id:
+        payload["UserID"] = user_id
+
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
     print("💬 Note resp:", r.status_code, r.text[:200])
 
@@ -146,7 +145,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Vul onderstaande info in:",
+        "markdown": "✍ Vul onderstaande info in (formulier):",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
