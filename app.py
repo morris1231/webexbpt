@@ -21,9 +21,8 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ Zet deze waarden in .env
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # Public/External Note ID
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Service gebruiker ID
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External/Public Note
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Service account
 
 ticket_room_map = {}
 
@@ -46,7 +45,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def get_halo_user_id(email):
-    """Zoekt UserID in Halo: eerst Email, dan NetworkLogin, dan ADObject"""
+    """Zoekt UserID in Halo obv e-mail. Eerst Email veld, dan NetworkLogin, dan ADObject."""
     if not email:
         return None
     h = get_halo_headers()
@@ -59,7 +58,8 @@ def get_halo_user_id(email):
             user = r.json()[0]
             print(f"✅ Lookup {f}={email} → UserID {user.get('ID')}")
             return user.get("ID")
-    print(f"❌ Geen user gevonden voor {email}")
+
+    print(f"❌ Geen user gevonden in Halo voor {email}")
     return None
 
 # ------------------------------------------------------------------------------
@@ -71,7 +71,7 @@ def safe_post_action(url, headers, payload, room_id=None):
     print("⬅️ Halo response:", r.status_code, r.text)
 
     if r.status_code != 200 and room_id:
-        send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
+        send_message(room_id, f"⚠️ Halo fout {r.status_code}:\n```\n{r.text}\n```")
 
     return r
 
@@ -84,6 +84,7 @@ def create_halo_ticket(summary, naam, email,
                        impact_id=3, urgency_id=3):
     h = get_halo_headers()
     user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
+    print(f"👤 Ticket aanmaker → Email: {email}, UserID: {user_id}")
 
     ticket = {
         "Summary": summary,
@@ -127,6 +128,8 @@ def create_halo_ticket(summary, naam, email,
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
     h = get_halo_headers()
     user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
+    print(f"👤 Note toevoegen → Email: {email}, UserID: {user_id}")
+
     note_text = f"{sender} ({email}) schreef:\n{text}"
     payload = {
         "TicketID": int(ticket_id),
