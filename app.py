@@ -21,13 +21,13 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ juiste ActionType uit Halo dat public notes toont
+# ✅ Juiste ID van "Public Note" / "External Note" type (uit Halo Configuration → Action Types)
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo helpers
+# HALO helpers
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     payload = {
@@ -43,7 +43,8 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    if not email: return None, None, None
+    if not email: 
+        return None, None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
@@ -78,6 +79,7 @@ def create_halo_ticket(summary, naam, email,
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
+    # Reference ophalen
     ref = None
     if ticket_id:
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
@@ -85,7 +87,7 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Vragenlijst note
+        # Vragenlijst toevoegen als External Note
         qa_note = (
             f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
             f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -146,7 +148,7 @@ def send_adaptive_card(room_id):
             "content": {
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard",
-                "version": "1.2",  # 👈 dit werkte bij jou
+                "version": "1.2",  # 👈 versie die bij jou werkte
                 "body": [
                     {"type": "Input.Text", "id": "name", "placeholder": "Naam"},
                     {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
@@ -193,7 +195,8 @@ def webex_webhook():
 
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
-        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
+        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
+                              headers=WEBEX_HEADERS).json().get("inputs", {})
         naam = inputs.get("name", "Onbekend")
         email = inputs.get("email", "")
         omschrijving = inputs.get("omschrijving", "")
@@ -224,21 +227,20 @@ def halo_webhook():
     data = request.json
     print("📥 Halo webhook RAW:", json.dumps(data, indent=2))
 
-    # Ticket ID ophalen
     t_id = data.get("TicketID") or data.get("Request", {}).get("ID")
     if not t_id or int(t_id) not in ticket_room_map:
         return {"status": "ignored"}
 
     h = get_halo_headers()
 
-    # Status update melden
+    # Status terugmelden
     t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h)
     if t_detail.status_code == 200:
         status = t_detail.json().get("StatusName") or t_detail.json().get("Status")
         if status:
             send_message(ticket_room_map[int(t_id)], f"🔄 **Status update voor ticket {t_id}:** {status}")
 
-    # Notes ophalen
+    # Laatste note ophalen
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
