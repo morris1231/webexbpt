@@ -21,7 +21,6 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ Zorg dat je deze goed zet in .env
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External Note ID
 HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Fallback user ID
 
@@ -54,17 +53,17 @@ def get_halo_user_by_email(email):
     return None, None, None
 
 # ------------------------------------------------------------------------------
-# Safe POST wrapper voor /Actions
+# Safe POST wrapper voor /Actions (debug mode)
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
-    """Post action naar Halo en logt foutmeldingen."""
+    """Post action naar Halo en logt ALTIJD status + body + payload."""
+    print("➡️ Payload verstuurd:", json.dumps(payload, indent=2))  # payload loggen
     r = requests.post(url, headers=headers, json=payload)
-    if r.status_code != 200:
-        msg = f"❌ Halo Actions error {r.status_code}: {r.text}"
-        print(msg)
-        print("➡️ Payload was:", json.dumps(payload, indent=2))
-        if room_id:  # terugmelden naar Webex
-            send_message(room_id, f"⚠️ Fout bij opslaan in Halo:\n```\n{r.text}\n```")
+    print("⬅️ Halo response:", r.status_code, r.text)  # response body loggen
+    
+    if r.status_code != 200 and room_id:
+        send_message(room_id, f"⚠️ Fout bij opslaan in Halo:\n```\n{r.text}\n```")
+    
     r.raise_for_status()
     return r
 
