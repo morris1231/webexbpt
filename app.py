@@ -22,7 +22,6 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# Mapping tickets <-> Webex rooms
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
@@ -61,6 +60,7 @@ def create_halo_ticket(summary, naam, email,
     h = get_halo_headers()
     user_id, customer_id, user_name = get_halo_user_by_email(email)
 
+    # Tekst in Details (Ticket body)
     details_text = (
         f"👤 Ticket aangemaakt door: {naam} ({email})\n\n"
         f"📌 Probleem: {summary}\n\n"
@@ -74,25 +74,25 @@ def create_halo_ticket(summary, naam, email,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
         "Urgency": int(urgency_id),
-        # custom fields als ze in ticket type bestaan
         "CFReportedUser": f"{naam} ({email})",
         "CFReportedCompany": str(customer_id) if customer_id else ""
     }
 
+    # Ticket aanmaken
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     print("🎫 Ticket response:", r.status_code, r.text[:200])
     r.raise_for_status()
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
-
     ref = None
+
     if ticket_id:
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
         if detail.status_code == 200:
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # vragenlijst als eerste note
+        # Eerste note = vragenlijst
         qa_note = (
             f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
             f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -112,8 +112,10 @@ def create_halo_ticket(summary, naam, email,
             "IsPrivate": False,
             "VisibleToCustomer": True
         }
+        if user_id:
+            note_payload["UserID"] = user_id  # koppel note aan user indien lookup
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
-        print("📝 Form note response:", nr.status_code, nr.text[:200])
+        print("📝 Questions note:", nr.status_code, nr.text[:200])
 
     return {"id": ticket_id, "ref": ref or ticket_id}
 
@@ -228,7 +230,7 @@ def halo_webhook():
     if not t_id or t_id not in ticket_room_map: 
         return {"status":"ignored"}
 
-    # Altijd acties ophalen om laatste note te checken
+    # Altijd acties ophalen om laatste note te tonen
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
