@@ -42,23 +42,24 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 def get_halo_user_by_email(email):
-    """Zoek user/klant bij email → return (id, customerid)"""
+    """Zoek Halo gebruiker via email → return (user_id, customer_id)"""
     if not email: return None, None
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Users?$filter=Email eq '{email}'", headers=h)
-    print("🔎 User lookup:", r.status_code, r.text[:300])
+    print("🔎 Lookup user:", r.status_code, r.text[:200])
     if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
         user = r.json()[0]
         return user.get("ID"), user.get("CustomerID")
     return None, None
 
 # ------------------------------------------------------------------------------
-# Create Ticket
+# Ticket aanmaken
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, naam, email,
                        omschrijving="", sindswanneer="", watwerktniet="",
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3):
+
     h = get_halo_headers()
     user_id, customer_id = get_halo_user_by_email(email)
 
@@ -75,19 +76,22 @@ def create_halo_ticket(summary, naam, email,
         "TypeID": HALO_TICKET_TYPE_ID,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
-        "Urgency": int(urgency_id),
+        "Urgency": int(urgency_id)
     }
 
-    # Correct aanmaker koppelen
-    if user_id and customer_id:
+    # Automatische koppeling aan juiste persoon
+    if user_id and customer_id:             # klant
         ticket["CustomerID"] = customer_id
         ticket["RaisedByUserID"] = user_id
-    elif user_id:
+    elif user_id:                           # agent
         ticket["UserID"] = user_id
+    else:
+        print("⚠️ Geen gebruiker gevonden, ticket wordt aangemaakt onder API user")
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     print("🎫 Ticket response:", r.status_code, r.text[:200])
     r.raise_for_status()
+
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
@@ -98,7 +102,7 @@ def create_halo_ticket(summary, naam, email,
             td = detail.json()
             ref = td.get("ref") or td.get("ticketnumber")
 
-        # Voeg vragenlijst toe als Public Note
+        # Vragenlijst toevoegen als Public Note
         note_payload = {
             "TicketID": ticket_id,
             "Details": f"**Ingevuld formulier door {naam}:**\n\n{description}",
@@ -125,10 +129,14 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "VisibleToCustomer": True
     }
-    if user_id: payload["UserID"] = user_id
+    if user_id:
+        payload["UserID"] = user_id
     r = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=payload)
     print("💬 Note response:", r.status_code, r.text[:200])
 
+# ------------------------------------------------------------------------------
+# Webex helpers
+# ------------------------------------------------------------------------------
 def send_message(room_id, text):
     r = requests.post("https://webexapis.com/v1/messages",
                       headers=WEBEX_HEADERS,
@@ -142,10 +150,8 @@ def send_adaptive_card(room_id):
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type": "AdaptiveCard",
-                "version": "1.2",
-                "body": [
+                "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
+                "type":"AdaptiveCard","version":"1.2","body":[
                     {"type":"Input.Text","id":"name","placeholder":"Naam"},
                     {"type":"Input.Text","id":"email","placeholder":"Jouw emailadres"},
                     {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving"},
@@ -167,9 +173,8 @@ def send_adaptive_card(room_id):
                 "actions":[{"type":"Action.Submit","title":"Versturen"}]
             }
         }]}
-    r = requests.post("https://webexapis.com/v1/messages",
-                      headers=WEBEX_HEADERS, json=card)
-    print("📤 Adaptive card:", r.status_code)
+    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
+
 
 # ------------------------------------------------------------------------------
 # Routes
@@ -230,13 +235,13 @@ def halo_webhook():
     t_id = data.get("TicketID")
     if not t_id or t_id not in ticket_room_map: return {"status":"ok"}
 
-    # Haal laatste publieke note op
+    # laatste publieke note ophalen
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
         last = sorted(actions, key=lambda x: x.get("Time",""), reverse=True)[0]
-        note = last.get("Details")
+        note = last.get("Details") or last.get("Note")
         created_by = last.get("User",{}).get("Name","Onbekend")
         if note and not last.get("IsPrivate",False):
             send_message(ticket_room_map[t_id],
