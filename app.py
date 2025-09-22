@@ -20,6 +20,8 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
+
+# DIT MOET je goed zetten (Public Note Type!)
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
 ticket_room_map = {}
@@ -39,6 +41,7 @@ def get_halo_headers():
                       data=urllib.parse.urlencode(payload))
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
+
 
 def get_halo_user_by_email(email):
     if not email: return None, None, None
@@ -60,7 +63,6 @@ def create_halo_ticket(summary, naam, email,
     h = get_halo_headers()
     user_id, customer_id, user_name = get_halo_user_by_email(email)
 
-    # Tekst in Details (Ticket body)
     details_text = (
         f"👤 Ticket aangemaakt door: {naam} ({email})\n\n"
         f"📌 Probleem: {summary}\n\n"
@@ -78,14 +80,13 @@ def create_halo_ticket(summary, naam, email,
         "CFReportedCompany": str(customer_id) if customer_id else ""
     }
 
-    # Ticket aanmaken
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
     print("🎫 Ticket response:", r.status_code, r.text[:200])
     r.raise_for_status()
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
-    ref = None
 
+    ref = None
     if ticket_id:
         detail = requests.get(f"{HALO_API_BASE}/Tickets/{ticket_id}", headers=h)
         if detail.status_code == 200:
@@ -103,17 +104,15 @@ def create_halo_ticket(summary, naam, email,
             f"- Impact: {impact_id}\n"
             f"- Urgency: {urgency_id}\n"
         )
-
         note_payload = {
-            "TicketID": ticket_id,
+            "TicketID": int(ticket_id),
             "Details": qa_note,
-            "Note": qa_note,  # fallback
             "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
             "IsPrivate": False,
             "VisibleToCustomer": True
         }
         if user_id:
-            note_payload["UserID"] = user_id  # koppel note aan user indien lookup
+            note_payload["UserID"] = user_id
         nr = requests.post(f"{HALO_API_BASE}/Actions", headers=h, json=note_payload)
         print("📝 Questions note:", nr.status_code, nr.text[:200])
 
@@ -124,10 +123,10 @@ def create_halo_ticket(summary, naam, email,
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None):
     h = get_halo_headers()
+    note_text = f"{sender} ({email}) schreef:\n{text}" if email else text
     payload = {
-        "TicketID": ticket_id,
-        "Details": f"{sender} ({email}) schreef:\n{text}",
-        "Note": f"{sender} ({email}) schreef:\n{text}",
+        "TicketID": int(ticket_id),
+        "Details": note_text,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
         "VisibleToCustomer": True
@@ -151,18 +150,19 @@ def send_adaptive_card(room_id):
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
-                "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
-                "type":"AdaptiveCard","version":"1.2",
-                "body":[
-                    {"type":"Input.Text","id":"name","placeholder":"Naam"},
-                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres"},
-                    {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving"},
-                    {"type":"Input.Text","id":"sindswanneer","placeholder":"Sinds wanneer?"},
-                    {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?"},
-                    {"type":"Input.Text","id":"zelfgeprobeerd","isMultiline":True,"placeholder":"Zelf geprobeerd?"},
-                    {"type":"Input.Text","id":"impacttoelichting","isMultiline":True,"placeholder":"Impact toelichting"},
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.2",
+                "body": [
+                    {"type": "Input.Text", "id": "name", "placeholder": "Naam"},
+                    {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
+                    {"type": "Input.Text", "id": "omschrijving", "isMultiline": True, "placeholder": "Probleemomschrijving"},
+                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
+                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
+                    {"type": "Input.Text", "id": "zelfgeprobeerd", "isMultiline": True, "placeholder": "Zelf geprobeerd?"},
+                    {"type": "Input.Text", "id": "impacttoelichting", "isMultiline": True, "placeholder": "Impact toelichting"},
                 ],
-                "actions":[{"type":"Action.Submit","title":"Versturen"}]
+                "actions": [{"type": "Action.Submit", "title": "Versturen"}]
             }
         }]}
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
@@ -178,13 +178,11 @@ def webex_webhook():
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
-        text = msg.get("text","").strip()
+        text = msg.get("text", "").strip()
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
-
         if sender and sender.endswith("@webex.bot"):
-            return {"status":"ignored"}
-
+            return {"status": "ignored"}
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
             send_message(room_id, "✍ Vul het formulier hierboven in om een ticket te starten.")
@@ -197,7 +195,6 @@ def webex_webhook():
         action_id = data["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}",
                               headers=WEBEX_HEADERS).json().get("inputs", {})
-
         naam = inputs.get("name", "Onbekend")
         email = inputs.get("email", "")
         omschrijving = inputs.get("omschrijving", "")
@@ -208,8 +205,8 @@ def webex_webhook():
         impact_id = inputs.get("impact", str(HALO_DEFAULT_IMPACT))
         urgency_id = inputs.get("urgency", str(HALO_DEFAULT_URGENCY))
         room_id = data["data"]["roomId"]
-
         summary = omschrijving or "Melding via Webex"
+
         ticket = create_halo_ticket(summary, naam, email,
                                     omschrijving, sindswanneer,
                                     watwerktniet, zelfgeprobeerd,
@@ -221,34 +218,45 @@ def webex_webhook():
 
     return {"status":"ok"}
 
+
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
-    print("📥 Halo webhook:", json.dumps(data, indent=2))
+    print("📥 Halo webhook RAW:", json.dumps(data, indent=2))
 
-    t_id = data.get("TicketID")
-    if not t_id or t_id not in ticket_room_map: 
-        return {"status":"ignored"}
+    # Ticket ID ophalen afhankelijk van payload
+    t_id = None
+    if "Timeline" in data and "Request" in data:
+        t_id = data["Request"].get("ID")
+    elif "TicketID" in data:
+        t_id = data.get("TicketID")
 
-    # Altijd acties ophalen om laatste note te tonen
+    if not t_id or int(t_id) not in ticket_room_map:
+        return {"status": "ignored"}
+
     h = get_halo_headers()
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
     if r.status_code == 200 and r.json():
         actions = r.json()
-        last = sorted(actions, key=lambda x: x.get("Time",""), reverse=True)[0]
-        note = last.get("Details") or last.get("Note") or last.get("Text")
-        created_by = last.get("User",{}).get("Name","Onbekend")
+        # pak laatste action op ID
+        last = sorted(actions, key=lambda x: x.get("ID", 0), reverse=True)[0]
+        note = last.get("Details") or last.get("Text") or last.get("Note")
+        created_by = last.get("User", {}).get("Name", "Onbekend")
         is_private = last.get("IsPrivate", False)
 
         if note and not is_private:
-            send_message(ticket_room_map[t_id],
+            send_message(ticket_room_map[int(t_id)],
                 f"💬 **Update vanuit Halo (#{t_id}) door {created_by}:**\n\n{note}")
+
     return {"status":"ok"}
 
+# ------------------------------------------------------------------------------
+# Health check
+# ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {"status":"ok","message":"Bot draait!"}
 
 if __name__ == "__main__":
-    port=int(os.getenv("PORT",5000))
+    port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
