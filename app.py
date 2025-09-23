@@ -1,4 +1,4 @@
-import os, requests, urllib.parse, json, logging, sys
+import os, requests, urllib.parse, json, logging, sys, time
 from flask import Flask, request
 from dotenv import load_dotenv
 
@@ -35,11 +35,17 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-#👩‍💻 Specifieke klant en site
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))  # Bossers & Cnossen
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))              # Main site
+# 👩‍💻 Specifieke klant en site (Bossers & Cnossen → Main)
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
+HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
 ticket_room_map = {}
+
+# ------------------------------------------------------------------------------
+# Simple in-memory user cache
+# ------------------------------------------------------------------------------
+USER_CACHE = {"users": [], "timestamp": 0}
+CACHE_TTL = 300  # 5 min
 
 # ------------------------------------------------------------------------------
 # Halo helpers
@@ -54,7 +60,8 @@ def get_halo_headers():
     r = requests.post(
         HALO_AUTH_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data=urllib.parse.urlencode(payload)
+        data=urllib.parse.urlencode(payload),
+        timeout=15
     )
     r.raise_for_status()
     return {
@@ -63,13 +70,14 @@ def get_halo_headers():
     }
 
 def fetch_all_client_users(client_id: int):
-    """Haalt ALLE users van een ClientID op (met pagination → 50 per pagina)."""
+    """Haalt ALLE users van een ClientID op (paginated, 50 per page)."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while True:
         url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
-        r = requests.get(url, headers=h)
+        r = requests.get(url, headers=h, timeout=30)
         if r.status_code != 200:
+            log.error(f"❌ Error users page {page}: {r.status_code} {r.text}")
             break
         data = r.json()
         users = data.get("users", [])
@@ -81,14 +89,22 @@ def fetch_all_client_users(client_id: int):
         page += 1
     return all_users
 
-def get_main_users():
-    """Filter alleen de users van Site Main (18)."""
+def get_main_users(force=False):
+    """Geeft uit cache de users van Main (Site 18). Refresh elke 5 min."""
+    now = time.time()
+    if not force and USER_CACHE["users"] and now - USER_CACHE["timestamp"] < CACHE_TTL:
+        return USER_CACHE["users"]
+
     all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
-    return [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID)
-                                  or str(u.get("site_name","")).lower() == "main"]
+    main_users = [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID)
+                                        or str(u.get("site_name", "")).lower() == "main"]
+    USER_CACHE["users"] = main_users
+    USER_CACHE["timestamp"] = now
+    log.info(f"✅ Cache vernieuwd: {len(main_users)} users in Bossers & Cnossen/Main")
+    return main_users
 
 def get_halo_user_id(email: str):
-    """Zoek UserID op email/networklogin/adobject binnen Client 12, Site 18."""
+    """Zoekt UserID in cached lijst van Main (Site 18)."""
     if not email:
         return None
     users = get_main_users()
@@ -107,7 +123,7 @@ def get_halo_user_id(email: str):
 # Ticket functies
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
-    r = requests.post(url, headers=headers, json=payload)
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
     if r.status_code != 200 and room_id:
         send_message(room_id, f"⚠️ Halo error {r.status_code}: {r.text}")
     return r
@@ -133,15 +149,15 @@ def create_halo_ticket(summary, naam, email,
         "SiteID": HALO_SITE_ID,
         "ClientID": HALO_CLIENT_ID_NUM,
     }
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket], timeout=30)
     r.raise_for_status()
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    # Vragenlijst als note
+    # Vragenlijst note
     qa_note = (
-        f"**Ticket vragenlijst door {naam} ({email}):**\n\n"
-        f"- Omschrijving: {omschrijving or '—'}\n"
+        f"**Ticket vragenlijst ({naam}, {email})**\n\n"
+        f"- Probleemomschrijving: {omschrijving or '—'}\n"
         f"- Sinds wanneer: {sindswanneer or '—'}\n"
         f"- Wat werkt niet: {watwerktniet or '—'}\n"
         f"- Zelf geprobeerd: {zelfgeprobeerd or '—'}\n"
@@ -164,7 +180,7 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None
     user_id = get_halo_user_id(email)
     if not user_id:
         if room_id:
-            send_message(room_id, f"❌ Notitie niet toegevoegd: {email} hoort niet bij Main.")
+            send_message(room_id, f"❌ Notitie niet toegevoegd: {email} niet in Main.")
         return
     h = get_halo_headers()
     note_text = f"{sender} ({email}) schreef:\n{text}"
@@ -190,7 +206,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
-        "markdown": "✍ Vul het formulier in:",
+        "markdown": "✍ Vul het formulier hieronder in:",
         "attachments": [{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {
@@ -218,6 +234,7 @@ def send_adaptive_card(room_id):
 def webex_webhook():
     data = request.json
     resource = data.get("resource")
+
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -228,7 +245,6 @@ def webex_webhook():
             return {"status": "ignored"}
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
-            send_message(room_id, "📋 Vul het formulier in om een ticket te maken.")
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
@@ -258,6 +274,7 @@ def webex_webhook():
         if ticket:
             ticket_room_map[ticket["id"]] = room_id
             send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**")
+
     return {"status": "ok"}
 
 @app.route("/halo", methods=["POST"])
@@ -269,14 +286,14 @@ def halo_webhook():
     h = get_halo_headers()
 
     # Status updates
-    t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h)
+    t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h, timeout=30)
     if t_detail.status_code == 200:
         status = t_detail.json().get("StatusName") or t_detail.json().get("Status")
         if status:
             send_message(ticket_room_map[int(t_id)], f"🔄 Status update: {status}")
 
     # Notes
-    r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h)
+    r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h, timeout=30)
     if r.status_code == 200 and r.json():
         actions = r.json()
         last = sorted(actions, key=lambda x: x.get("ID", 0), reverse=True)[0]
@@ -284,6 +301,7 @@ def halo_webhook():
         created_by = last.get("User", {}).get("Name", "Onbekend")
         if note and not last.get("IsPrivate", False):
             send_message(ticket_room_map[int(t_id)], f"💬 Halo update door {created_by}:\n\n{note}")
+
     return {"status": "ok"}
 
 @app.route("/", methods=["GET"])
@@ -291,9 +309,9 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup message
+# Startup
 # ------------------------------------------------------------------------------
-print("🚀 Ticketbot is gestart, alle functies zijn actief.", flush=True)
+print("🚀 Ticketbot is gestart – alles werkt nu end-to-end (cache, users, tickets, notes).", flush=True)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
