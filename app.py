@@ -61,7 +61,7 @@ def get_halo_user_id(email: str):
     email = email.strip().lower()
 
     try:
-        # Haal alle users op die via de site gekoppeld zijn (zelfde als in UI)
+        # Haal alle users op exact zoals in de Halo UI: via de site userlijst
         site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
         r = requests.get(site_url, headers=h)
         r.raise_for_status()
@@ -70,11 +70,14 @@ def get_halo_user_id(email: str):
         print(f"❌ Kon site users niet ophalen: {e}")
         return None
 
-    print(f"🔎 Site {HALO_SITE_ID} bevat {len(site_users)} users volgens Halo")
+    # 🔎 Debug logging: dump alle users die Halo terugstuurt
+    print(f"🔎 API gaf {len(site_users)} users terug voor SiteID {HALO_SITE_ID}:")
+    for u in site_users:
+        print(f"   → UserID={u.get('ID')} | Email={u.get('Email')} "
+              f"| NetworkLogin={u.get('NetworkLogin')} | ADObject={u.get('ADObject')}")
 
+    # Zoek in de lijst naar match
     for user in site_users:
-        if not isinstance(user, dict):
-            continue
         user_id = user.get("ID")
         mail = str(user.get("Email", "")).lower()
         netlogin = str(user.get("NetworkLogin", "")).lower()
