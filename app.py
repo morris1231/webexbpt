@@ -53,16 +53,15 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))   # Bossers & Cnossen klant
+HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))               # Main site
 
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache (alleen Bossers & Cnossen/Main)
+# Halo User Cache (alleen Bossers & Cnossen Main site)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
-CACHE_TTL = 86400  # 24 uur
 
 def get_halo_headers():
     payload = {
@@ -78,17 +77,24 @@ def get_halo_headers():
         timeout=10
     )
     r.raise_for_status()
-    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {r.json()['access_token']}",
+        "Content-Type": "application/json"
+    }
 
-def fetch_all_client_users(client_id: int, max_pages=200):
-    """Haal ALLE users op (paged per 50)."""
+def fetch_all_client_users(client_id: int, site_id: int, max_pages=50):
+    """Haal alleen users voor specifieke ClientID + SiteID uit Halo"""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
-        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
+        url = (
+            f"{HALO_API_BASE}/Users?"
+            f"$filter=ClientID eq {client_id} and SiteID eq {site_id}"
+            f"&pageSize={page_size}&pageNumber={page}"
+        )
         r = session.get(url, headers=h, timeout=15)
         if r.status_code != 200:
-            log.error(f"❌ Fout bij ophalen Halo users op page {page}: {r.status_code}")
+            log.error(f"❌ Fout bij ophalen Halo users (page {page}): {r.status_code}")
             break
 
         users = r.json().get("users", [])
@@ -98,31 +104,23 @@ def fetch_all_client_users(client_id: int, max_pages=200):
         all_users.extend(users)
         log.info(f"📄 Page {page}: {len(users)} users geladen, totaal {len(all_users)}")
 
-        if len(users) < page_size:  # laatste pagina bereikt
+        if len(users) < page_size:  # laatste pagina
             break
         page += 1
 
-    log.info(f"👥 In totaal {len(all_users)} users opgehaald uit Halo.")
+    log.info(f"👥 In totaal {len(all_users)} users opgehaald (Client={client_id}, Site={site_id})")
     return all_users
 
 def preload_user_cache():
-    """Laad ALLE users maar hou alleen die van Bossers & Cnossen (site=Main)."""
-    log.info("🔄 Preloading Halo user cache (alleen Bossers & Cnossen site=Main)…")
-    all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
-
-    # Filter op juiste site
-    filtered = [
-        u for u in all_users
-        if str(u.get("site_id")) == str(HALO_SITE_ID)
-        or str(u.get("site_name", "")).lower() == "main"
-    ]
-
-    USER_CACHE["users"] = filtered
+    """Laad alle users van Bossers & Cnossen Main site in cache bij startup"""
+    log.info("🔄 Preloading Halo user cache (Bossers & Cnossen Main)…")
+    all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    USER_CACHE["users"] = all_users
     USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(filtered)} users van Bossers & Cnossen (Main) gecached (van totaal {len(all_users)})")
+    log.info(f"✅ {len(all_users)} users gecached bij startup")
 
 def get_halo_user_id(email: str):
-    """Zoek gebruiker in cache (geen nieuwe API-calls)."""
+    """Zoek in cache op email / networklogin / adobject"""
     if not email or not USER_CACHE["users"]:
         log.error("❌ Cache leeg of email ontbreekt!")
         return None
@@ -136,7 +134,7 @@ def get_halo_user_id(email: str):
         if email in emails:
             log.info(f"✅ User {email} → ID={u.get('id')}")
             return u.get("id")
-    log.warning(f"⚠️ Geen user match voor {email}")
+    log.warning(f"⚠️ Geen user match voor {email} in {len(USER_CACHE['users'])} cached users")
     return None
 
 # ------------------------------------------------------------------------------
@@ -162,7 +160,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     if requester_id:
         body["UserID"] = requester_id
     else:
-        log.warning("⚠️ Ticket zonder UserID → Halo kiest default gebruiker")
+        log.warning("⚠️ Geen match → ticket zonder UserID (Halo wijst default user toe)")
 
     r = session.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=10)
     log.info(f"➡️ Halo Tickets response: {r.status_code} {r.text}")
@@ -280,7 +278,7 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup (altijd preload bij import)
+# Startup (preload cache bij import)
 # ------------------------------------------------------------------------------
 try:
     log.info("🚀 Initialisatie Ticketbot… cache laden")
