@@ -36,7 +36,7 @@ HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# 👇 Gebruik SiteID voor Bossers & Cnossen Main (18)
+# Site: Bossers & Cnossen → Main
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
 ticket_room_map = {}
@@ -63,9 +63,10 @@ def get_halo_headers():
     }
 
 def dump_site_users():
-    """Dump alle users van de site bij startup om te debuggen."""
-    h = get_halo_headers()
+    """Haal alle users van de site op en log ze bij startup."""
+    log.info("🚀 Startup check gestart: ophalen users van Halo...")
     try:
+        h = get_halo_headers()
         site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
         r = requests.get(site_url, headers=h)
         r.raise_for_status()
@@ -79,9 +80,10 @@ def dump_site_users():
             )
     except Exception as e:
         log.error(f"❌ Kon site users niet ophalen bij startup: {e}")
+        print(f"❌ Kon site users niet ophalen bij startup: {e}", flush=True)
 
 def get_halo_user_id(email: str):
-    """Zoekt UserID door de Users-lijst van de Site (Bossers & Cnossen/Main)."""
+    """Zoekt UserID door de users-lijst van de site."""
     if not email:
         return None
     h = get_halo_headers()
@@ -311,8 +313,8 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 if __name__ == "__main__":
-    # 🔎 Dump alle users bij startup
-    dump_site_users()
-
+    print("🚀 Ticketbot wordt gestart...", flush=True)
+    log.info("Bot init gestart")
+    dump_site_users()  # << gelijk users loggen bij startup
     port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
