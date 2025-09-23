@@ -59,7 +59,7 @@ HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))               # Main site
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache (alleen Bossers & Cnossen Main site)
+# Halo User Cache (alleen Bossers & Cnossen Main)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
 
@@ -82,16 +82,12 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-def fetch_all_client_users(client_id: int, site_id: int, max_pages=50):
-    """Haal alleen users voor specifieke ClientID + SiteID uit Halo"""
+def fetch_all_client_users(client_id: int, max_pages=100):
+    """Haal ALLE users van de klant op (filter pas later op SiteID)."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
-        url = (
-            f"{HALO_API_BASE}/Users?"
-            f"$filter=ClientID eq {client_id} and SiteID eq {site_id}"
-            f"&pageSize={page_size}&pageNumber={page}"
-        )
+        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
         r = session.get(url, headers=h, timeout=15)
         if r.status_code != 200:
             log.error(f"❌ Fout bij ophalen Halo users (page {page}): {r.status_code}")
@@ -104,23 +100,36 @@ def fetch_all_client_users(client_id: int, site_id: int, max_pages=50):
         all_users.extend(users)
         log.info(f"📄 Page {page}: {len(users)} users geladen, totaal {len(all_users)}")
 
-        if len(users) < page_size:  # laatste pagina
+        if len(users) < page_size:  # laatste pagina bereikt
             break
         page += 1
 
-    log.info(f"👥 In totaal {len(all_users)} users opgehaald (Client={client_id}, Site={site_id})")
     return all_users
 
 def preload_user_cache():
-    """Laad alle users van Bossers & Cnossen Main site in cache bij startup"""
+    """Laad alle users van Bossers & Cnossen Main in cache (1x bij startup)."""
+    global USER_CACHE
+    if USER_CACHE["users"]:  # voorkomt dubbele preload
+        log.info("⚠️ Cache al gevuld, preload overgeslagen")
+        return
+
     log.info("🔄 Preloading Halo user cache (Bossers & Cnossen Main)…")
-    all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
-    USER_CACHE["users"] = all_users
+    all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
+    log.info(f"👥 {len(all_users)} users opgehaald totaal voor klant {HALO_CLIENT_ID_NUM}")
+
+    # Filter alleen users van Main site
+    filtered = [
+        u for u in all_users
+        if str(u.get("site_id")) == str(HALO_SITE_ID)
+        or str(u.get("site_name", "")).lower() == "main"
+    ]
+
+    USER_CACHE["users"] = filtered
     USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(all_users)} users gecached bij startup")
+    log.info(f"✅ {len(filtered)} users van Bossers & Cnossen (Main-site) in cache gezet")
 
 def get_halo_user_id(email: str):
-    """Zoek in cache op email / networklogin / adobject"""
+    """Zoekt in cache via email / login / AD-object (geen nieuwe API calls)."""
     if not email or not USER_CACHE["users"]:
         log.error("❌ Cache leeg of email ontbreekt!")
         return None
@@ -134,7 +143,7 @@ def get_halo_user_id(email: str):
         if email in emails:
             log.info(f"✅ User {email} → ID={u.get('id')}")
             return u.get("id")
-    log.warning(f"⚠️ Geen user match voor {email} in {len(USER_CACHE['users'])} cached users")
+    log.warning(f"⚠️ Geen user match voor {email}")
     return None
 
 # ------------------------------------------------------------------------------
@@ -278,7 +287,7 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup (preload cache bij import)
+# Startup (preload cache 1x bij import)
 # ------------------------------------------------------------------------------
 try:
     log.info("🚀 Initialisatie Ticketbot… cache laden")
