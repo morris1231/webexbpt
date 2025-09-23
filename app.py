@@ -50,44 +50,50 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
+
 def get_halo_user_id(email: str):
-    """Zoek user in Halo en valideer of deze voorkomt in Bossers & Cnossen Main (SiteID 18)."""
+    """Zoek user in Halo en valideer of deze gekoppeld is aan Bossers & Cnossen Main (SiteID 18)."""
     if not email:
         return None
     h = get_halo_headers()
     email = email.strip().lower()
 
-    # 1. Globale search op Users
-    url = f"{HALO_API_BASE}/Users?$filter=Email eq '{email}' or NetworkLogin eq '{email}' or ADObject eq '{email}'"
+    # Zoek gebruikers + hun Site informatie
+    url = (
+        f"{HALO_API_BASE}/Users?"
+        f"$filter=tolower(Email) eq '{email}' "
+        f"or tolower(NetworkLogin) eq '{email}' "
+        f"or tolower(ADObject) eq '{email}'"
+        f"&$expand=Site"
+    )
     r = requests.get(url, headers=h)
+
     if r.status_code != 200:
         print(f"❌ Error bij user lookup: {r.text}")
         return None
     users = r.json()
     if not users or not isinstance(users, list):
-        print(f"❌ Geen user gevonden in globale search voor {email}")
+        print(f"❌ Geen user gevonden voor {email}")
         return None
 
-    found_user = users[0]
-    user_id = found_user.get("ID")
-    if not user_id:
-        return None
+    for user in users:
+        user_id = user.get("ID")
+        site_id = user.get("SiteID")
+        site = user.get("Site") or {}
 
-    # 2. Haal alle users van SiteID 18
-    try:
-        site_users = requests.get(f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users", headers=h).json()
-    except Exception as e:
-        print(f"❌ Kon site users niet ophalen: {e}")
-        return None
+        # Check koppeling
+        if str(site_id) == str(HALO_SITE_ID):
+            print(f"✅ {email} → UserID {user_id}, gekoppeld aan SiteID {HALO_SITE_ID}")
+            return user_id
+        if site and (
+            str(site.get("ID")) == str(HALO_SITE_ID)
+            or "bossers & cnossen/main" in str(site.get("Name", "")).lower()
+        ):
+            print(f"✅ {email} → UserID {user_id}, gekoppeld aan site {site.get('Name')}")
+            return user_id
 
-    site_user_ids = [u.get("ID") for u in site_users if isinstance(u, dict)]
-
-    if user_id in site_user_ids:
-        print(f"✅ User {email} gevonden in SiteID {HALO_SITE_ID} → UserID {user_id}")
-        return user_id
-    else:
-        print(f"❌ User {email} bestaat wel maar zit NIET in SiteID {HALO_SITE_ID}")
-        return None
+    print(f"❌ User {email} gevonden maar niet gekoppeld aan Bossers & Cnossen Main (SiteID {HALO_SITE_ID})")
+    return None
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
@@ -112,7 +118,10 @@ def create_halo_ticket(summary, naam, email,
 
     if not user_id:
         if room_id:
-            send_message(room_id, f"❌ Het opgegeven e-mailadres **{email}** hoort niet bij Bossers & Cnossen (Main). Ticket wordt niet aangemaakt.")
+            send_message(
+                room_id,
+                f"❌ Het opgegeven e-mailadres **{email}** hoort niet bij Bossers & Cnossen (Main). Ticket wordt niet aangemaakt."
+            )
         return None
 
     print(f"👤 Ticket aanmaker → Email: {email}, UserID: {user_id}")
