@@ -59,9 +59,10 @@ HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache (alle users bij startup laden, daarna alleen uit geheugen)
+# Halo User Cache (alleen Bossers & Cnossen/Main)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
+CACHE_TTL = 86400  # 24 uur
 
 def get_halo_headers():
     payload = {
@@ -80,7 +81,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def fetch_all_client_users(client_id: int, max_pages=200):
-    """Haal ALLE users op, inclusief alle pagina’s"""
+    """Haal ALLE users op (paged per 50)."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
@@ -97,23 +98,31 @@ def fetch_all_client_users(client_id: int, max_pages=200):
         all_users.extend(users)
         log.info(f"📄 Page {page}: {len(users)} users geladen, totaal {len(all_users)}")
 
-        if len(users) < page_size:  # laatste pagina
+        if len(users) < page_size:  # laatste pagina bereikt
             break
         page += 1
 
-    log.info(f"👥 In totaal {len(all_users)} users opgehaald en gecached.")
+    log.info(f"👥 In totaal {len(all_users)} users opgehaald uit Halo.")
     return all_users
 
 def preload_user_cache():
-    """1× bij startup uitvoeren"""
-    log.info("🔄 Cache preload start…")
+    """Laad ALLE users maar hou alleen die van Bossers & Cnossen (site=Main)."""
+    log.info("🔄 Preloading Halo user cache (alleen Bossers & Cnossen site=Main)…")
     all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
-    USER_CACHE["users"] = all_users
+
+    # Filter op juiste site
+    filtered = [
+        u for u in all_users
+        if str(u.get("site_id")) == str(HALO_SITE_ID)
+        or str(u.get("site_name", "")).lower() == "main"
+    ]
+
+    USER_CACHE["users"] = filtered
     USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(all_users)} users gecached bij startup")
+    log.info(f"✅ {len(filtered)} users van Bossers & Cnossen (Main) gecached (van totaal {len(all_users)})")
 
 def get_halo_user_id(email: str):
-    """Zoekt GEEN API meer — alleen in gecachete lijst"""
+    """Zoek gebruiker in cache (geen nieuwe API-calls)."""
     if not email or not USER_CACHE["users"]:
         log.error("❌ Cache leeg of email ontbreekt!")
         return None
@@ -271,7 +280,7 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup (altijd preload bij import, zodat Gunicorn workers ook vullen)
+# Startup (altijd preload bij import)
 # ------------------------------------------------------------------------------
 try:
     log.info("🚀 Initialisatie Ticketbot… cache laden")
