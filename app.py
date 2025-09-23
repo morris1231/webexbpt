@@ -1,4 +1,4 @@
-import os, urllib.parse, json, logging, sys, time
+import os, urllib.parse, logging, sys, time, threading
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
@@ -21,7 +21,7 @@ log = logging.getLogger("ticketbot")
 session = requests.Session()
 retry_strategy = Retry(
     total=3,
-    backoff_factor=1,  # exponential backoff: 1s, 2s, 4s
+    backoff_factor=1,
     status_forcelist=[429, 500, 502, 503, 504],
     allowed_methods=["GET", "POST"]
 )
@@ -103,7 +103,7 @@ def ensure_all_webhooks():
 # Halo User Cache
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
-CACHE_TTL = 1800  # 30 min
+CACHE_TTL = 3600  # 1 uur cache voor Halo users
 
 def get_halo_headers():
     payload = {
@@ -112,7 +112,8 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    r = session.post(HALO_AUTH_URL,
+    r = session.post(
+        HALO_AUTH_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(payload),
         timeout=10
@@ -236,11 +237,9 @@ def send_adaptive_card(room_id):
     session.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card, timeout=10)
 
 # ------------------------------------------------------------------------------
-# Routes
+# Webex Event Processing (background threaded)
 # ------------------------------------------------------------------------------
-@app.route("/webex", methods=["POST"])
-def webex_webhook():
-    data = request.json
+def process_webex_event(data):
     resource = data.get("resource")
     if resource == "messages":
         msg_id = data["data"]["id"]
@@ -248,7 +247,7 @@ def webex_webhook():
         text = msg.get("text", "").strip()
         room_id = msg.get("roomId")
         sender = msg.get("personEmail")
-        if sender and sender.endswith("@webex.bot"): return {"status": "ignored"}
+        if sender and sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
             send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te starten.")
@@ -256,6 +255,7 @@ def webex_webhook():
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
                     add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id)
+
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         inputs = session.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS, timeout=10).json().get("inputs", {})
@@ -278,8 +278,16 @@ def webex_webhook():
         if ticket:
             ticket_room_map[ticket["id"]] = room_id
             send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['Ref']}**")
-    return {"status": "ok"}
 
+@app.route("/webex", methods=["POST"])
+def webex_webhook():
+    data = request.json
+    threading.Thread(target=process_webex_event, args=(data,)).start()
+    return {"status": "ok"}  # direct response naar Webex
+
+# ------------------------------------------------------------------------------
+# Halo webhook
+# ------------------------------------------------------------------------------
 @app.route("/halo", methods=["POST"])
 def halo_webhook():
     data = request.json
