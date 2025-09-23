@@ -6,7 +6,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # ------------------------------------------------------------------------------
-# Logging config
+# Logging
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -16,7 +16,7 @@ logging.basicConfig(
 log = logging.getLogger("ticketbot")
 
 # ------------------------------------------------------------------------------
-# Requests Session with Retry
+# Requests Session w/ Retry
 # ------------------------------------------------------------------------------
 session = requests.Session()
 retry_strategy = Retry(
@@ -37,29 +37,26 @@ app = Flask(__name__)
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 TARGET_URL = os.getenv("WEBEX_TARGET_URL", "https://webexbpt-1.onrender.com/webex")
-WEBEX_HEADERS = {
-    "Authorization": f"Bearer {WEBEX_TOKEN}",
-    "Content-Type": "application/json"
-}
+WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
 
-HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
+HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
-HALO_AUTH_URL = os.getenv("HALO_AUTH_URL", "").strip()
-HALO_API_BASE = os.getenv("HALO_API_BASE", "").strip()
+HALO_AUTH_URL      = os.getenv("HALO_AUTH_URL", "").strip()
+HALO_API_BASE      = os.getenv("HALO_API_BASE", "").strip()
 
-HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
-HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
-HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
-HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
+HALO_TICKET_TYPE_ID   = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
+HALO_TEAM_ID          = int(os.getenv("HALO_TEAM_ID", "1"))
+HALO_DEFAULT_IMPACT   = int(os.getenv("HALO_IMPACT", "3"))
+HALO_DEFAULT_URGENCY  = int(os.getenv("HALO_URGENCY", "3"))
+HALO_ACTIONTYPE_PUBLIC= int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))   # Bossers & Cnossen
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))               # Main site
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12")) # Bossers & Cnossen
+HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))      # Main site
 
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache – PRELOAD alle Main users (341)
+# User Cache (lazy load)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
 
@@ -70,72 +67,55 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    r = session.post(
-        HALO_AUTH_URL,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data=urllib.parse.urlencode(payload),
-        timeout=10
-    )
+    r = session.post(HALO_AUTH_URL,
+                     headers={"Content-Type": "application/x-www-form-urlencoded"},
+                     data=urllib.parse.urlencode(payload), timeout=10)
     r.raise_for_status()
-    return {
-        "Authorization": f"Bearer {r.json()['access_token']}",
-        "Content-Type": "application/json"
-    }
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def fetch_main_site_users(client_id: int, site_id: int, max_pages=20):
-    """Haal alleen gebruikers op voor Client+Site."""
+    """Fetch users for Client+Site only"""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
-        url = (
-            f"{HALO_API_BASE}/Users?"
-            f"$filter=ClientID eq {client_id} and SiteID eq {site_id}"
-            f"&pageSize={page_size}&pageNumber={page}"
-        )
+        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id} and SiteID eq {site_id}&pageSize=50&pageNumber={page}"
         r = session.get(url, headers=h, timeout=15)
-        if r.status_code != 200:
-            log.error(f"❌ Fout bij ophalen users pagina {page}: {r.status_code}")
-            break
+        if r.status_code != 200: break
         users = r.json().get("users", [])
-        if not users:
-            break
+        if not users: break
         all_users.extend(users)
-        log.info(f"📄 Page {page}: {len(users)} users geladen, totaal {len(all_users)}")
-        if len(users) < page_size:
-            break
+        log.info(f"📄 Page {page}: {len(users)} loaded, total {len(all_users)}")
+        if len(users) < page_size: break
         page += 1
-    log.info(f"👥 Eindresultaat: {len(all_users)} users voor client={client_id} site={site_id}")
+    log.info(f"👥 {len(all_users)} users fetched for Client={client_id}, Site={site_id}")
     return all_users
 
-def preload_user_cache():
-    global USER_CACHE
-    if USER_CACHE["users"]:
-        return
-    log.info("🔄 Preload cache Bossers & Cnossen Main users…")
-    users = fetch_main_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
-    USER_CACHE["users"] = users
-    USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(users)} users gecached (Bossers & Cnossen Main)")
+def get_main_users():
+    if not USER_CACHE["users"]:
+        log.info("🔄 Cache empty, fetching Halo users…")
+        users = fetch_main_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+        USER_CACHE["users"] = users
+        USER_CACHE["timestamp"] = time.time()
+        log.info(f"✅ Cached {len(users)} Bossers & Cnossen Main users")
+    return USER_CACHE["users"]
 
 def get_halo_user_id(email: str):
-    """Zoek user id in cache via email, login of username."""
-    if not USER_CACHE["users"]:
-        preload_user_cache()
-    if not email:
-        return None
+    if not email: return None
     email = email.strip().lower()
-    for u in USER_CACHE["users"]:
-        check_emails = {
-            str(u.get("emailAddress") or "").lower(),
+    for u in get_main_users():
+        check_vals = {
+            str(u.get("EmailAddress") or "").lower(),
             str(u.get("emailaddress") or "").lower(),
+            str(u.get("PrimaryEmail") or "").lower(),
             str(u.get("username") or "").lower(),
+            str(u.get("LoginName") or "").lower(),
             str(u.get("networklogin") or "").lower(),
             str(u.get("adobject") or "").lower()
         }
-        if email in check_emails:
-            log.info(f"✅ Match {email} → UserID {u.get('id')}")
+        if email in check_vals:
+            log.info(f"✅ Match {email} → HaloID={u.get('id')}")
             return u.get("id")
-    log.warning(f"⚠️ Geen match voor {email}")
+    log.warning(f"⚠️ No match for {email}")
     return None
 
 # ------------------------------------------------------------------------------
@@ -144,50 +124,45 @@ def get_halo_user_id(email: str):
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
-    log.info(f"🎟️ Ticket aanmaken: {summary} (door {email})")
+
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
 
-    body = {
-        "Summary": str(summary),
+    ticket_body = {
+        "Summary": summary,
         "Details": f"{omschrijving}\n\nSinds: {sindswanneer}\nWat werkt niet: {watwerktniet}\nZelf geprobeerd: {zelfgeprobeerd}\nImpact toelichting: {impacttoelichting}",
-        "TypeIDs": [HALO_TICKET_TYPE_ID],
+        "TypeID": HALO_TICKET_TYPE_ID,
         "ClientID": HALO_CLIENT_ID_NUM,
         "SiteID": HALO_SITE_ID,
-        "TeamIDs": [HALO_TEAM_ID],
-        "ImpactIDs": [int(impact_id)],
-        "UrgencyIDs": [int(urgency_id)]
+        "TeamID": HALO_TEAM_ID,
+        "ImpactID": int(impact_id),
+        "UrgencyID": int(urgency_id)
     }
     if requester_id:
-        body["UserID"] = int(requester_id)
+        ticket_body["UserID"] = int(requester_id)
     else:
-        log.warning("⚠️ Geen match → ticket zonder UserID")
+        log.warning("⚠️ Ticket zonder UserID (geen match)")
+
+    body = {"Tickets": [ticket_body]}  # WRAP in Tickets array
 
     r = session.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
-    log.info(f"➡️ Halo API response {r.status_code}: {r.text}")
-    if r.status_code in (200, 201):
-        return r.json()
-    if room_id:
-        send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code}).")
+    log.info(f"➡️ Halo Response {r.status_code}: {r.text}")
+    if r.status_code in (200, 201): return r.json()
+    if room_id: send_message(room_id, f"⚠️ Ticket failed ({r.status_code})")
     return None
 
 def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
     h = get_halo_headers()
-    body = {
-        "Details": str(text),
-        "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
-        "IsPrivate": False
-    }
-    user_id = get_halo_user_id(email) if email else None
-    if user_id:
-        body["UserID"] = int(user_id)
-    r = session.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=15)
-    log.info(f"➡️ AddNote response: {r.status_code}")
-    if r.status_code not in (200, 201) and room_id:
-        send_message(room_id, f"⚠️ Kon note niet toevoegen ({r.status_code}).")
+    body = {"Details": str(text), "ActionTypeID": HALO_ACTIONTYPE_PUBLIC, "IsPrivate": False}
+    uid = get_halo_user_id(email) if email else None
+    if uid: body["UserID"] = int(uid)
+    r = session.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=10)
+    log.info(f"➡️ AddNote response {r.status_code}")
+    if r.status_code not in (200,201) and room_id:
+        send_message(room_id, f"⚠️ Note add failed ({r.status_code})")
 
 # ------------------------------------------------------------------------------
-# Webex helpers
+# Webex Helpers
 # ------------------------------------------------------------------------------
 def send_message(room_id, text):
     session.post("https://webexapis.com/v1/messages",
@@ -198,95 +173,73 @@ def send_adaptive_card(room_id):
     card = {
         "roomId": room_id,
         "markdown": "✍ Vul het formulier hieronder in:",
-        "attachments": [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type": "AdaptiveCard",
-                "version": "1.2",
-                "body": [
-                    {"type": "Input.Text", "id": "name", "placeholder": "Naam"},
-                    {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
-                    {"type": "Input.Text", "id": "omschrijving", "isMultiline": True, "placeholder": "Probleemomschrijving"},
-                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
-                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
-                    {"type": "Input.Text", "id": "zelfgeprobeerd", "isMultiline": True, "placeholder": "Zelf geprobeerd?"},
-                    {"type": "Input.Text", "id": "impacttoelichting", "isMultiline": True,"placeholder": "Impact toelichting"},
+        "attachments":[{
+            "contentType":"application/vnd.microsoft.card.adaptive",
+            "content":{
+                "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
+                "type":"AdaptiveCard","version":"1.2","body":[
+                    {"type":"Input.Text","id":"name","placeholder":"Naam"},
+                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres"},
+                    {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving"},
+                    {"type":"Input.Text","id":"sindswanneer","placeholder":"Sinds wanneer?"},
+                    {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?"},
+                    {"type":"Input.Text","id":"zelfgeprobeerd","isMultiline":True,"placeholder":"Zelf geprobeerd?"},
+                    {"type":"Input.Text","id":"impacttoelichting","isMultiline":True,"placeholder":"Impact toelichting"}
                 ],
-                "actions": [{"type": "Action.Submit", "title": "Versturen"}]
+                "actions":[{"type":"Action.Submit","title":"Versturen"}]
             }
-        }]}
+        }]
+    }
     session.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card, timeout=10)
 
 # ------------------------------------------------------------------------------
-# Webex Event Handling
+# Webex Event Handler
 # ------------------------------------------------------------------------------
 def process_webex_event(data):
-    resource = data.get("resource")
-    log.info(f"📩 Webex event: {resource}")
-    if resource == "messages":
+    res = data.get("resource")
+    log.info(f"📩 Webex event: {res}")
+    if res=="messages":
         msg_id = data["data"]["id"]
         msg = session.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS, timeout=10).json()
-        text, room_id, sender = msg.get("text", "").strip(), msg.get("roomId"), msg.get("personEmail")
+        text, room_id, sender = msg.get("text","").strip(), msg.get("roomId"), msg.get("personEmail")
         if sender and sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
-            send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te starten.")
+            send_message(room_id,"📋 Vul formulier in om ticket te starten.")
         else:
-            for t_id, rid in ticket_room_map.items():
-                if rid == room_id:
-                    add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id)
+            for t_id,rid in ticket_room_map.items():
+                if rid==room_id:
+                    add_note_to_ticket(t_id,text,sender,email=sender,room_id=room_id)
 
-    elif resource == "attachmentActions":
-        action_id = data["data"]["id"]
-        resp = session.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS, timeout=10)
-        inputs = resp.json().get("inputs", {})
-        log.info(f"➡️ Ontvangen inputs: {inputs}")
-        naam = inputs.get("name", "Onbekend")
-        email = inputs.get("email", "")
-        omschrijving = inputs.get("omschrijving", "")
-        sindswanneer = inputs.get("sindswanneer", "")
-        watwerktniet = inputs.get("watwerktniet", "")
-        zelfgeprobeerd = inputs.get("zelfgeprobeerd", "")
-        impacttoelichting = inputs.get("impacttoelichting", "")
-        impact_id = inputs.get("impact", str(HALO_DEFAULT_IMPACT))
-        urgency_id = inputs.get("urgency", str(HALO_DEFAULT_URGENCY))
-        room_id = data["data"]["roomId"]
-
+    elif res=="attachmentActions":
+        act_id = data["data"]["id"]
+        inputs = session.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", headers=WEBEX_HEADERS, timeout=10).json().get("inputs",{})
+        log.info(f"➡️ Inputs: {inputs}")
+        naam,email = inputs.get("name","Onbekend"), inputs.get("email","")
         ticket = create_halo_ticket(
-            omschrijving or "Melding via Webex", naam, email, omschrijving,
-            sindswanneer, watwerktniet, zelfgeprobeerd, impacttoelichting,
-            impact_id, urgency_id, room_id=room_id
+            inputs.get("omschrijving","Melding via Webex"),
+            naam,email,inputs.get("omschrijving",""),inputs.get("sindswanneer",""),
+            inputs.get("watwerktniet",""),inputs.get("zelfgeprobeerd",""),
+            inputs.get("impacttoelichting",""),
+            inputs.get("impact",HALO_DEFAULT_IMPACT), inputs.get("urgency",HALO_DEFAULT_URGENCY),
+            room_id=data["data"]["roomId"]
         )
         if ticket:
-            ticket_room_map[ticket["id"]] = room_id
-            send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['Ref']}**")
+            ticket_room_map[ticket["Tickets"][0]["ID"]] = data["data"]["roomId"]
+            send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket['Tickets'][0]['Ref']}**")
         else:
-            send_message(room_id, "⚠️ Ticket kon niet aangemaakt worden.")
+            send_message(data["data"]["roomId"], "⚠️ Ticket kon niet aangemaakt worden.")
 
 @app.route("/webex", methods=["POST"])
 def webex_webhook():
     data = request.json
-    threading.Thread(target=process_webex_event, args=(data,)).start()
-    return {"status": "ok"}
+    threading.Thread(target=process_webex_event,args=(data,)).start()
+    return {"status":"ok"}
 
-# ------------------------------------------------------------------------------
-# Health Endpoint
-# ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return {"status": "ok", "message": "Bot draait!"}
+    return {"status":"ok","message":"Bot draait!"}
 
-# ------------------------------------------------------------------------------
-# Startup – preload cache direct
-# ------------------------------------------------------------------------------
-try:
-    log.info("🚀 Startup: preload user cache")
-    preload_user_cache()
-    log.info("✅ Startup cache geladen")
-except Exception as e:
-    log.error(f"❌ Kon cache niet preloaden: {e}")
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+if __name__=="__main__":
+    port=int(os.getenv("PORT",5000))
+    app.run(host="0.0.0.0",port=port,debug=False)
