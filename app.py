@@ -59,7 +59,7 @@ HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))               # Main site
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache (lazy load)
+# Halo User Cache – PRELOAD alle Main users (341)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
 
@@ -82,109 +82,109 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-def fetch_all_client_users(client_id: int, max_pages=50):
-    """Haal ALLE users van client op (Halo API)."""
+def fetch_main_site_users(client_id: int, site_id: int, max_pages=20):
+    """Haal alleen gebruikers op voor Client+Site."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
-        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
+        url = (
+            f"{HALO_API_BASE}/Users?"
+            f"$filter=ClientID eq {client_id} and SiteID eq {site_id}"
+            f"&pageSize={page_size}&pageNumber={page}"
+        )
         r = session.get(url, headers=h, timeout=15)
         if r.status_code != 200:
-            log.error(f"❌ Fout bij ophalen Halo users page {page}: {r.status_code}")
+            log.error(f"❌ Fout bij ophalen users pagina {page}: {r.status_code}")
             break
         users = r.json().get("users", [])
         if not users:
             break
         all_users.extend(users)
         log.info(f"📄 Page {page}: {len(users)} users geladen, totaal {len(all_users)}")
-        if len(users) < page_size:  # laatste pagina
+        if len(users) < page_size:
             break
         page += 1
+    log.info(f"👥 Eindresultaat: {len(all_users)} users voor client={client_id} site={site_id}")
     return all_users
 
-def get_main_users():
-    """Cache users lazy geladen (1e keer)"""
-    if not USER_CACHE["users"]:
-        log.info("🔄 Cache leeg, users ophalen…")
-        all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
-        log.info(f"👥 {len(all_users)} users totaal opgehaald voor klant {HALO_CLIENT_ID_NUM}")
-        filtered = [
-            u for u in all_users
-            if str(u.get("site_id")) == str(HALO_SITE_ID)
-            or str(u.get("site_name", "")).lower() == "main"
-        ]
-        USER_CACHE["users"] = filtered
-        USER_CACHE["timestamp"] = time.time()
-        log.info(f"✅ {len(filtered)} Bossers & Cnossen (Main-site) users gecached")
-    return USER_CACHE["users"]
+def preload_user_cache():
+    global USER_CACHE
+    if USER_CACHE["users"]:
+        return
+    log.info("🔄 Preload cache Bossers & Cnossen Main users…")
+    users = fetch_main_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    USER_CACHE["users"] = users
+    USER_CACHE["timestamp"] = time.time()
+    log.info(f"✅ {len(users)} users gecached (Bossers & Cnossen Main)")
 
 def get_halo_user_id(email: str):
-    """Zoek gebruiker via email/login/adobject in cache"""
+    """Zoek user id in cache via email, login of username."""
+    if not USER_CACHE["users"]:
+        preload_user_cache()
     if not email:
         return None
     email = email.strip().lower()
-    users = get_main_users()
-    for u in users:
-        check_emails = [
+    for u in USER_CACHE["users"]:
+        check_emails = {
+            str(u.get("emailAddress") or "").lower(),
             str(u.get("emailaddress") or "").lower(),
-            str(u.get("networklogin") or "").lower(),
             str(u.get("username") or "").lower(),
+            str(u.get("networklogin") or "").lower(),
             str(u.get("adobject") or "").lower()
-        ]
+        }
         if email in check_emails:
-            log.info(f"✅ Match: {email} → ID {u.get('id')}")
+            log.info(f"✅ Match {email} → UserID {u.get('id')}")
             return u.get("id")
     log.warning(f"⚠️ Geen match voor {email}")
     return None
 
 # ------------------------------------------------------------------------------
-# Halo Ticket helpers
+# Halo Tickets
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
-    log.info(f"🎟️ Nieuw ticket: {summary} (door {email})")
+    log.info(f"🎟️ Ticket aanmaken: {summary} (door {email})")
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
 
     body = {
         "Summary": str(summary),
-        "Details": str(omschrijving or ""),
-        "TypeID": int(HALO_TICKET_TYPE_ID),
-        "ClientID": int(HALO_CLIENT_ID_NUM),
-        "SiteID": int(HALO_SITE_ID),
-        "TeamID": int(HALO_TEAM_ID),
-        "ImpactID": int(impact_id),
-        "UrgencyID": int(urgency_id)
+        "Details": f"{omschrijving}\n\nSinds: {sindswanneer}\nWat werkt niet: {watwerktniet}\nZelf geprobeerd: {zelfgeprobeerd}\nImpact toelichting: {impacttoelichting}",
+        "TypeIDs": [HALO_TICKET_TYPE_ID],
+        "ClientID": HALO_CLIENT_ID_NUM,
+        "SiteID": HALO_SITE_ID,
+        "TeamIDs": [HALO_TEAM_ID],
+        "ImpactIDs": [int(impact_id)],
+        "UrgencyIDs": [int(urgency_id)]
     }
     if requester_id:
         body["UserID"] = int(requester_id)
     else:
-        log.warning("⚠️ Ticket zonder UserID (geen match gevonden)")
+        log.warning("⚠️ Geen match → ticket zonder UserID")
 
     r = session.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
-    log.info(f"➡️ Halo Tickets response: {r.status_code} {r.text}")
+    log.info(f"➡️ Halo API response {r.status_code}: {r.text}")
     if r.status_code in (200, 201):
         return r.json()
-    else:
-        if room_id:
-            send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code}).")
-        return None
+    if room_id:
+        send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code}).")
+    return None
 
 def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
     h = get_halo_headers()
     body = {
         "Details": str(text),
-        "ActionTypeID": int(HALO_ACTIONTYPE_PUBLIC),
+        "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False
     }
     user_id = get_halo_user_id(email) if email else None
     if user_id:
         body["UserID"] = int(user_id)
     r = session.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=15)
-    log.info(f"➡️ Halo AddNote response: {r.status_code}")
+    log.info(f"➡️ AddNote response: {r.status_code}")
     if r.status_code not in (200, 201) and room_id:
-        send_message(room_id, f"⚠️ Note toevoegen mislukt: {r.status_code}")
+        send_message(room_id, f"⚠️ Kon note niet toevoegen ({r.status_code}).")
 
 # ------------------------------------------------------------------------------
 # Webex helpers
@@ -219,7 +219,7 @@ def send_adaptive_card(room_id):
     session.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card, timeout=10)
 
 # ------------------------------------------------------------------------------
-# Webex Event Processing
+# Webex Event Handling
 # ------------------------------------------------------------------------------
 def process_webex_event(data):
     resource = data.get("resource")
@@ -228,8 +228,7 @@ def process_webex_event(data):
         msg_id = data["data"]["id"]
         msg = session.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS, timeout=10).json()
         text, room_id, sender = msg.get("text", "").strip(), msg.get("roomId"), msg.get("personEmail")
-        if sender and sender.endswith("@webex.bot"):
-            return
+        if sender and sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
             send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te starten.")
@@ -243,7 +242,6 @@ def process_webex_event(data):
         resp = session.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS, timeout=10)
         inputs = resp.json().get("inputs", {})
         log.info(f"➡️ Ontvangen inputs: {inputs}")
-
         naam = inputs.get("name", "Onbekend")
         email = inputs.get("email", "")
         omschrijving = inputs.get("omschrijving", "")
@@ -256,9 +254,8 @@ def process_webex_event(data):
         room_id = data["data"]["roomId"]
 
         ticket = create_halo_ticket(
-            omschrijving or "Melding via Webex",
-            naam, email, omschrijving, sindswanneer,
-            watwerktniet, zelfgeprobeerd, impacttoelichting,
+            omschrijving or "Melding via Webex", naam, email, omschrijving,
+            sindswanneer, watwerktniet, zelfgeprobeerd, impacttoelichting,
             impact_id, urgency_id, room_id=room_id
         )
         if ticket:
@@ -274,15 +271,22 @@ def webex_webhook():
     return {"status": "ok"}
 
 # ------------------------------------------------------------------------------
-# Health
+# Health Endpoint
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Main
+# Startup – preload cache direct
 # ------------------------------------------------------------------------------
+try:
+    log.info("🚀 Startup: preload user cache")
+    preload_user_cache()
+    log.info("✅ Startup cache geladen")
+except Exception as e:
+    log.error(f"❌ Kon cache niet preloaden: {e}")
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
