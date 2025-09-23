@@ -24,12 +24,8 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# Uit jouw Halo configuratie
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))
-
-# 👇 Alleen Bossers & Cnossen, Main site (ID = 18)
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
+HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))  # Bossers & Cnossen Main
 
 ticket_room_map = {}
 
@@ -55,39 +51,43 @@ def get_halo_headers():
     }
 
 def get_halo_user_id(email: str):
-    """Zoekt UserID alléén binnen Site Main (ID 18)."""
+    """Zoek user in Halo en valideer of deze voorkomt in Bossers & Cnossen Main (SiteID 18)."""
     if not email:
         return None
     h = get_halo_headers()
+    email = email.strip().lower()
 
+    # 1. Globale search op Users
+    url = f"{HALO_API_BASE}/Users?$filter=Email eq '{email}' or NetworkLogin eq '{email}' or ADObject eq '{email}'"
+    r = requests.get(url, headers=h)
+    if r.status_code != 200:
+        print(f"❌ Error bij user lookup: {r.text}")
+        return None
+    users = r.json()
+    if not users or not isinstance(users, list):
+        print(f"❌ Geen user gevonden in globale search voor {email}")
+        return None
+
+    found_user = users[0]
+    user_id = found_user.get("ID")
+    if not user_id:
+        return None
+
+    # 2. Haal alle users van SiteID 18
     try:
-        # Haal alle users van site Main (SiteID = 18)
-        url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
-        r = requests.get(url, headers=h)
-        r.raise_for_status()
-        site_users = r.json() if isinstance(r.json(), list) else []
+        site_users = requests.get(f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users", headers=h).json()
     except Exception as e:
         print(f"❌ Kon site users niet ophalen: {e}")
         return None
 
-    email = email.strip().lower()
+    site_user_ids = [u.get("ID") for u in site_users if isinstance(u, dict)]
 
-    # Zoek in de lijst (Email, NetworkLogin, ADObject)
-    for user in site_users:
-        if not isinstance(user, dict):
-            continue
-        if user.get("Email", "").lower() == email:
-            print(f"✅ Gevonden user via email {email} → UserID {user.get('ID')}")
-            return user.get("ID")
-        if user.get("NetworkLogin", "").lower() == email:
-            print(f"✅ Gevonden user via NetworkLogin {email} → UserID {user.get('ID')}")
-            return user.get("ID")
-        if user.get("ADObject", "").lower() == email:
-            print(f"✅ Gevonden user via ADObject {email} → UserID {user.get('ID')}")
-            return user.get("ID")
-
-    print(f"❌ Geen user gevonden voor {email} in SiteID {HALO_SITE_ID}")
-    return None
+    if user_id in site_user_ids:
+        print(f"✅ User {email} gevonden in SiteID {HALO_SITE_ID} → UserID {user_id}")
+        return user_id
+    else:
+        print(f"❌ User {email} bestaat wel maar zit NIET in SiteID {HALO_SITE_ID}")
+        return None
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
@@ -106,9 +106,15 @@ def safe_post_action(url, headers, payload, room_id=None):
 def create_halo_ticket(summary, naam, email,
                        omschrijving="", sindswanneer="", watwerktniet="",
                        zelfgeprobeerd="", impacttoelichting="",
-                       impact_id=3, urgency_id=3):
+                       impact_id=3, urgency_id=3, room_id=None):
     h = get_halo_headers()
-    user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
+    user_id = get_halo_user_id(email)
+
+    if not user_id:
+        if room_id:
+            send_message(room_id, f"❌ Het opgegeven e-mailadres **{email}** hoort niet bij Bossers & Cnossen (Main). Ticket wordt niet aangemaakt.")
+        return None
+
     print(f"👤 Ticket aanmaker → Email: {email}, UserID: {user_id}")
 
     ticket = {
@@ -118,7 +124,7 @@ def create_halo_ticket(summary, naam, email,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
         "Urgency": int(urgency_id),
-        "SiteID": HALO_SITE_ID,  # ✅ Altijd koppelen aan Bossers & Cnossen (Main)
+        "SiteID": HALO_SITE_ID,
         "CFReportedUser": f"{naam} ({email})"
     }
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
@@ -126,7 +132,6 @@ def create_halo_ticket(summary, naam, email,
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    # vragenlijst note
     qa_note = (
         f"**Vragenlijst ingevuld door {naam} ({email}):**\n\n"
         f"- Probleemomschrijving: {omschrijving or '—'}\n"
@@ -155,8 +160,10 @@ def create_halo_ticket(summary, naam, email,
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
     h = get_halo_headers()
-    user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
-    print(f"👤 Note toevoegen → Email: {email}, UserID: {user_id}")
+    user_id = get_halo_user_id(email)
+    if not user_id:
+        send_message(room_id, f"❌ Kan geen notitie toevoegen: {email} hoort niet bij Bossers & Cnossen (Main).")
+        return
     note_text = f"{sender} ({email}) schreef:\n{text}"
     payload = {
         "TicketID": int(ticket_id),
@@ -244,9 +251,11 @@ def webex_webhook():
         ticket = create_halo_ticket(summary, naam, email,
                                     omschrijving, sindswanneer,
                                     watwerktniet, zelfgeprobeerd,
-                                    impacttoelichting, impact_id, urgency_id)
-        ticket_room_map[ticket["id"]] = room_id
-        send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**")
+                                    impacttoelichting, impact_id, urgency_id,
+                                    room_id=room_id)
+        if ticket:
+            ticket_room_map[ticket["id"]] = room_id
+            send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**")
     return {"status": "ok"}
 
 @app.route("/halo", methods=["POST"])
