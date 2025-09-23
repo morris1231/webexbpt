@@ -59,10 +59,10 @@ HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache
+# Halo User Cache (ALLE users laden bij startup)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
-CACHE_TTL = 86400  # 24 uur cache
+CACHE_TTL = 86400  # 24 uur
 
 def get_halo_headers():
     payload = {
@@ -80,33 +80,39 @@ def get_halo_headers():
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
-def fetch_all_client_users(client_id: int, max_pages=20):
-    """Haal alle client users op, maar begrens aantal pagina's i.v.m. rate limiting."""
+def fetch_all_client_users(client_id: int, max_pages=200):
+    """Haal ALLE users op van de client (paged per 50)"""
     h = get_halo_headers()
-    all_users, page, page_size = [], 1, 100
+    all_users, page, page_size = [], 1, 50
     while page <= max_pages:
         url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
         r = session.get(url, headers=h, timeout=10)
         if r.status_code != 200:
+            log.error(f"❌ Fout bij ophalen Halo users op page {page}: {r.status_code}")
             break
+
         users = r.json().get("users", [])
         if not users:
             break
+
         all_users.extend(users)
-        if len(users) < page_size:
+        log.info(f"📄 Page {page}: {len(users)} users geladen, totaal {len(all_users)}")
+
+        if len(users) < page_size:  # laatste pagina
             break
+
         page += 1
-    log.info(f"👥 {len(all_users)} users opgehaald uit Halo (max {max_pages} pages).")
+
+    log.info(f"👥 In totaal {len(all_users)} users opgehaald uit Halo.")
     return all_users
 
 def preload_user_cache():
-    """Preload Halo user cache bij startup."""
-    log.info("🔄 Preloading Halo user cache…")
+    """Laad ALLE users direct in cache bij startup"""
+    log.info("🔄 Preloading Halo user cache (ALL users)…")
     all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
-    main_users = [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID) or str(u.get("site_name","")).lower() == "main"]
-    USER_CACHE["users"] = main_users
+    USER_CACHE["users"] = all_users
     USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(main_users)} users gecached")
+    log.info(f"✅ {len(all_users)} users gecached bij startup")
 
 def get_main_users(force=False):
     now = time.time()
@@ -115,7 +121,7 @@ def get_main_users(force=False):
     return USER_CACHE["users"]
 
 def get_halo_user_id(email: str):
-    """Zoek gebruiker in cached lijst, GEEN fetch in webhook."""
+    """Zoek gebruiker in cache (geen API-call tijdens webhook)"""
     if not email:
         return None
     email = email.strip().lower()
@@ -127,7 +133,9 @@ def get_halo_user_id(email: str):
             str(u.get("adobject") or "").lower()
         }
         if email in emails:
+            log.info(f"✅ User match gevonden: {email} → ID={u.get('id')}")
             return u.get("id")
+    log.warning(f"⚠️ Geen user match voor {email} in {len(users)} cached users")
     return None
 
 # ------------------------------------------------------------------------------
@@ -152,12 +160,13 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     }
     if requester_id:
         body["UserID"] = requester_id
+    else:
+        log.warning("⚠️ Ticket zonder UserID → Halo kiest default gebruiker")
 
     r = session.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=10)
-    log.info(f"➡️ Halo API Tickets response: {r.status_code}")
+    log.info(f"➡️ Halo Tickets response: {r.status_code} {r.text}")
     if r.status_code in (200, 201):
-        ticket = r.json()
-        return ticket
+        return r.json()
     else:
         if room_id:
             send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code}).")
@@ -170,7 +179,7 @@ def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
     if user_id:
         body["UserID"] = user_id
     r = session.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=10)
-    log.info(f"➡️ Halo API AddNote response: {r.status_code}")
+    log.info(f"➡️ Halo AddNote response: {r.status_code}")
     if r.status_code not in (200, 201) and room_id:
         send_message(room_id, f"⚠️ Kon note niet toevoegen aan ticket {ticket_id}.")
 
@@ -212,12 +221,13 @@ def send_adaptive_card(room_id):
 # ------------------------------------------------------------------------------
 def process_webex_event(data):
     resource = data.get("resource")
-    log.info(f"📩 Binnenkomend Webex-event: {resource}")
+    log.info(f"📩 Webex event: {resource}")
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = session.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS, timeout=10).json()
         text, room_id, sender = msg.get("text", "").strip(), msg.get("roomId"), msg.get("personEmail")
-        if sender and sender.endswith("@webex.bot"): return
+        if sender and sender.endswith("@webex.bot"):
+            return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
             send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te starten.")
@@ -259,7 +269,7 @@ def process_webex_event(data):
 def webex_webhook():
     data = request.json
     threading.Thread(target=process_webex_event, args=(data,)).start()
-    return {"status": "ok"}  # direct response
+    return {"status": "ok"}
 
 # ------------------------------------------------------------------------------
 # Health
@@ -272,7 +282,7 @@ def health():
 # Startup
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    preload_user_cache()
-    log.info("🚀 Ticketbot gestart – Cache actief, klaar voor gebruik 🎉")
+    preload_user_cache()   # cache ALLE users meteen
+    log.info("🚀 Ticketbot gestart – Webhooks & Cache actief, klaar voor gebruik 🎉")
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
