@@ -20,7 +20,6 @@ app = Flask(__name__)
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 TARGET_URL = os.getenv("WEBEX_TARGET_URL", "https://webexbpt-1.onrender.com/webex")
-
 WEBEX_HEADERS = {
     "Authorization": f"Bearer {WEBEX_TOKEN}",
     "Content-Type": "application/json"
@@ -127,7 +126,6 @@ def get_main_users(force=False):
     now = time.time()
     if not force and USER_CACHE["users"] and now - USER_CACHE["timestamp"] < CACHE_TTL:
         return USER_CACHE["users"]
-
     all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
     main_users = [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID)
                                         or str(u.get("site_name","")).lower() == "main"]
@@ -154,6 +152,66 @@ def preload_user_cache():
     log.info("🔄 Preloading Halo user cache…")
     users = get_main_users(force=True)
     log.info(f"✅ {len(users)} Main-users cached at startup.")
+
+# ------------------------------------------------------------------------------
+# Halo ticket helpers (FIXED)
+# ------------------------------------------------------------------------------
+def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
+                       watwerktniet, zelfgeprobeerd, impacttoelichting,
+                       impact_id, urgency_id, room_id=None):
+    h = get_halo_headers()
+
+    requester_id = get_halo_user_id(email)
+    if not requester_id:
+        log.warning(f"⚠️ Geen user gevonden voor {email}, ticket wordt geregistreerd op default client.")
+        requester_id = None
+
+    body = {
+        "Summary": summary,
+        "Details": f"{omschrijving}\n\nSinds: {sindswanneer}\nWat werkt niet: {watwerktniet}\n"
+                   f"Zelf geprobeerd: {zelfgeprobeerd}\nImpact toelichting: {impacttoelichting}",
+        "TypeID": HALO_TICKET_TYPE_ID,
+        "ClientID": HALO_CLIENT_ID_NUM,
+        "SiteID": HALO_SITE_ID,
+        "TeamID": HALO_TEAM_ID,
+        "ImpactID": int(impact_id),
+        "UrgencyID": int(urgency_id),
+    }
+    if requester_id:
+        body["UserID"] = requester_id
+
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=30)
+    if r.status_code in (200, 201):
+        ticket = r.json()
+        log.info(f"✅ Ticket aangemaakt in Halo: {ticket.get('Ref')}")
+        return ticket
+    else:
+        log.error(f"❌ Fout bij ticket aanmaken: {r.status_code} {r.text}")
+        if room_id:
+            send_message(room_id, f"❌ Ticket kon niet aangemaakt worden ({r.status_code}).")
+        return None
+
+def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
+    h = get_halo_headers()
+    user_id = None
+    if email:
+        user_id = get_halo_user_id(email)
+
+    body = {
+        "Details": text,
+        "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
+        "IsPrivate": False
+    }
+    if user_id:
+        body["UserID"] = user_id
+
+    r = requests.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=30)
+    if r.status_code in (200, 201):
+        log.info(f"💬 Note toegevoegd aan ticket {ticket_id} door {sender}")
+    else:
+        log.error(f"❌ Kon note niet toevoegen aan ticket {ticket_id}: {r.status_code} {r.text}")
+        if room_id:
+            send_message(room_id, f"❌ Fout bij opslaan van note in ticket {ticket_id}.")
 
 # ------------------------------------------------------------------------------
 # Webex helpers
@@ -194,7 +252,6 @@ def send_adaptive_card(room_id):
 def webex_webhook():
     data = request.json
     resource = data.get("resource")
-
     if resource == "messages":
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
@@ -209,7 +266,6 @@ def webex_webhook():
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
                     add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id)
-
     elif resource == "attachmentActions":
         action_id = data["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{action_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
@@ -224,7 +280,6 @@ def webex_webhook():
         urgency_id = inputs.get("urgency", str(HALO_DEFAULT_URGENCY))
         room_id = data["data"]["roomId"]
         summary = omschrijving or "Melding via Webex"
-
         ticket = create_halo_ticket(summary, naam, email,
                                     omschrijving, sindswanneer,
                                     watwerktniet, zelfgeprobeerd,
@@ -232,7 +287,7 @@ def webex_webhook():
                                     room_id=room_id)
         if ticket:
             ticket_room_map[ticket["id"]] = room_id
-            send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ref']}**")
+            send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['Ref']}**")
     return {"status": "ok"}
 
 @app.route("/halo", methods=["POST"])
@@ -241,14 +296,12 @@ def halo_webhook():
     t_id = data.get("TicketID") or data.get("Request", {}).get("ID")
     if not t_id or int(t_id) not in ticket_room_map: return {"status": "ignored"}
     h = get_halo_headers()
-
     # Status updates
     t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h, timeout=30)
     if t_detail.status_code == 200:
         status = t_detail.json().get("StatusName") or t_detail.json().get("Status")
         if status:
             send_message(ticket_room_map[int(t_id)], f"🔄 Status update: {status}")
-
     # Notes
     r = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}/Actions", headers=h, timeout=30)
     if r.status_code == 200 and r.json():
