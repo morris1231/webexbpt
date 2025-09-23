@@ -1,5 +1,5 @@
 import os, urllib.parse, logging, sys
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
 
@@ -48,40 +48,63 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-def fetch_main_users(client_id: int, site_id: int, max_pages=30):
-    """Haal ALLEEN users van de Main site (site_id=18) via Halo paging."""
+def fetch_all_client_users(client_id: int, max_pages=50):
+    """Haal alle users van ClientID met paging."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
 
     while page <= max_pages:
-        url = (f"{HALO_API_BASE}/Users?"
-               f"$filter=ClientID eq {client_id} and SiteID eq {site_id}"
-               f"&pageSize={page_size}&pageNumber={page}")
+        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
         r = requests.get(url, headers=h, timeout=15)
         if r.status_code != 200:
             log.error(f"❌ Error page {page}: {r.status_code} {r.text}")
             break
         users = r.json().get("users", [])
-        if not users:
-            break
+        if not users: break
         all_users.extend(users)
-        if len(users) < page_size:
-            break
+        log.info(f"📄 Page {page}: {len(users)} users, totaal {len(all_users)}")
+        if len(users) < page_size: break
         page += 1
 
-    # ✅ HARD filter: alleen SiteID=18
-    main = [u for u in all_users if str(u.get("site_id")) == str(site_id)]
-    log.info(f"👥 Totaal {len(main)} users uit Site {site_id} (Main)")
-    return main
+    return all_users
 
 # ------------------------------------------------------------------------------
 # Debug endpoints
 # ------------------------------------------------------------------------------
+@app.route("/debug/sites", methods=["GET"])
+def debug_sites():
+    """Laat alle users zien verdeeld per site."""
+    all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
+
+    site_counts = {}
+    for u in all_users:
+        key = f"{u.get('site_id')} - {u.get('site_name')}"
+        site_counts[key] = site_counts.get(key, 0) + 1
+
+    return jsonify({
+        "client_id": HALO_CLIENT_ID_NUM,
+        "total_users": len(all_users),
+        "per_site": site_counts
+    })
+
 @app.route("/debug/users", methods=["GET"])
 def debug_users():
-    users = fetch_main_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    """Alleen Main (site_id=18) users, standaard 20 voorbeelden of alles als ?limit=ALL."""
+    all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
+    main_users = [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID)]
+
+    limit = request.args.get("limit", "20")
+    if limit == "ALL":
+        selected = main_users
+    else:
+        try:
+            limit = int(limit)
+        except:
+            limit = 20
+        selected = main_users[:limit]
+
     sample = []
-    for u in users[:20]:
+    for u in selected:
         sample.append({
             "id": u.get("id"),
             "name": u.get("name"),
@@ -92,19 +115,15 @@ def debug_users():
     return jsonify({
         "site_id": HALO_SITE_ID,
         "site_name": "Main",
-        "total_users": len(users),
+        "total_users": len(main_users),
         "sample_users": sample
     })
 
 @app.route("/", methods=["GET"])
 def health():
-    return {"status": "ok", "message": "Debug Halo Main users draait!"}
+    return {"status": "ok", "message": "Debug Halo users draait!"}
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    log.info("🚀 Startup: ophalen Main users (site 18)")
-    users = fetch_main_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
-    log.info(f"✅ {len(users)} users gecached voor Site {HALO_SITE_ID} (Main)")
-    for u in users[:5]:
-        log.info(f"   Example: ID={u.get('id')}, Name={u.get('name')}, Email={u.get('EmailAddress')}")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
