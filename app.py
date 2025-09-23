@@ -35,9 +35,8 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# Specifieke klant en site (Bossers & Cnossen → Main)
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))  # Bossers & Cnossen
+HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))              # Main site
 
 ticket_room_map = {}
 
@@ -70,7 +69,7 @@ def get_halo_headers():
     }
 
 def fetch_all_client_users(client_id: int):
-    """Haalt ALLE users van een ClientID op (paginated, 50 per page)."""
+    """Haalt ALLE users van ClientID op (paginated, 50 per page)."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while True:
@@ -90,7 +89,7 @@ def fetch_all_client_users(client_id: int):
     return all_users
 
 def get_main_users(force=False):
-    """Geeft alle Main-users, cached voor 5 min."""
+    """Geeft alle Main-users terug (met cache, TTL 5 min)."""
     now = time.time()
     if not force and USER_CACHE["users"] and now - USER_CACHE["timestamp"] < CACHE_TTL:
         return USER_CACHE["users"]
@@ -100,11 +99,11 @@ def get_main_users(force=False):
                                         or str(u.get("site_name", "")).lower() == "main"]
     USER_CACHE["users"] = main_users
     USER_CACHE["timestamp"] = now
-    log.info(f"✅ Cache vernieuwd: {len(main_users)} users in Bossers & Cnossen/Main")
+    log.info(f"✅ Cache vernieuwd: {len(main_users)} Bossers & Cnossen/Main users")
     return main_users
 
 def get_halo_user_id(email: str):
-    """Zoekt user in cached lijst van Main (Site 18)."""
+    """Zoekt user in cached lijst van Main via email/login/adobject."""
     if not email:
         return None
     users = get_main_users()
@@ -120,7 +119,6 @@ def get_halo_user_id(email: str):
     return None
 
 def preload_user_cache():
-    """Preload cache bij startup (per direct alle 341 users)."""
     log.info("🔄 Preloading Halo user cache...")
     users = get_main_users(force=True)
     log.info(f"✅ {len(users)} Main-users cached at startup.")
@@ -162,7 +160,7 @@ def create_halo_ticket(summary, naam, email,
 
     qa_note = (
         f"**Ticket vragenlijst ({naam}, {email})**\n\n"
-        f"- Omschrijving: {omschrijving or '—'}\n"
+        f"- Probleemomschrijving: {omschrijving or '—'}\n"
         f"- Sinds wanneer: {sindswanneer or '—'}\n"
         f"- Wat werkt niet: {watwerktniet or '—'}\n"
         f"- Zelf geprobeerd: {zelfgeprobeerd or '—'}\n"
@@ -229,7 +227,11 @@ def send_adaptive_card(room_id):
                 "actions": [{"type": "Action.Submit", "title": "Versturen"}]
             }
         }]}
-    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
+    r = requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card)
+    if r.status_code != 200:
+        log.error(f"❌ Adaptive card error {r.status_code}: {r.text}")
+    else:
+        log.info("✅ Adaptive card verstuurd.")
 
 # ------------------------------------------------------------------------------
 # Routes
@@ -249,6 +251,7 @@ def webex_webhook():
             return {"status": "ignored"}
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
+            send_message(room_id, "📋 Vul het formulier hierboven in om een ticket te maken.")
         else:
             for t_id, rid in ticket_room_map.items():
                 if rid == room_id:
@@ -315,7 +318,6 @@ def health():
 # ------------------------------------------------------------------------------
 # Startup preload
 # ------------------------------------------------------------------------------
-print("🚀 Ticketbot start – preload users cache", flush=True)
 preload_user_cache()
 
 if __name__ == "__main__":
