@@ -59,10 +59,9 @@ HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Halo User Cache (ALLE users laden bij startup)
+# Halo User Cache (alle users bij startup laden, daarna alleen uit geheugen)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
-CACHE_TTL = 86400  # 24 uur
 
 def get_halo_headers():
     payload = {
@@ -81,12 +80,12 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 def fetch_all_client_users(client_id: int, max_pages=200):
-    """Haal ALLE users op van de client (paged per 50)"""
+    """Haal ALLE users op, inclusief alle pagina’s"""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
         url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
-        r = session.get(url, headers=h, timeout=10)
+        r = session.get(url, headers=h, timeout=15)
         if r.status_code != 200:
             log.error(f"❌ Fout bij ophalen Halo users op page {page}: {r.status_code}")
             break
@@ -100,42 +99,35 @@ def fetch_all_client_users(client_id: int, max_pages=200):
 
         if len(users) < page_size:  # laatste pagina
             break
-
         page += 1
 
-    log.info(f"👥 In totaal {len(all_users)} users opgehaald uit Halo.")
+    log.info(f"👥 In totaal {len(all_users)} users opgehaald en gecached.")
     return all_users
 
 def preload_user_cache():
-    """Laad ALLE users direct in cache bij startup"""
-    log.info("🔄 Preloading Halo user cache (ALL users)…")
+    """1× bij startup uitvoeren"""
+    log.info("🔄 Cache preload start…")
     all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
     USER_CACHE["users"] = all_users
     USER_CACHE["timestamp"] = time.time()
     log.info(f"✅ {len(all_users)} users gecached bij startup")
 
-def get_main_users(force=False):
-    now = time.time()
-    if force or not USER_CACHE["users"] or (now - USER_CACHE["timestamp"]) > CACHE_TTL:
-        preload_user_cache()
-    return USER_CACHE["users"]
-
 def get_halo_user_id(email: str):
-    """Zoek gebruiker in cache (geen API-call tijdens webhook)"""
-    if not email:
+    """Zoekt GEEN API meer — alleen in gecachete lijst"""
+    if not email or not USER_CACHE["users"]:
+        log.error("❌ Cache leeg of email ontbreekt!")
         return None
     email = email.strip().lower()
-    users = get_main_users()
-    for u in users:
+    for u in USER_CACHE["users"]:
         emails = {
             str(u.get("emailaddress") or "").lower(),
             str(u.get("networklogin") or "").lower(),
             str(u.get("adobject") or "").lower()
         }
         if email in emails:
-            log.info(f"✅ User match gevonden: {email} → ID={u.get('id')}")
+            log.info(f"✅ User {email} → ID={u.get('id')}")
             return u.get("id")
-    log.warning(f"⚠️ Geen user match voor {email} in {len(users)} cached users")
+    log.warning(f"⚠️ Geen user match voor {email}")
     return None
 
 # ------------------------------------------------------------------------------
@@ -279,10 +271,15 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup
+# Startup (altijd preload bij import, zodat Gunicorn workers ook vullen)
 # ------------------------------------------------------------------------------
+try:
+    log.info("🚀 Initialisatie Ticketbot… cache laden")
+    preload_user_cache()
+    log.info("✅ Cache geladen bij startup")
+except Exception as e:
+    log.error(f"❌ Kon users niet preloaden: {e}")
+
 if __name__ == "__main__":
-    preload_user_cache()   # cache ALLE users meteen
-    log.info("🚀 Ticketbot gestart – Webhooks & Cache actief, klaar voor gebruik 🎉")
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
