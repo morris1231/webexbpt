@@ -56,7 +56,7 @@ HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))      # Main site
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# User Cache (lazy load)
+# User Cache (met paging)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
 
@@ -73,30 +73,36 @@ def get_halo_headers():
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
-def fetch_main_site_users(client_id: int, site_id: int, max_pages=20):
-    """Fetch users for Client+Site only"""
+def fetch_all_client_users(client_id: int, site_id: int, max_pages=20):
+    """Haal alle users van client en filter achteraf op site"""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
-        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id} and SiteID eq {site_id}&pageSize=50&pageNumber={page}"
+        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
         r = session.get(url, headers=h, timeout=15)
-        if r.status_code != 200: break
+        if r.status_code != 200:
+            log.error(f"❌ Fout bij ophalen pagina {page}: {r.status_code}")
+            break
         users = r.json().get("users", [])
         if not users: break
         all_users.extend(users)
-        log.info(f"📄 Page {page}: {len(users)} loaded, total {len(all_users)}")
-        if len(users) < page_size: break
+        log.info(f"📄 Page {page}: {len(users)} users, totaal {len(all_users)}")
+        if len(users) < page_size:
+            break
         page += 1
-    log.info(f"👥 {len(all_users)} users fetched for Client={client_id}, Site={site_id}")
-    return all_users
+    # filter op site
+    filtered = [u for u in all_users if str(u.get("site_id")) == str(site_id)
+                                    or str(u.get("site_name") or "").lower() == "main"]
+    log.info(f"👥 Totaal {len(all_users)} users ontvangen, {len(filtered)} voor site {site_id} (Main)")
+    return filtered
 
 def get_main_users():
     if not USER_CACHE["users"]:
-        log.info("🔄 Cache empty, fetching Halo users…")
-        users = fetch_main_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+        log.info("🔄 Cache leeg, ophalen users…")
+        users = fetch_all_client_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
         USER_CACHE["users"] = users
         USER_CACHE["timestamp"] = time.time()
-        log.info(f"✅ Cached {len(users)} Bossers & Cnossen Main users")
+        log.info(f"✅ {len(users)} Main users gecached")
     return USER_CACHE["users"]
 
 def get_halo_user_id(email: str):
@@ -113,9 +119,9 @@ def get_halo_user_id(email: str):
             str(u.get("adobject") or "").lower()
         }
         if email in check_vals:
-            log.info(f"✅ Match {email} → HaloID={u.get('id')}")
+            log.info(f"✅ Match {email} → UserID={u.get('id')}")
             return u.get("id")
-    log.warning(f"⚠️ No match for {email}")
+    log.warning(f"⚠️ Geen match voor {email}")
     return None
 
 # ------------------------------------------------------------------------------
@@ -128,8 +134,8 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
 
-    ticket_body = {
-        "Summary": summary,
+    body = {
+        "Summary": str(summary),
         "Details": f"{omschrijving}\n\nSinds: {sindswanneer}\nWat werkt niet: {watwerktniet}\nZelf geprobeerd: {zelfgeprobeerd}\nImpact toelichting: {impacttoelichting}",
         "TypeID": HALO_TICKET_TYPE_ID,
         "ClientID": HALO_CLIENT_ID_NUM,
@@ -139,18 +145,19 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "UrgencyID": int(urgency_id)
     }
     if requester_id:
-        ticket_body["UserID"] = int(requester_id)
+        body["UserID"] = int(requester_id)
     else:
-        log.warning("⚠️ Ticket zonder UserID (geen match)")
-
-    body = {"Tickets": [ticket_body]}  # WRAP in Tickets array
+        log.warning("⚠️ Ticket zonder UserID")
 
     r = session.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
-    log.info(f"➡️ Halo Response {r.status_code}: {r.text}")
+    log.info(f"➡️ Halo response {r.status_code}: {r.text}")
     if r.status_code in (200, 201): return r.json()
-    if room_id: send_message(room_id, f"⚠️ Ticket failed ({r.status_code})")
+    if room_id: send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")
     return None
 
+# ------------------------------------------------------------------------------
+# Notes
+# ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
     h = get_halo_headers()
     body = {"Details": str(text), "ActionTypeID": HALO_ACTIONTYPE_PUBLIC, "IsPrivate": False}
@@ -159,10 +166,10 @@ def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
     r = session.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=10)
     log.info(f"➡️ AddNote response {r.status_code}")
     if r.status_code not in (200,201) and room_id:
-        send_message(room_id, f"⚠️ Note add failed ({r.status_code})")
+        send_message(room_id, f"⚠️ Note toevoegen mislukt ({r.status_code})")
 
 # ------------------------------------------------------------------------------
-# Webex Helpers
+# Webex helpers
 # ------------------------------------------------------------------------------
 def send_message(room_id, text):
     session.post("https://webexapis.com/v1/messages",
@@ -225,8 +232,8 @@ def process_webex_event(data):
             room_id=data["data"]["roomId"]
         )
         if ticket:
-            ticket_room_map[ticket["Tickets"][0]["ID"]] = data["data"]["roomId"]
-            send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket['Tickets'][0]['Ref']}**")
+            ticket_room_map[ticket.get("ID") or ticket.get("id")] = data["data"]["roomId"]
+            send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket.get('Ref')}**")
         else:
             send_message(data["data"]["roomId"], "⚠️ Ticket kon niet aangemaakt worden.")
 
