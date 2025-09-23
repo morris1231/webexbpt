@@ -26,9 +26,8 @@ HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# 👇 Belangrijk: jouw klant en site
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))  # Bossers & Cnossen ID
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))  # Main site ID
+# 👇 Gebruik SiteID voor Bossers & Cnossen Main (18)
+HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
 ticket_room_map = {}
 
@@ -53,33 +52,41 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
+
 def get_halo_user_id(email: str):
-    """Zoek user op email/login/object, maar alleen binnen ClientID=Bossers & Cnossen en SiteID=Main"""
+    """Zoekt UserID door de echte Users-lijst van de Site (Bossers & Cnossen/Main)."""
     if not email:
         return None
     h = get_halo_headers()
     email = email.strip().lower()
 
-    url = (
-        f"{HALO_API_BASE}/Users?"
-        f"$filter=(tolower(Email) eq '{email}' or tolower(NetworkLogin) eq '{email}' or tolower(ADObject) eq '{email}') "
-        f"and ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
-    )
-    print(f"🔎 Lookup: {url}")
-    r = requests.get(url, headers=h)
-
-    if r.status_code != 200:
-        print(f"❌ Error bij user lookup: {r.status_code} {r.text}")
+    try:
+        # Haal alle users op die via de site gekoppeld zijn (zelfde als in UI)
+        site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
+        r = requests.get(site_url, headers=h)
+        r.raise_for_status()
+        site_users = r.json() if isinstance(r.json(), list) else []
+    except Exception as e:
+        print(f"❌ Kon site users niet ophalen: {e}")
         return None
 
-    users = r.json()
-    if not users or not isinstance(users, list):
-        print(f"❌ Geen gebruikers gevonden voor {email} bij ClientID={HALO_CLIENT_ID_NUM} & SiteID={HALO_SITE_ID}")
-        return None
+    print(f"🔎 Site {HALO_SITE_ID} bevat {len(site_users)} users volgens Halo")
 
-    user = users[0]
-    print(f"✅ {email} gevonden → UserID={user.get('ID')}, ClientID={user.get('ClientID')}, SiteID={user.get('SiteID')}")
-    return user.get("ID")
+    for user in site_users:
+        if not isinstance(user, dict):
+            continue
+        user_id = user.get("ID")
+        mail = str(user.get("Email", "")).lower()
+        netlogin = str(user.get("NetworkLogin", "")).lower()
+        ad = str(user.get("ADObject", "")).lower()
+
+        if email in (mail, netlogin, ad):
+            print(f"✅ Match gevonden in site {HALO_SITE_ID}: {email} → UserID {user_id}")
+            return user_id
+
+    print(f"❌ {email} niet gevonden in /Sites/{HALO_SITE_ID}/Users")
+    return None
+
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
@@ -116,8 +123,7 @@ def create_halo_ticket(summary, naam, email,
         "TeamID": HALO_TEAM_ID,
         "Impact": int(impact_id),
         "Urgency": int(urgency_id),
-        "ClientID": HALO_CLIENT_ID_NUM,   # <<< Belangrijk
-        "SiteID": HALO_SITE_ID,           # <<< Belangrijk
+        "SiteID": HALO_SITE_ID,
         "CFReportedUser": f"{naam} ({email})"
     }
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
