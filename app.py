@@ -66,91 +66,63 @@ def get_halo_headers():
     }
 
 def dump_site_users():
-    """Haal alle users van Bossers & Cnossen/Main (Client 12, Site 18) en log deze bij startup."""
+    """Haal alle users van Bossers & Cnossen/Main op bij startup."""
     print("⚡ dump_site_users() wordt uitgevoerd...", flush=True)
-    log.info("🚀 Startup check: ophalen users van Halo...")
-
     try:
         h = get_halo_headers()
-
-        # 1. Probeer Clients/{client}/Sites/{site}/Users
-        url = f"{HALO_API_BASE}/Clients/{HALO_CLIENT_ID_NUM}/Sites/{HALO_SITE_ID}/Users"
-        log.info(f"➡️ API call naar: {url}")
+        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
         print(f"➡️ API call naar: {url}", flush=True)
-
         r = requests.get(url, headers=h)
         print(f"⬅️ Status {r.status_code}", flush=True)
-        print(f"⬅️ Response snippet: {r.text[:300]}", flush=True)
-
         if r.status_code != 200:
-            # 2. Fallback naar filter query
-            alt_url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
-            log.info(f"➡️ Fallback API call naar: {alt_url}")
-            print(f"➡️ Fallback API call naar: {alt_url}", flush=True)
-
-            r = requests.get(alt_url, headers=h)
-            print(f"⬅️ Status {r.status_code}", flush=True)
-            print(f"⬅️ Response snippet: {r.text[:300]}", flush=True)
-
-        r.raise_for_status()
-        site_users = r.json() if isinstance(r.json(), list) else []
-
-        log.info(f"=== Startup: Client {HALO_CLIENT_ID_NUM}, Site {HALO_SITE_ID} heeft {len(site_users)} users ===")
+            print(f"❌ Error: {r.text[:300]}", flush=True)
+            return
+        data = r.json()
+        site_users = data.get("users", [])
         print(f"✅ Halo gaf {len(site_users)} users terug bij startup", flush=True)
-
         for u in site_users:
-            line = (
-                f"UserID={u.get('ID')} | "
-                f"Email={u.get('Email')} | "
-                f"NetworkLogin={u.get('NetworkLogin')} | "
-                f"ADObject={u.get('ADObject')}"
+            print(
+                f"UserID={u.get('id')} | Name={u.get('name')} | "
+                f"Email={u.get('emailaddress')} | "
+                f"NetworkLogin={u.get('networklogin')} | "
+                f"ADObject={u.get('adobject')} | "
+                f"SiteName={u.get('site_name')}", flush=True
             )
-            print(line, flush=True)
-            log.info(line)
-
     except Exception as e:
-        print(f"❌ Fout bij ophalen site users: {e}", flush=True)
-        log.error(f"❌ Kon site users niet ophalen: {e}")
+        print(f"❌ dump_site_users error: {e}", flush=True)
 
 def get_halo_user_id(email: str):
-    """Zoek UserID in users-lijst van de site."""
+    """Zoek Halo-user eindeutige match in de users payload."""
     if not email:
         return None
     h = get_halo_headers()
-    email = email.strip().lower()
-
-    try:
-        url = f"{HALO_API_BASE}/Clients/{HALO_CLIENT_ID_NUM}/Sites/{HALO_SITE_ID}/Users"
-        r = requests.get(url, headers=h)
-        r.raise_for_status()
-        site_users = r.json() if isinstance(r.json(), list) else []
-    except Exception as e:
-        log.error(f"Kon site users niet ophalen: {e}")
+    url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
+    r = requests.get(url, headers=h)
+    if r.status_code != 200:
+        log.error(f"❌ User lookup failed: {r.status_code} {r.text}")
         return None
-
-    for user in site_users:
-        user_id = user.get("ID")
-        mails = {
-            str(user.get("Email", "")).lower(),
-            str(user.get("NetworkLogin", "")).lower(),
-            str(user.get("ADObject", "")).lower(),
+    data = r.json()
+    for u in data.get("users", []):
+        emails = {
+            str(u.get("emailaddress", "")).lower(),
+            str(u.get("networklogin", "")).lower(),
+            str(u.get("adobject", "")).lower()
         }
-        if email in mails:
-            log.info(f"✅ User gevonden: {email} → UserID {user_id}")
-            return user_id
-
-    log.warning(f"❌ Geen match voor {email} in site {HALO_SITE_ID}")
+        if email.strip().lower() in emails:
+            log.info(f"✅ Match gevonden: {email} → UserID {u.get('id')}")
+            return u.get("id")
+    log.warning(f"❌ {email} niet gevonden in site users")
     return None
 
 # ------------------------------------------------------------------------------
-# Routes
+# Minimal route+health (rest kun je terugplakken)
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup dump direct uitvoeren bij module import (Render/Gunicorn safe)
+# Startup dump uitvoeren bij module import (Render/Gunicorn)
 # ------------------------------------------------------------------------------
 print("🚀 Ticketbot start op", flush=True)
 dump_site_users()
