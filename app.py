@@ -36,7 +36,7 @@ HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# 👇 Specifieke klant en site (Bossers & Cnossen → Main)
+# Specifieke klant en site (Bossers & Cnossen / Main)
 HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
@@ -66,56 +66,63 @@ def get_halo_headers():
     }
 
 def dump_site_users():
-    """Haal alle users van Bossers & Cnossen/Main op bij startup."""
+    """Haal alle users van Bossers & Cnossen / Main (ClientID+SiteID) bij startup."""
     print("⚡ dump_site_users() wordt uitgevoerd...", flush=True)
     try:
         h = get_halo_headers()
-        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
+
+        url = f"{HALO_API_BASE}/Clients/{HALO_CLIENT_ID_NUM}/Sites/{HALO_SITE_ID}/Users"
         print(f"➡️ API call naar: {url}", flush=True)
         r = requests.get(url, headers=h)
         print(f"⬅️ Status {r.status_code}", flush=True)
-        if r.status_code != 200:
-            print(f"❌ Error: {r.text[:300]}", flush=True)
-            return
-        data = r.json()
-        site_users = data.get("users", [])
-        print(f"✅ Halo gaf {len(site_users)} users terug bij startup", flush=True)
+        print(f"⬅️ Response snippet: {r.text[:300]}", flush=True)
+
+        r.raise_for_status()
+        site_users = r.json() if isinstance(r.json(), list) else []
+        print(f"✅ Halo gaf {len(site_users)} users terug (Client {HALO_CLIENT_ID_NUM}, Site {HALO_SITE_ID})", flush=True)
+
         for u in site_users:
-            print(
-                f"UserID={u.get('id')} | Name={u.get('name')} | "
-                f"Email={u.get('emailaddress')} | "
-                f"NetworkLogin={u.get('networklogin')} | "
-                f"ADObject={u.get('adobject')} | "
-                f"SiteName={u.get('site_name')}", flush=True
+            line = (
+                f"UserID={u.get('ID')} | Name={u.get('Name')} | "
+                f"Email={u.get('Email')} | "
+                f"NetworkLogin={u.get('NetworkLogin')} | "
+                f"ADObject={u.get('ADObject')}"
             )
+            print(line, flush=True)
+            log.info(line)
     except Exception as e:
         print(f"❌ dump_site_users error: {e}", flush=True)
 
 def get_halo_user_id(email: str):
-    """Zoek Halo-user eindeutige match in de users payload."""
+    """Zoek user in Bossers & Cnossen / Main via Clients/{clientId}/Sites/{siteId}/Users"""
     if not email:
         return None
     h = get_halo_headers()
-    url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
+
+    url = f"{HALO_API_BASE}/Clients/{HALO_CLIENT_ID_NUM}/Sites/{HALO_SITE_ID}/Users"
     r = requests.get(url, headers=h)
     if r.status_code != 200:
         log.error(f"❌ User lookup failed: {r.status_code} {r.text}")
         return None
-    data = r.json()
-    for u in data.get("users", []):
+
+    site_users = r.json() if isinstance(r.json(), list) else []
+    email = email.strip().lower()
+
+    for u in site_users:
         emails = {
-            str(u.get("emailaddress", "")).lower(),
-            str(u.get("networklogin", "")).lower(),
-            str(u.get("adobject", "")).lower()
+            str(u.get("Email") or "").lower(),
+            str(u.get("NetworkLogin") or "").lower(),
+            str(u.get("ADObject") or "").lower()
         }
-        if email.strip().lower() in emails:
-            log.info(f"✅ Match gevonden: {email} → UserID {u.get('id')}")
-            return u.get("id")
-    log.warning(f"❌ {email} niet gevonden in site users")
+        if email in emails:
+            log.info(f"✅ Match gevonden: {email} → UserID {u.get('ID')}")
+            return u.get("ID")
+
+    log.warning(f"❌ {email} niet gevonden in Client {HALO_CLIENT_ID_NUM} / Site {HALO_SITE_ID}")
     return None
 
 # ------------------------------------------------------------------------------
-# Minimal route+health (rest kun je terugplakken)
+# Voorbeeld gebruik: health endpoint
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
