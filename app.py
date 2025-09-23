@@ -1,6 +1,16 @@
-import os, requests, urllib.parse, json
+import os, requests, urllib.parse, json, logging, sys
 from flask import Flask, request
 from dotenv import load_dotenv
+
+# ------------------------------------------------------------------------------
+# Logging configuratie
+# ------------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+log = logging.getLogger("ticketbot")
 
 # ------------------------------------------------------------------------------
 # Config
@@ -52,52 +62,62 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
+def dump_site_users():
+    """Dump alle users van de site bij startup om te debuggen."""
+    h = get_halo_headers()
+    try:
+        site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
+        r = requests.get(site_url, headers=h)
+        r.raise_for_status()
+        site_users = r.json() if isinstance(r.json(), list) else []
+        log.info(f"=== Startup: Site {HALO_SITE_ID} heeft {len(site_users)} users ===")
+
+        for u in site_users:
+            log.info(
+                f"UserID={u.get('ID')} | Email={u.get('Email')} | "
+                f"NetworkLogin={u.get('NetworkLogin')} | ADObject={u.get('ADObject')}"
+            )
+    except Exception as e:
+        log.error(f"❌ Kon site users niet ophalen bij startup: {e}")
 
 def get_halo_user_id(email: str):
-    """Zoekt UserID door de echte Users-lijst van de Site (Bossers & Cnossen/Main)."""
+    """Zoekt UserID door de Users-lijst van de Site (Bossers & Cnossen/Main)."""
     if not email:
         return None
     h = get_halo_headers()
     email = email.strip().lower()
 
     try:
-        # Haal alle users op exact zoals in de Halo UI: via de site userlijst
         site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
         r = requests.get(site_url, headers=h)
         r.raise_for_status()
         site_users = r.json() if isinstance(r.json(), list) else []
     except Exception as e:
-        print(f"❌ Kon site users niet ophalen: {e}")
+        log.error(f"Kon site users niet ophalen: {e}")
         return None
 
-    # 🔎 Debug logging: dump alle users die Halo terugstuurt
-    print(f"🔎 API gaf {len(site_users)} users terug voor SiteID {HALO_SITE_ID}:")
-    for u in site_users:
-        print(f"   → UserID={u.get('ID')} | Email={u.get('Email')} "
-              f"| NetworkLogin={u.get('NetworkLogin')} | ADObject={u.get('ADObject')}")
-
-    # Zoek in de lijst naar match
     for user in site_users:
         user_id = user.get("ID")
-        mail = str(user.get("Email", "")).lower()
-        netlogin = str(user.get("NetworkLogin", "")).lower()
-        ad = str(user.get("ADObject", "")).lower()
+        mails = {
+            str(user.get("Email", "")).lower(),
+            str(user.get("NetworkLogin", "")).lower(),
+            str(user.get("ADObject", "")).lower(),
+        }
 
-        if email in (mail, netlogin, ad):
-            print(f"✅ Match gevonden in site {HALO_SITE_ID}: {email} → UserID {user_id}")
+        if email in mails:
+            log.info(f"✅ Match gevonden: {email} → UserID {user_id}")
             return user_id
 
-    print(f"❌ {email} niet gevonden in /Sites/{HALO_SITE_ID}/Users")
+    log.warning(f"❌ Geen match: {email} niet gevonden in /Sites/{HALO_SITE_ID}/Users")
     return None
-
 
 # ------------------------------------------------------------------------------
 # Safe POST wrapper
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
-    print("➡️ Payload naar Halo:", json.dumps(payload, indent=2))
+    log.debug("➡️ Payload naar Halo:\n" + json.dumps(payload, indent=2))
     r = requests.post(url, headers=headers, json=payload)
-    print("⬅️ Halo response:", r.status_code, r.text)
+    log.debug(f"⬅️ Halo response: {r.status_code} {r.text}")
     if r.status_code != 200 and room_id:
         send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
     return r
@@ -109,7 +129,6 @@ def create_halo_ticket(summary, naam, email,
                        omschrijving="", sindswanneer="", watwerktniet="",
                        zelfgeprobeerd="", impacttoelichting="",
                        impact_id=3, urgency_id=3, room_id=None):
-    h = get_halo_headers()
     user_id = get_halo_user_id(email)
 
     if not user_id:
@@ -117,8 +136,9 @@ def create_halo_ticket(summary, naam, email,
             send_message(room_id, f"❌ {email} hoort niet bij Bossers & Cnossen (Main). Ticket niet aangemaakt.")
         return None
 
-    print(f"👤 Ticket aanmaker → Email: {email}, UserID: {user_id}")
+    log.info(f"👤 Ticket aanmaker → Email: {email}, UserID: {user_id}")
 
+    h = get_halo_headers()
     ticket = {
         "Summary": summary,
         "Details": f"👤 Ticket aangemaakt door {naam} ({email})",
@@ -161,7 +181,6 @@ def create_halo_ticket(summary, naam, email,
 # Notes vanuit Webex
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
-    h = get_halo_headers()
     user_id = get_halo_user_id(email)
     if not user_id:
         send_message(room_id, f"❌ Kan geen notitie toevoegen: {email} hoort niet bij Bossers & Cnossen (Main).")
@@ -177,6 +196,7 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None
         "UserID": int(user_id),
         "TimeSpent": 0
     }
+    h = get_halo_headers()
     safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=payload, room_id=room_id)
 
 # ------------------------------------------------------------------------------
@@ -291,5 +311,8 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 if __name__ == "__main__":
+    # 🔎 Dump alle users bij startup
+    dump_site_users()
+
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
