@@ -3,7 +3,7 @@ from flask import Flask, request
 from dotenv import load_dotenv
 
 # ------------------------------------------------------------------------------
-# Logging config
+# Logging configuratie
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.DEBUG,
@@ -36,13 +36,14 @@ HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))  # Bossers & Cnossen
-HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))              # Main site
+# Specifieke klant en site (Bossers & Cnossen / Main)
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
+HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Helpers
+# Halo helpers
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     payload = {
@@ -56,6 +57,8 @@ def get_halo_headers():
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode(payload)
     )
+    if r.status_code != 200:
+        print(f"❌ Auth faalde: {r.status_code} {r.text}", flush=True)
     r.raise_for_status()
     return {
         "Authorization": f"Bearer {r.json()['access_token']}",
@@ -63,43 +66,55 @@ def get_halo_headers():
     }
 
 def fetch_all_client_users(client_id: int):
-    """Haalt ALLE users van een ClientID op (met pagination)."""
+    """Haalt ALLE users van een ClientID op met pagination."""
     h = get_halo_headers()
     all_users = []
     page = 1
+    page_size = 100
     while True:
-        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize=100&pageNumber={page}"
+        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
         r = requests.get(url, headers=h)
         if r.status_code != 200:
             log.error(f"❌ Fout bij ophalen users (page {page}): {r.status_code} {r.text}")
             break
         data = r.json()
         users = data.get("users", [])
+        count = len(users)
         if not users:
+            log.debug(f"📄 Page {page} had 0 users → stoppen.")
             break
         all_users.extend(users)
-        log.debug(f"📄 Page {page}: {len(users)} users")
+        log.debug(f"📄 Page {page}: {count} users (totaal nu {len(all_users)})")
+        # ✅ Stop als minder dan page_size terugkomt (laatste pagina)
+        if count < page_size:
+            log.debug(f"📄 Stoppen op page {page}, want {count} < {page_size}")
+            break
         page += 1
     log.info(f"✅ Totaal {len(all_users)} users opgehaald voor Client {client_id}")
     return all_users
 
 def get_main_users():
-    """Filter alleen users van site Main (SiteID=18) uit Client."""
+    """Filter alleen users van site Main (SiteID=18) uit Client 12."""
     all_users = fetch_all_client_users(HALO_CLIENT_ID_NUM)
-    main_users = [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID) 
+    main_users = [u for u in all_users if str(u.get("site_id")) == str(HALO_SITE_ID)
                                         or str(u.get("site_name","")).lower() == "main"]
     log.info(f"✅ {len(main_users)} users in Bossers & Cnossen / Main")
     return main_users
 
 def dump_site_users():
-    """Dump alle users uit Bossers & Cnossen / Main in logs bij startup."""
+    """Dump alle users van Main in de logs bij startup."""
     users = get_main_users()
     for u in users:
-        print(f"UserID={u.get('id')} | Name={u.get('name')} | Email={u.get('emailaddress')} | Site={u.get('site_name')}", flush=True)
+        print(
+            f"UserID={u.get('id')} | Name={u.get('name')} | "
+            f"Email={u.get('emailaddress')} | Site={u.get('site_name')}",
+            flush=True
+        )
 
 def get_halo_user_id(email: str):
-    """Zoek user in Main-site lijst o.b.v. email/login/adobject."""
-    if not email: return None
+    """Zoek user in Main via email/login/adobject."""
+    if not email: 
+        return None
     users = get_main_users()
     email = email.strip().lower()
     for u in users:
@@ -109,13 +124,13 @@ def get_halo_user_id(email: str):
             str(u.get("adobject") or "").lower()
         }
         if email in emails:
-            log.info(f"✅ Match gevonden: {email} → UserID {u.get('id')}")
+            log.info(f"✅ Match: {email} → UserID {u.get('id')} (Site={u.get('site_name')})")
             return u.get("id")
-    log.warning(f"❌ Geen match voor {email} in Main")
+    log.warning(f"❌ {email} niet gevonden in Bossers & Cnossen/Main")
     return None
 
 # ------------------------------------------------------------------------------
-# Core ticket/notes functies
+# Ticket en notes functies
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
     log.debug("➡️ Payload naar Halo:\n" + json.dumps(payload, indent=2))
@@ -132,7 +147,7 @@ def create_halo_ticket(summary, naam, email,
     user_id = get_halo_user_id(email)
     if not user_id:
         if room_id:
-            send_message(room_id, f"❌ {email} hoort niet bij Bossers & Cnossen/Main. Ticket niet aangemaakt.")
+            send_message(room_id, f"❌ {email} hoort niet bij Bossers & Cnossen/Main. Ticket niet gemaakt.")
         return None
 
     h = get_halo_headers()
@@ -152,7 +167,7 @@ def create_halo_ticket(summary, naam, email,
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    note = f"Ticket aangemaakt door {naam} ({email})\nOmschrijving: {omschrijving}"
+    note = f"**Ticket aangemaakt door {naam} ({email})**\n\nOmschrijving: {omschrijving}\nSinds: {sindswanneer}\nWat werkt niet: {watwerktniet}\nZelf geprobeerd: {zelfgeprobeerd}\nImpact toelichting: {impacttoelichting}"
     payload = {
         "TicketID": int(ticket_id),
         "Details": note,
@@ -168,7 +183,7 @@ def create_halo_ticket(summary, naam, email,
 def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None):
     user_id = get_halo_user_id(email)
     if not user_id:
-        send_message(room_id, f"❌ Kan geen notitie toevoegen: {email} hoort niet bij Main.")
+        send_message(room_id, f"❌ Geen notitie toegevoegd: {email} niet in Bossers & Cnossen/Main.")
         return
     h = get_halo_headers()
     payload = {
