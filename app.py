@@ -6,7 +6,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # ------------------------------------------------------------------------------
-# Logging
+# Logging setup
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +36,6 @@ load_dotenv()
 app = Flask(__name__)
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
-TARGET_URL = os.getenv("WEBEX_TARGET_URL", "https://webexbpt-1.onrender.com/webex")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
 
 HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
@@ -56,7 +55,7 @@ HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))      # Main site
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# User Cache (met paging)
+# User Cache (fetch all site users w/ paging)
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
 
@@ -73,15 +72,17 @@ def get_halo_headers():
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
-def fetch_all_client_users(client_id: int, site_id: int, max_pages=20):
-    """Haal alle users van client en filter achteraf op site"""
+def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
+    """Fetch all users for Client+Site with paging until all Main users (~341)."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
     while page <= max_pages:
-        url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {client_id}&pageSize={page_size}&pageNumber={page}"
+        url = (f"{HALO_API_BASE}/Users?"
+               f"$filter=ClientID eq {client_id} and SiteID eq {site_id}"
+               f"&pageSize={page_size}&pageNumber={page}")
         r = session.get(url, headers=h, timeout=15)
         if r.status_code != 200:
-            log.error(f"❌ Fout bij ophalen pagina {page}: {r.status_code}")
+            log.error(f"❌ Error fetching page {page}: {r.status_code}")
             break
         users = r.json().get("users", [])
         if not users: break
@@ -90,16 +91,13 @@ def fetch_all_client_users(client_id: int, site_id: int, max_pages=20):
         if len(users) < page_size:
             break
         page += 1
-    # filter op site
-    filtered = [u for u in all_users if str(u.get("site_id")) == str(site_id)
-                                    or str(u.get("site_name") or "").lower() == "main"]
-    log.info(f"👥 Totaal {len(all_users)} users ontvangen, {len(filtered)} voor site {site_id} (Main)")
-    return filtered
+    log.info(f"👥 In totaal {len(all_users)} users opgehaald (Client={client_id}, Site={site_id})")
+    return all_users
 
 def get_main_users():
     if not USER_CACHE["users"]:
-        log.info("🔄 Cache leeg, ophalen users…")
-        users = fetch_all_client_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+        log.info("🔄 Cache leeg, ophalen Bossers & Cnossen Main users…")
+        users = fetch_all_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
         USER_CACHE["users"] = users
         USER_CACHE["timestamp"] = time.time()
         log.info(f"✅ {len(users)} Main users gecached")
