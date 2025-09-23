@@ -36,7 +36,8 @@ HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# Site Bossers & Cnossen → Main
+# 👇 Specifieke klant en site (Bossers & Cnossen → Main)
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
 ticket_room_map = {}
@@ -65,17 +66,37 @@ def get_halo_headers():
     }
 
 def dump_site_users():
-    """Haal alle users van de site op en log ze keihard bij startup."""
+    """Haal alle users van Bossers & Cnossen/Main (Client 12, Site 18) en log deze bij startup."""
     print("⚡ dump_site_users() wordt uitgevoerd...", flush=True)
-    log.info("🚀 Startup check gestart: ophalen users van Halo...")
+    log.info("🚀 Startup check: ophalen users van Halo...")
+
     try:
         h = get_halo_headers()
-        site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
-        r = requests.get(site_url, headers=h)
+
+        # 1. Probeer Clients/{client}/Sites/{site}/Users
+        url = f"{HALO_API_BASE}/Clients/{HALO_CLIENT_ID_NUM}/Sites/{HALO_SITE_ID}/Users"
+        log.info(f"➡️ API call naar: {url}")
+        print(f"➡️ API call naar: {url}", flush=True)
+
+        r = requests.get(url, headers=h)
+        print(f"⬅️ Status {r.status_code}", flush=True)
+        print(f"⬅️ Response snippet: {r.text[:300]}", flush=True)
+
+        if r.status_code != 200:
+            # 2. Fallback naar filter query
+            alt_url = f"{HALO_API_BASE}/Users?$filter=ClientID eq {HALO_CLIENT_ID_NUM} and SiteID eq {HALO_SITE_ID}"
+            log.info(f"➡️ Fallback API call naar: {alt_url}")
+            print(f"➡️ Fallback API call naar: {alt_url}", flush=True)
+
+            r = requests.get(alt_url, headers=h)
+            print(f"⬅️ Status {r.status_code}", flush=True)
+            print(f"⬅️ Response snippet: {r.text[:300]}", flush=True)
+
         r.raise_for_status()
         site_users = r.json() if isinstance(r.json(), list) else []
+
+        log.info(f"=== Startup: Client {HALO_CLIENT_ID_NUM}, Site {HALO_SITE_ID} heeft {len(site_users)} users ===")
         print(f"✅ Halo gaf {len(site_users)} users terug bij startup", flush=True)
-        log.info(f"=== Startup: Site {HALO_SITE_ID} heeft {len(site_users)} users ===")
 
         for u in site_users:
             line = (
@@ -86,20 +107,21 @@ def dump_site_users():
             )
             print(line, flush=True)
             log.info(line)
+
     except Exception as e:
-        print(f"❌ Kon site users niet ophalen bij startup: {e}", flush=True)
-        log.error(f"❌ Kon site users niet ophalen bij startup: {e}")
+        print(f"❌ Fout bij ophalen site users: {e}", flush=True)
+        log.error(f"❌ Kon site users niet ophalen: {e}")
 
 def get_halo_user_id(email: str):
-    """Zoekt UserID in de Site Users-lijst zelf."""
+    """Zoek UserID in users-lijst van de site."""
     if not email:
         return None
     h = get_halo_headers()
     email = email.strip().lower()
 
     try:
-        site_url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
-        r = requests.get(site_url, headers=h)
+        url = f"{HALO_API_BASE}/Clients/{HALO_CLIENT_ID_NUM}/Sites/{HALO_SITE_ID}/Users"
+        r = requests.get(url, headers=h)
         r.raise_for_status()
         site_users = r.json() if isinstance(r.json(), list) else []
     except Exception as e:
@@ -121,55 +143,18 @@ def get_halo_user_id(email: str):
     return None
 
 # ------------------------------------------------------------------------------
-# Safe POST wrapper
+# Routes
 # ------------------------------------------------------------------------------
-def safe_post_action(url, headers, payload, room_id=None):
-    log.debug("➡️ Payload naar Halo:\n" + json.dumps(payload, indent=2))
-    r = requests.post(url, headers=headers, json=payload)
-    log.debug(f"⬅️ Halo response: {r.status_code} {r.text}")
-    if r.status_code != 200 and room_id:
-        send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
-    return r
-
-# ------------------------------------------------------------------------------
-# Ticket creation (onveranderd behalve logging)
-# ------------------------------------------------------------------------------
-def create_halo_ticket(summary, naam, email,
-                       omschrijving="", sindswanneer="", watwerktniet="",
-                       zelfgeprobeerd="", impacttoelichting="",
-                       impact_id=3, urgency_id=3, room_id=None):
-    user_id = get_halo_user_id(email)
-    if not user_id:
-        if room_id:
-            send_message(room_id, f"❌ {email} hoort niet bij Bossers & Cnossen (Main). Ticket niet aangemaakt.")
-        return None
-    log.info(f"👤 Ticket aanmaker: {email} (UserID: {user_id})")
-
-    h = get_halo_headers()
-    ticket = {
-        "Summary": summary,
-        "Details": f"👤 Ticket aangemaakt door {naam} ({email})",
-        "TypeID": HALO_TICKET_TYPE_ID,
-        "TeamID": HALO_TEAM_ID,
-        "Impact": int(impact_id),
-        "Urgency": int(urgency_id),
-        "SiteID": HALO_SITE_ID,
-        "CFReportedUser": f"{naam} ({email})"
-    }
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket])
-    r.raise_for_status()
-    data = r.json()[0] if isinstance(r.json(), list) else r.json()
-    ticket_id = data.get("id") or data.get("ID")
-    return {"id": ticket_id, "ref": ticket_id}
-
-# ------------------------------------------------------------------------------
-# Webex helpers & routes (onveranderd)
-# ------------------------------------------------------------------------------
-def send_message(room_id, text):
-    requests.post("https://webexapis.com/v1/messages",
-                  headers=WEBEX_HEADERS,
-                  json={"roomId": room_id, "markdown": text})
-
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "message": "Bot draait!"}
+
+# ------------------------------------------------------------------------------
+# Startup dump direct uitvoeren bij module import (Render/Gunicorn safe)
+# ------------------------------------------------------------------------------
+print("🚀 Ticketbot start op", flush=True)
+dump_site_users()
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
