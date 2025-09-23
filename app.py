@@ -35,17 +35,17 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 
-# 👩‍💻 Specifieke klant en site (Bossers & Cnossen → Main)
+# Specifieke klant en site (Bossers & Cnossen → Main)
 HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", "18"))
 
 ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# Simple in-memory user cache
+# In-memory user cache
 # ------------------------------------------------------------------------------
 USER_CACHE = {"users": [], "timestamp": 0}
-CACHE_TTL = 300  # 5 min
+CACHE_TTL = 300  # 5 minuten
 
 # ------------------------------------------------------------------------------
 # Halo helpers
@@ -90,7 +90,7 @@ def fetch_all_client_users(client_id: int):
     return all_users
 
 def get_main_users(force=False):
-    """Geeft uit cache de users van Main (Site 18). Refresh elke 5 min."""
+    """Geeft alle Main-users, cached voor 5 min."""
     now = time.time()
     if not force and USER_CACHE["users"] and now - USER_CACHE["timestamp"] < CACHE_TTL:
         return USER_CACHE["users"]
@@ -104,7 +104,7 @@ def get_main_users(force=False):
     return main_users
 
 def get_halo_user_id(email: str):
-    """Zoekt UserID in cached lijst van Main (Site 18)."""
+    """Zoekt user in cached lijst van Main (Site 18)."""
     if not email:
         return None
     users = get_main_users()
@@ -119,8 +119,14 @@ def get_halo_user_id(email: str):
             return u.get("id")
     return None
 
+def preload_user_cache():
+    """Preload cache bij startup (per direct alle 341 users)."""
+    log.info("🔄 Preloading Halo user cache...")
+    users = get_main_users(force=True)
+    log.info(f"✅ {len(users)} Main-users cached at startup.")
+
 # ------------------------------------------------------------------------------
-# Ticket functies
+# Ticket & notes
 # ------------------------------------------------------------------------------
 def safe_post_action(url, headers, payload, room_id=None):
     r = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -154,10 +160,9 @@ def create_halo_ticket(summary, naam, email,
     data = r.json()[0] if isinstance(r.json(), list) else r.json()
     ticket_id = data.get("id") or data.get("ID")
 
-    # Vragenlijst note
     qa_note = (
         f"**Ticket vragenlijst ({naam}, {email})**\n\n"
-        f"- Probleemomschrijving: {omschrijving or '—'}\n"
+        f"- Omschrijving: {omschrijving or '—'}\n"
         f"- Sinds wanneer: {sindswanneer or '—'}\n"
         f"- Wat werkt niet: {watwerktniet or '—'}\n"
         f"- Zelf geprobeerd: {zelfgeprobeerd or '—'}\n"
@@ -183,10 +188,9 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None
             send_message(room_id, f"❌ Notitie niet toegevoegd: {email} niet in Main.")
         return
     h = get_halo_headers()
-    note_text = f"{sender} ({email}) schreef:\n{text}"
     payload = {
         "TicketID": int(ticket_id),
-        "Details": note_text,
+        "Details": f"{sender} ({email}) schreef:\n{text}",
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
         "VisibleToCustomer": True,
@@ -285,7 +289,7 @@ def halo_webhook():
         return {"status": "ignored"}
     h = get_halo_headers()
 
-    # Status updates
+    # Status
     t_detail = requests.get(f"{HALO_API_BASE}/Tickets/{t_id}", headers=h, timeout=30)
     if t_detail.status_code == 200:
         status = t_detail.json().get("StatusName") or t_detail.json().get("Status")
@@ -309,9 +313,10 @@ def health():
     return {"status": "ok", "message": "Bot draait!"}
 
 # ------------------------------------------------------------------------------
-# Startup
+# Startup preload
 # ------------------------------------------------------------------------------
-print("🚀 Ticketbot is gestart – alles werkt nu end-to-end (cache, users, tickets, notes).", flush=True)
+print("🚀 Ticketbot start – preload users cache", flush=True)
+preload_user_cache()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
