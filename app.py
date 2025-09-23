@@ -24,7 +24,7 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-# ✅ Uit jouw Halo configuratie
+# Uit jouw Halo configuratie
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
 HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))
 
@@ -54,22 +54,39 @@ def get_halo_headers():
         "Content-Type": "application/json"
     }
 
-def get_halo_user_id(email):
-    """Zoekt UserID in Halo, maar alleen binnen SiteID 18 (Bossers & Cnossen Main)."""
+def get_halo_user_id(email: str):
+    """Zoekt UserID alléén binnen Site Main (ID 18)."""
     if not email:
         return None
     h = get_halo_headers()
-    filters = ["Email", "NetworkLogin", "ADObject"]
-    for f in filters:
-        url = f"{HALO_API_BASE}/Users?$filter={f} eq '{email}' and SiteID eq {HALO_SITE_ID}"
+
+    try:
+        # Haal alle users van site Main (SiteID = 18)
+        url = f"{HALO_API_BASE}/Sites/{HALO_SITE_ID}/Users"
         r = requests.get(url, headers=h)
-        if r.status_code == 200:
-            users = r.json()
-            if isinstance(users, list) and len(users) > 0:
-                user = users[0]
-                print(f"✅ Lookup {f}={email}, SiteID={HALO_SITE_ID} → UserID {user.get('ID')}")
-                return user.get("ID")
-    print(f"❌ Geen user gevonden in Halo voor {email} (SiteID {HALO_SITE_ID})")
+        r.raise_for_status()
+        site_users = r.json() if isinstance(r.json(), list) else []
+    except Exception as e:
+        print(f"❌ Kon site users niet ophalen: {e}")
+        return None
+
+    email = email.strip().lower()
+
+    # Zoek in de lijst (Email, NetworkLogin, ADObject)
+    for user in site_users:
+        if not isinstance(user, dict):
+            continue
+        if user.get("Email", "").lower() == email:
+            print(f"✅ Gevonden user via email {email} → UserID {user.get('ID')}")
+            return user.get("ID")
+        if user.get("NetworkLogin", "").lower() == email:
+            print(f"✅ Gevonden user via NetworkLogin {email} → UserID {user.get('ID')}")
+            return user.get("ID")
+        if user.get("ADObject", "").lower() == email:
+            print(f"✅ Gevonden user via ADObject {email} → UserID {user.get('ID')}")
+            return user.get("ID")
+
+    print(f"❌ Geen user gevonden voor {email} in SiteID {HALO_SITE_ID}")
     return None
 
 # ------------------------------------------------------------------------------
