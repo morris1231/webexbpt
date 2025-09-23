@@ -9,7 +9,10 @@ load_dotenv()
 app = Flask(__name__)
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN", "").strip()
-WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
+WEBEX_HEADERS = {
+    "Authorization": f"Bearer {WEBEX_TOKEN}",
+    "Content-Type": "application/json"
+}
 
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
@@ -21,8 +24,9 @@ HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
 
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  # External/Public Note
-HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       # Service account
+# ✅ uit jouw Halo configuratie
+HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))  
+HALO_FALLBACK_USERID = int(os.getenv("HALO_FALLBACK_USERID", "0"))       
 
 ticket_room_map = {}
 
@@ -42,14 +46,16 @@ def get_halo_headers():
         data=urllib.parse.urlencode(payload)
     )
     r.raise_for_status()
-    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {r.json()['access_token']}",
+        "Content-Type": "application/json"
+    }
 
 def get_halo_user_id(email):
-    """Zoekt UserID in Halo obv e-mail. Eerst Email veld, dan NetworkLogin, dan ADObject."""
+    """Zoekt UserID in Halo: eerst Email, dan NetworkLogin, dan ADObject"""
     if not email:
         return None
     h = get_halo_headers()
-
     filters = ["Email", "NetworkLogin", "ADObject"]
     for f in filters:
         url = f"{HALO_API_BASE}/Users?$filter={f} eq '{email}'"
@@ -58,7 +64,6 @@ def get_halo_user_id(email):
             user = r.json()[0]
             print(f"✅ Lookup {f}={email} → UserID {user.get('ID')}")
             return user.get("ID")
-
     print(f"❌ Geen user gevonden in Halo voor {email}")
     return None
 
@@ -69,10 +74,8 @@ def safe_post_action(url, headers, payload, room_id=None):
     print("➡️ Payload naar Halo:", json.dumps(payload, indent=2))
     r = requests.post(url, headers=headers, json=payload)
     print("⬅️ Halo response:", r.status_code, r.text)
-
     if r.status_code != 200 and room_id:
-        send_message(room_id, f"⚠️ Halo fout {r.status_code}:\n```\n{r.text}\n```")
-
+        send_message(room_id, f"⚠️ Halo error {r.status_code}:\n```\n{r.text}\n```")
     return r
 
 # ------------------------------------------------------------------------------
@@ -86,6 +89,7 @@ def create_halo_ticket(summary, naam, email,
     user_id = get_halo_user_id(email) or HALO_FALLBACK_USERID
     print(f"👤 Ticket aanmaker → Email: {email}, UserID: {user_id}")
 
+    # Ticket aanmaken
     ticket = {
         "Summary": summary,
         "Details": f"👤 Ticket aangemaakt door {naam} ({email})",
@@ -114,10 +118,12 @@ def create_halo_ticket(summary, naam, email,
     note_payload = {
         "TicketID": int(ticket_id),
         "Details": qa_note,
+        "Note": qa_note,                       # fallback veld
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
         "VisibleToCustomer": True,
-        "UserID": int(user_id)
+        "UserID": int(user_id),
+        "TimeSpent": 0                         # verplicht bij sommige setups
     }
     safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=note_payload)
     return {"id": ticket_id, "ref": ticket_id}
@@ -134,10 +140,12 @@ def add_note_to_ticket(ticket_id, text, sender="Webex", email=None, room_id=None
     payload = {
         "TicketID": int(ticket_id),
         "Details": note_text,
+        "Note": note_text,
         "ActionTypeID": HALO_ACTIONTYPE_PUBLIC,
         "IsPrivate": False,
         "VisibleToCustomer": True,
-        "UserID": int(user_id)
+        "UserID": int(user_id),
+        "TimeSpent": 0
     }
     safe_post_action(f"{HALO_API_BASE}/Actions", headers=h, payload=payload, room_id=room_id)
 
