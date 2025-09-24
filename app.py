@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - Maximaal duidelijk voor jouw probleem
+# Logging - Nu met REAL-TIME STRUCTUURANALYSE
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,174 +14,139 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - Nu met FORCED correcties voor jouw probleem
+# Config - GEEN RUIMTE VOOR FOUTEN
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
 
-# API credentials (VERPLICHT: vul deze in je .env in)
+# API credentials
 HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 
-# ✅ FORCEER de JUISTE AUTH URL (geen discussie mogelijk!)
-HALO_AUTH_URL      = "https://bncuat.halopsa.com/oauth2/token"  # GEEN /auth/token!
+# ✅ FORCEER correcte AUTH URL (GEEN discussie)
+HALO_AUTH_URL      = "https://bncuat.halopsa.com/oauth2/token"
 HALO_API_BASE      = os.getenv("HALO_API_BASE", "https://bncuat.halopsa.com/api").strip()
 
-# Jouw specifieke IDs
+# Jouw IDs
 HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))   # Bossers & Cnossen
 HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))         # Main site
 
-# Controleer of .env correct is ingesteld
+# Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
-    log.critical("🔥 FATAAL: HALO_CLIENT_ID of HALO_CLIENT_SECRET ontbreekt in .env!")
-    log.critical("👉 Maak een .env bestand met:")
-    log.critical("HALO_CLIENT_ID=jouw_id")
-    log.critical("HALO_CLIENT_SECRET=jouw_secret")
+    log.critical("🔥 FATAAL: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - Nu met REAL-TIME DEBUGGING
+# Halo API helpers - MET REAL-TIME DEBUGGING
 # ------------------------------------------------------------------------------
 def get_halo_headers():
-    """Haal token op met de ENIGE werkbare methode"""
+    """Authenticatie met geforceerde URL"""
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    
     try:
-        log.info("🔐 Probeer authenticatie (LET OP: Gebruikt FORCEERDE URL)")
-        log.info(f"  → Gebruikte URL: {HALO_AUTH_URL}")
-        log.info(f"  → Client ID: {HALO_CLIENT_ID[:5]}{'*' * (len(HALO_CLIENT_ID)-5)}")
-        
         r = requests.post(
             HALO_AUTH_URL,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data=urllib.parse.urlencode(payload),
             timeout=10
         )
-        
-        if r.status_code != 200:
-            log.critical(f"❌ AUTH MISLUKT ({r.status_code}): {r.text}")
-            log.critical("👉 OPLOSSING:")
-            log.critical("1. GA NAAR: Instellingen → API-toegang in Halo")
-            log.critical("2. ZORG DAT 'Teams' AANGEVINKT IS")
-            log.critical("3. HERSTART DE APP NA WIJZIGINGEN")
-            raise Exception("Authenticatie mislukt - zie logs voor details")
-        
-        token = r.json()["access_token"]
-        log.info("✅ Authenticatie GELUKT! Token verkregen.")
+        r.raise_for_status()
         return {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {r.json()['access_token']}",
             "Content-Type": "application/json"
         }
     except Exception as e:
-        log.critical(f"🔥 FATALE FOUT: {str(e)}")
+        log.critical(f"❌ AUTH MISLUKT: {str(e)}")
+        log.critical(f"➡️ Response: {r.text if 'r' in locals() else 'Geen response'}")
+        log.critical("👉 OPLOSSING:")
+        log.critical("1. GA NAAR: Instellingen → API-toegang")
+        log.critical("2. VINK 'Teams' EXPLICIET AAN (niet alleen 'Algemeen')")
+        log.critical("3. DRUK OP 'OPSLAAN'")
+        log.critical("4. HERSTART DE APP VOLLEDIG")
         raise
 
 def fetch_main_users(client_id: int, site_id: int):
-    """HAAL ALLE GEBRUIKERS OP EN ANALYSEER STRUCTUUR"""
+    """HAAL GEBRUIKERS OP MET JUISTE NESTED FILTERING"""
     log.info(f"🔍 Start proces voor client {client_id}, site {site_id}")
     
     try:
         # Stap 1: Haal ALLE gebruikers op
-        all_users_url = f"{HALO_API_BASE}/Users"
-        log.info(f"➡️ API-aanvraag: {all_users_url}")
+        users_url = f"{HALO_API_BASE}/Users"
+        log.info(f"➡️ API-aanvraag: {users_url}")
         
         headers = get_halo_headers()
-        r = requests.get(all_users_url, headers=headers, timeout=30)
-        
-        if r.status_code != 200:
-            log.critical(f"❌ API FOUT ({r.status_code}): {r.text}")
-            log.critical("👉 OPLOSSING:")
-            log.critical("1. GA NAAR: Instellingen → API-toegang in Halo")
-            log.critical("2. ZORG DAT 'Teams' AANGEVINKT IS")
-            log.critical("3. HERSTART DE APP NA WIJZIGINGEN")
-            return []
+        r = requests.get(users_url, headers=headers, timeout=30)
+        r.raise_for_status()
         
         # Parse response
         data = r.json()
-        if isinstance(data, list):
-            users = data
-        else:
-            users = data.get("users", []) or data.get("Users", []) or []
+        users = data if isinstance(data, list) else data.get("users", []) or data.get("Users", [])
+        log.info(f"✅ {len(users)} gebruikers opgehaald - start filtering")
         
-        log.info(f"✅ {len(users)} gebruikers opgehaald - ANALYSEER STRUCTUUR")
-        
-        # Stap 2: Analyseer de EERSTE gebruiker voor debugging
+        # Stap 2: Analyseer EERSTE gebruiker voor structuur
         if users:
             first_user = users[0]
             log.info("🔍 STRUCTUUR ANALYSE - Eerste gebruiker:")
             
-            # Toon alle mogelijke velden gerelateerd aan site/client
+            # Toon alle relevante velden
             site_fields = [k for k in first_user.keys() if "site" in k.lower()]
             client_fields = [k for k in first_user.keys() if "client" in k.lower()]
             
-            log.info(f"  → Site-gerelateerde velden: {site_fields}")
-            log.info(f"  → Client-gerelateerde velden: {client_fields}")
+            log.info(f"  → Mogelijke site-velden: {site_fields}")
+            log.info(f"  → Mogelijke client-velden: {client_fields}")
             
-            # Toon waarden van deze velden
+            # Toon waarden voor debugging
             for field in site_fields + client_fields:
-                log.info(f"    - {field}: {first_user.get(field)}")
+                value = first_user.get(field)
+                log.info(f"    - {field}: {value} ({type(value).__name__})")
         
-        # Stap 3: Filter CORRECT op basis van actuele structuur
+        # Stap 3: Filter MET NESTED OBJECTEN (de echte oplossing)
         main_users = []
         for u in users:
-            # Halo slaat site/client NIET direct op gebruiker op!
-            # We moeten de 'site' en 'client' objecten checken
+            # Check voor directe site_id velden
+            site_id_val = str(
+                u.get("site_id") or 
+                u.get("SiteId") or 
+                u.get("siteId") or 
+                ""
+            ).strip()
             
-            site_match = False
-            client_match = False
+            # Check voor NESTED site object
+            if not site_id_val and "site" in u and isinstance(u["site"], dict):
+                site_id_val = str(u["site"].get("id", "")).strip()
             
-            # Check site relatie
-            if "site" in u and isinstance(u["site"], dict):
-                if str(u["site"].get("id", "")) == str(site_id):
-                    site_match = True
+            # Check voor directe client_id velden
+            client_id_val = str(
+                u.get("client_id") or 
+                u.get("ClientId") or 
+                u.get("clientId") or 
+                ""
+            ).strip()
             
-            # Check client relatie
-            if "client" in u and isinstance(u["client"], dict):
-                if str(u["client"].get("id", "")) == str(client_id):
-                    client_match = True
+            # Check voor NESTED client object
+            if not client_id_val and "client" in u and isinstance(u["client"], dict):
+                client_id_val = str(u["client"].get("id", "")).strip()
             
-            # Sommige versies gebruiken 'site_id' direct
-            if not site_match:
-                site_id_val = str(
-                    u.get("site_id") or 
-                    u.get("SiteId") or 
-                    u.get("siteId") or 
-                    ""
-                ).strip()
-                if site_id_val == str(site_id):
-                    site_match = True
-            
-            # Sommige versies gebruiken 'client_id' direct
-            if not client_match:
-                client_id_val = str(
-                    u.get("client_id") or 
-                    u.get("ClientId") or 
-                    u.get("clientId") or 
-                    ""
-                ).strip()
-                if client_id_val == str(client_id):
-                    client_match = True
-            
-            if site_match and client_match:
+            # Valideer of dit een Main-site gebruiker is
+            if site_id_val == str(site_id) and client_id_val == str(client_id):
                 main_users.append(u)
         
-        # Resultaat rapporteren
+        # Rapporteer resultaat
         if main_users:
             log.info(f"✅ {len(main_users)} JUISTE Main-site gebruikers gevonden!")
             if users:
                 example = main_users[0]
                 log.info(f"  → Voorbeeldgebruiker: ID={example.get('id')}, Naam='{example.get('name')}'")
+                log.info(f"    Site: {example.get('site', {}).get('id')}, Client: {example.get('client', {}).get('id')}")
         else:
-            log.error("❌ Geen Main-site gebruikers gevonden - ANALYSEER API RESPONSE")
-            log.error("👉 Volg deze stappen:")
-            log.error("1. Bezoek /debug-api om de RAW API response te zien")
-            log.error("2. Zoek naar 'site' en 'client' velden in de response")
-            log.error("3. Pas de filtering aan op basis van echte datastructuur")
+            log.error("❌ Geen Main-site gebruikers gevonden - STRUCTUUR KLOPT NIET")
+            log.error("👉 OPLOSSING:")
+            log.error("1. Bezoek /debug-structure om de echte API structuur te zien")
+            log.error("2. Pas de filtering aan op basis van ECHTE veldnamen")
         
         return main_users
     
@@ -190,17 +155,17 @@ def fetch_main_users(client_id: int, site_id: int):
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - Nu met EXTRA DEBUGGING
+# Routes - MET LIVE STRUCTUUR DEBUGGING
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
-        "next_steps": [
-            "1. Bezoek /debug voor configuratie details",
-            "2. Bezoek /debug-api voor RAW API response",
-            "3. Controleer logs voor STRUCTUUR ANALYSE"
+        "debug_routes": [
+            "/debug - Basis configuratie",
+            "/debug-structure - Echte API structuur",
+            "/debug-api - Raw API response"
         ]
     }
 
@@ -213,11 +178,15 @@ def users():
             "error": "Geen Main-site gebruikers gevonden",
             "critical_steps": [
                 "1. GA NAAR: Halo PSA → Instellingen → API-toegang",
-                "2. ZORG DAT 'Teams' AANGEVINKT IS (niet alleen 'Algemeen')",
-                "3. SLA DE WIJZIGINGEN OP",
-                "4. HERSTART DEZE APP VOLLEDIG"
+                "2. ZOEK JOUW API KEY EN KLIK BEWERKEN",
+                "3. VINK EXPLICIET 'Teams' AAN (niet alleen 'Algemeen')",
+                "4. DRUK OP 'OPSLAAN'",
+                "5. HERSTART DE APP VOLLEDIG"
             ],
-            "debug_info": "Bezoek /debug-api voor de exacte API response"
+            "next_steps": [
+                "Bezoek /debug-structure om te zien hoe jouw API data eruit ziet",
+                "Kijk naar 'site' en 'client' velden in de logs"
+            ]
         }), 500
     
     simplified = [{
@@ -235,87 +204,114 @@ def users():
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """Toon essentiële debug informatie"""
+    """Basis debug informatie"""
     return {
         "status": "debug-info",
-        "critical_checks": [
-            "1. HALO_AUTH_URL MOET ZIJN: https://bncuat.halopsa.com/oauth2/token (GEEN /auth/token!)",
-            "2. 'Teams' MOET AANGEVINKT ZIJN IN API-TOEGANG (Instellingen → API-toegang)",
-            "3. Geen nested endpoints gebruiken (/Sites/18/Users werkt NIET)"
-        ],
-        "current_config": {
-            "halo_auth_url": HALO_AUTH_URL,  # Moet correct zijn geforceerd
+        "config": {
+            "halo_auth_url": HALO_AUTH_URL,
             "halo_api_base": HALO_API_BASE,
             "client_id": HALO_CLIENT_ID_NUM,
             "site_id": HALO_SITE_ID
         },
-        "api_flow": [
-            "1. Authenticatie naar /oauth2/token (scope=all)",
-            "2. Haal ALLE gebruikers op via /Users",
-            "3. Filter LOKAAL op site/client relaties"
+        "critical_notes": [
+            "1. HALO_AUTH_URL MOET ZIJN: /oauth2/token (GEEN /auth/token!)",
+            "2. 'Teams' MOET EXPLICIET AANGEVINKT ZIJN IN API-TOEGANG",
+            "3. Gebruik NIET /Sites/18/Users - dit endpoint bestaat NIET"
         ],
-        "halo_api_must_know": [
-            "Gebruikers hebben GEEN directe site_id/client_id velden!",
-            "In plaats daarvan hebben ze 'site' en 'client' OBJECTEN",
-            "Voorbeeld structuur: {\"id\": 123, \"name\": \"Jan\", \"site\": {\"id\": 18}, \"client\": {\"id\": 12}}"
+        "api_flow": [
+            "1. Authenticatie naar /oauth2/token",
+            "2. Haal ALLE gebruikers op via /Users",
+            "3. Filter LOKAAL op site/client objecten"
         ]
     }
 
-@app.route("/debug-api", methods=["GET"])
-def debug_api():
-    """Toon de RAW API response voor perfecte debugging"""
+@app.route("/debug-structure", methods=["GET"])
+def debug_structure():
+    """Toon de ECHTE structuur van gebruikersdata"""
     try:
         headers = get_halo_headers()
         r = requests.get(f"{HALO_API_BASE}/Users", headers=headers, timeout=30)
+        r.raise_for_status()
         
-        if r.status_code != 200:
-            return {
-                "error": "API fout",
-                "status": r.status_code,
-                "response": r.text[:500],
-                "solution": [
-                    "1. Zorg dat 'Teams' is aangevinkt in API-toegang",
-                    "2. Controleer of je .env correct is ingesteld",
-                    "3. Herstart de app na API-permissie wijzigingen"
-                ]
-            }, 500
-        
-        # Toon alleen de eerste gebruiker voor overzicht
         data = r.json()
-        if isinstance(data, list) and data:
-            sample = data[0]
-            return {
-                "status": "success",
-                "total_users": len(data),
-                "sample_user": sample,
-                "note": "Dit is de REAL-TIME API response - kijk naar 'site' en 'client' velden"
+        users = data if isinstance(data, list) else data.get("users", []) or []
+        
+        if not users:
+            return {"error": "Geen gebruikers gevonden in API response"}, 500
+        
+        # Analyseer de EERSTE gebruiker
+        sample = users[0]
+        structure = {
+            "total_users": len(users),
+            "sample_user_id": sample.get("id"),
+            "sample_user_name": sample.get("name"),
+            "site_fields": {},
+            "client_fields": {}
+        }
+        
+        # Verzamel site-gerelateerde velden
+        for key in sample.keys():
+            if "site" in key.lower():
+                structure["site_fields"][key] = {
+                    "value": sample[key],
+                    "type": type(sample[key]).__name__
+                }
+        
+        # Verzamel client-gerelateerde velden
+        for key in sample.keys():
+            if "client" in key.lower():
+                structure["client_fields"][key] = {
+                    "value": sample[key],
+                    "type": type(sample[key]).__name__
+                }
+        
+        # Controleer op geneste objecten
+        if "site" in sample and isinstance(sample["site"], dict):
+            structure["site_object"] = {
+                "id": sample["site"].get("id"),
+                "name": sample["site"].get("name")
             }
-        return {"error": "Lege API response", "raw_data": data}, 500
+        
+        if "client" in sample and isinstance(sample["client"], dict):
+            structure["client_object"] = {
+                "id": sample["client"].get("id"),
+                "name": sample["client"].get("name")
+            }
+        
+        return {
+            "status": "success",
+            "message": "Dit is de ECHTE structuur van jouw API response",
+            "data": structure,
+            "note": "Gebruik deze veldnamen in je filtering"
+        }
     
     except Exception as e:
         return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
-# App Start - Nu Met Forceer-Modus
+# App Start - MET FORCEERDE FIXES
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # BELANGRIJK: Forceer de juiste auth URL (geen discussie)
+    # Forceer correcte auth URL (geen discussie)
     os.environ["HALO_AUTH_URL"] = "https://bncuat.halopsa.com/oauth2/token"
     
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS FIXER - ULTIME SOLUTION")
+    log.info("🚀 HALO MAIN USERS FIXER - DEFINTIEVE OPLOSSING")
     log.info("-"*70)
-    log.info("🔥 BELANGRIJK: Deze app FORCEERT de juiste auth URL!")
-    log.info("   → Gebruikt: https://bncuat.halopsa.com/oauth2/token (GEEN /auth/token)")
+    log.info("🔥 BELANGRIJK: Deze code werkt ALLEEN als:")
+    log.info("1. Je 'Teams' hebt aangevinkt in API-toegang")
+    log.info("2. Je de app VOLLEDIG herstart na API-wijzigingen")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE STAPPEN ALS HET NOG STEEDS NIET WERKT:")
-    log.info("1. GA NAAR: Halo PSA → Instellingen → API-toegang")
-    log.info("2. ZOEK JOUW API KEY EN KLIK BEWERKEN")
+    log.info("👉 VOLG DEZE STAPPEN ALS HET NOG NIET WERKT:")
+    log.info("1. GA NAAR: Instellingen → API-toegang")
+    log.info("2. KLIK OP JOUW API KEY → BEWERKEN")
     log.info("3. VINK EXPLICIET 'Teams' AAN (niet alleen 'Algemeen')")
     log.info("4. DRUK OP 'OPSLAAN'")
-    log.info("5. HERSTART DEZE APP VOLLEDIG (niet alleen wijzigingen opslaan)")
+    log.info("5. SLUIT DE APP VOLLEDIG AF")
+    log.info("6. HERSTART DE APP")
+    log.info("7. BEZOEK EERST /debug-structure")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
