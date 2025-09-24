@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET VOLLEDIGE RESPONSE ANALYSE
+# Logging - MET SPECIFIEKE API STRUCTUUR
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - VOLLEDIG ROBUST
+# Config - AANGEKOPPELD AAN JOUW API RESPONSE
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -27,9 +27,9 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Jouw correcte IDs
-HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (URL ID)
-HALO_SITE_ID       = 18  # Main (URL ID)
+# Jouw correcte IDs (zoals in URL)
+HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen
+HALO_SITE_ID       = 18  # Main
 
 # Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
@@ -37,7 +37,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET VOLLEDIGE RESPONSE ANALYSE
+# Halo API helpers - MET JOUW SPECIFIEKE RESPONSE STRUCTUUR
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -66,7 +66,7 @@ def get_halo_headers():
         raise
 
 def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET VOLLEDIGE RESPONSE ANALYSE"""
+    """HAAL ALLE GEBRUIKERS OP MET JOUW SPECIFIEKE RESPONSE STRUCTUUR"""
     log.info("🔍 Haal ALLE gebruikers op voor volledig overzicht")
     
     try:
@@ -82,39 +82,30 @@ def fetch_all_users():
         
         if r.status_code != 200:
             log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
-            log.error("👉 PROBEER DEZE CURL COMMAND IN TERMINAL:")
-            log.error(f"curl -X GET '{users_url}' -H 'Authorization: Bearer $(curl -X POST \\\"{HALO_AUTH_URL}\\\" -d \\\"grant_type=client_credentials&client_id={HALO_CLIENT_ID}&client_secret=******&scope=all\\\") | jq .access_token)'")
             return []
         
-        # Parse response - analyseer ALLE mogelijke structuren
+        # Parse response - SPECIFIEK VOOR JOUW STRUCTUUR
         data = r.json()
         log.info(f"🔍 RESPONSE STRUCTUUR: {type(data).__name__}")
         
-        # Mogelijke gebruikersvelden
-        user_fields = [
-            "users", "Users", "user", "User",
-            "items", "data", "results", "entry"
-        ]
-        
-        # Zoek gebruikers in de response
-        users = []
-        if isinstance(data, list):
-            log.info(f"✅ Gebruikers gevonden als LIJST ({len(data)} items)")
-            users = data
+        # 👉 SPECIALE FIX VOOR JOUW RESPONSE STRUCTUUR 👈
+        # Jouw response heeft een 'data' wrapper: {"data": {"record_count":50, "users": [...]} }
+        if "data" in data and isinstance(data["data"], dict):
+            log.info("✅ Response heeft 'data' wrapper - gebruik geneste structuur")
+            users_data = data["data"]
         else:
-            log.info("🔍 Zoek gebruikers in object response...")
-            for field in user_fields:
-                if field in data and isinstance(data[field], list):
-                    log.info(f"✅ Gebruikers gevonden in veld: '{field}' ({len(data[field])} items)")
-                    users = data[field]
-                    break
+            users_data = data
+        
+        # Haal de users lijst op
+        users = users_data.get("users", [])
+        if not users:
+            users = users_data.get("Users", [])
         
         if not users:
             log.warning("⚠️ Geen gebruikers gevonden in API response")
             log.warning("💡 Mogelijke oorzaken:")
-            log.warning("1. Verkeerde response structuur - bekijk RAW response bovenaan")
+            log.warning("1. Verkeerde response structuur - zie RAW response bovenaan")
             log.warning("2. Geen rechten voor gebruikersdata - controleer 'Teams' rechten")
-            log.warning("3. Lege klant/site - geen gebruikers gekoppeld")
             return []
         
         log.info(f"✅ {len(users)} gebruikers opgehaald - volledig overzicht beschikbaar")
@@ -124,29 +115,46 @@ def fetch_all_users():
         main_users_count = 0
         
         for u in users:
-            # Haal site ID op (alle varianten) + converteer naar float
+            # 👉 SPECIALE FIX VOOR JOUW VELD NAMEN 👈
+            # Jouw response gebruikt site_id_int (integer) i.p.v. site_id (float)
             site_id_val = None
             site_key_used = None
-            for key in ["siteid", "site_id", "SiteId", "siteId", "SiteID"]:
-                if key in u and u[key] is not None:
-                    try:
-                        site_id_val = float(u[key])
-                        site_key_used = key
-                        break
-                    except (TypeError, ValueError):
-                        pass
             
-            # Haal client ID op (alle varianten) + converteer naar float
+            # Probeer eerst site_id_int (integer versie)
+            if "site_id_int" in u and u["site_id_int"] is not None:
+                try:
+                    site_id_val = float(u["site_id_int"])
+                    site_key_used = "site_id_int"
+                except (TypeError, ValueError):
+                    pass
+            
+            # Als dat niet werkt, probeer site_id (float versie)
+            if site_id_val is None and "site_id" in u and u["site_id"] is not None:
+                try:
+                    site_id_val = float(u["site_id"])
+                    site_key_used = "site_id"
+                except (TypeError, ValueError):
+                    pass
+            
+            # Haal client ID op
             client_id_val = None
             client_key_used = None
-            for key in ["clientid", "client_id", "ClientId", "clientId", "ClientID"]:
-                if key in u and u[key] is not None:
-                    try:
-                        client_id_val = float(u[key])
-                        client_key_used = key
-                        break
-                    except (TypeError, ValueError):
-                        pass
+            
+            # Probeer eerst client_id_int
+            if "client_id_int" in u and u["client_id_int"] is not None:
+                try:
+                    client_id_val = float(u["client_id_int"])
+                    client_key_used = "client_id_int"
+                except (TypeError, ValueError):
+                    pass
+            
+            # Als dat niet werkt, probeer client_id
+            if client_id_val is None and "client_id" in u and u["client_id"] is not None:
+                try:
+                    client_id_val = float(u["client_id"])
+                    client_key_used = "client_id"
+                except (TypeError, ValueError):
+                    pass
             
             # Bepaal of dit een Main-site gebruiker is
             is_main_user = (
@@ -173,12 +181,12 @@ def fetch_all_users():
         
         log.info(f"📊 Totaal Main-site gebruikers: {main_users_count}/{len(users)}")
         
-        # Log de eerste gebruiker voor debugging
-        if enriched_users:
-            first_user = enriched_users[0]
-            log.info(f"🔍 Eerste gebruiker: ID={first_user['user'].get('id')}, Naam='{first_user['user'].get('name')}'")
-            log.info(f"  Site: {first_user['debug']['site_id_value']} (via '{first_user['debug']['site_key_used']}')")
-            log.info(f"  Client: {first__user['debug']['client_id_value']} (via '{first_user['debug']['client_key_used']}')")
+        # Log de eerste Main-site gebruiker voor debugging
+        if main_users_count > 0:
+            main_user = next(u for u in enriched_users if u["is_main_user"])
+            log.info(f"🔍 Voorbeeld Main-gebruiker: ID={main_user['user'].get('id')}, Naam='{main_user['user'].get('name')}'")
+            log.info(f"  Site: {main_user['debug']['site_id_value']} (via '{main_user['debug']['site_key_used']}')")
+            log.info(f"  Client: {main_user['debug']['client_id_value']} (via '{main_user['debug']['client_key_used']}')")
         
         return enriched_users
     
@@ -187,17 +195,17 @@ def fetch_all_users():
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET VOLLEDIGE RESPONSE ANALYSE
+# Routes - MET JOUW SPECIFIEKE RESPONSE STRUCTUUR
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
-        "message": "Halo Main users app draait! Bezoek /all-users voor volledig overzicht",
+        "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
-            "1. Bezoek /debug-raw voor de ONBEBERKTE API response",
-            "2. Geen veronderstellingen meer over response structuur",
-            "3. Werkt met ALLE mogelijke response formaten"
+            "1. Werkt MET JOUW SPECIFIEKE API RESPONSE STRUCTUUR",
+            "2. Gebruikt 'data' wrapper en site_id_int/client_id_int",
+            "3. Bezoek /all-users voor volledig overzicht"
         ]
     }
 
@@ -211,17 +219,17 @@ def users():
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
-                "1. Bezoek /debug-raw voor de ONBEBERKTE API response",
+                "1. Bezoek /all-users voor volledig overzicht",
                 "2. Controleer of client_id=12 en site_id=18 correct zijn",
                 "3. Zorg dat 'Teams' is aangevinkt in API-toegang"
             ],
-            "debug_info": "Deze app logt nu de VOLLEDIGE API response voor analyse"
+            "debug_info": "Deze app is afgestemd op jouw specifieke API response structuur"
         }), 500
     
     simplified = [{
         "id": u["user"].get("id"),
         "name": u["user"].get("name") or "Onbekend",
-        "email": u["user"].get("EmailAddress") or u["user"].get("email") or "Geen email"
+        "email": u["user"].get("emailaddress") or u["user"].get("email") or "Geen email"
     } for u in main_users]
     
     return jsonify({
@@ -249,7 +257,7 @@ def all_users():
         user_data = {
             "id": eu["user"].get("id"),
             "name": eu["user"].get("name") or "Onbekend",
-            "email": eu["user"].get("EmailAddress") or eu["user"].get("email") or "Geen email",
+            "email": eu["user"].get("emailaddress") or eu["user"].get("email") or "Geen email",
             "is_main_user": eu["is_main_user"],
             "debug": eu["debug"]
         }
@@ -264,58 +272,22 @@ def all_users():
     
     return jsonify(response)
 
-@app.route("/debug-raw", methods=["GET"])
-def debug_raw():
-    """Toon DE VOLLEDIGE, ONBEBERKTE API RESPONSE"""
-    try:
-        headers = get_halo_headers()
-        r = requests.get(f"{HALO_API_BASE}/Users", headers=headers, timeout=30)
-        
-        if r.status_code != 200:
-            return {
-                "error": f"API fout ({r.status_code})",
-                "response": r.text[:1000],
-                "curl_command": f"curl -X GET '{HALO_API_BASE}/Users' -H 'Authorization: Bearer ...'"
-            }, 500
-        
-        try:
-            # Probeer als JSON
-            data = r.json()
-            return {
-                "status": "success",
-                "response_type": "JSON",
-                "data": data,
-                "note": "Deze response is in JSON formaat - controleer de structuur"
-            }
-        except:
-            # Als het geen JSON is
-            return {
-                "status": "success",
-                "response_type": "RAW_TEXT",
-                "data": r.text[:1000],
-                "note": "Deze response is GEEN JSON - mogelijk verkeerde authenticatie"
-            }
-    
-    except Exception as e:
-        return {"error": str(e)}, 500
-
 # ------------------------------------------------------------------------------
-# App Start - MET VOLLEDIGE RESPONSE ANALYSE
+# App Start - MET JOUW SPECIFIEKE RESPONSE STRUCTUUR
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - VOLLEDIGE RESPONSE ANALYSE")
+    log.info("🚀 HALO MAIN USERS - AFGESTEMD OP JOUW SPECIFIEKE API")
     log.info("-"*70)
-    log.info("✅ Logt de VOLLEDIGE RAW API response voor debugging")
-    log.info("✅ Ondersteunt ALLE mogelijke response formaten")
-    log.info("✅ Geen veronderstellingen meer over structuur")
+    log.info("✅ Werkt MET DE 'data' WRAPPER IN DE API RESPONSE")
+    log.info("✅ Gebruikt site_id_int/client_id_int (GEEN floats!)")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE STAPPEN VOOR DEBUGGING:")
-    log.info("1. Bezoek EERST /debug-raw")
-    log.info("2. Analyseer de EXACTE API response")
-    log.info("3. Pas de code aan op basis van ECHTE data")
+    log.info("👉 VOLG DEZE STAPPEN:")
+    log.info("1. Bezoek /all-users voor volledig overzicht")
+    log.info("2. Controleer de 'is_main_user' vlag voor elke gebruiker")
+    log.info("3. Gebruik /users voor ALLEEN de Main-site gebruikers")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
