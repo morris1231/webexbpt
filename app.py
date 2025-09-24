@@ -27,10 +27,6 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Jouw correcte IDs (als fallback)
-HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (URL ID)
-HALO_SITE_ID       = 18  # Main (URL ID)
-
 # Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
@@ -65,193 +61,239 @@ def get_halo_headers():
         raise
 
 def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET DYNAMISCHE GROEPFILTERING OP BASIS VAN DANIEL BERLO"""
-    log.info("🔍 Start met het ophalen van alle gebruikers met dynamische groepfiltering")
+    """HAAL EERST ALLE GEBRUIKERS OP, ZOEK DAN DANIEL BERLO EN FILTER OP ZIJN GROEP"""
+    log.info("🔍 Start met het ophalen van alle gebruikers")
     all_users = []
     page = 1
     max_pages = 100
     consecutive_empty = 0
     danja_user = None
-    dynamic_site_id = None
-    dynamic_client_id = None
+    berlo_email_variants = [
+        "danja.berlo@bnc.nl",
+        "danja.berlo@bnc",
+        "danja.berlo@bncnl",
+        "daniel.berlo@bnc.nl",
+        "d.berlo@bnc.nl",
+        "berlo@bnc.nl"
+    ]
+    berlo_name_variants = [
+        "danja berlo",
+        "daniel berlo",
+        "danja",
+        "berlo",
+        "danja-berlo",
+        "d berlo"
+    ]
 
-    try:
-        # Stap 1: Haal alle gebruikers op
-        while page <= max_pages:
-            users_url = f"{HALO_API_BASE}/Users?page={page}&pageSize=50"
-            log.info(f"➡️ API-aanvraag (pagina {page}): {users_url}")
+    # Stap 1: Haal alle gebruikers op
+    while page <= max_pages:
+        users_url = f"{HALO_API_BASE}/Users?page={page}&pageSize=50"
+        log.info(f"➡️ API-aanvraag (pagina {page}): {users_url}")
+        
+        try:
+            headers = get_halo_headers()
+            r = requests.get(users_url, headers=headers, timeout=30)
             
-            try:
-                headers = get_halo_headers()
-                r = requests.get(users_url, headers=headers, timeout=30)
-                
-                if r.status_code != 200:
-                    log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
-                    if r.status_code in [429, 500, 502, 503, 504]:
-                        time.sleep(2)
-                        continue
-                    break
-                    
-                data = r.json()
-                
-                # Verwerk 'data' wrapper
-                if "data" in data and isinstance(data["data"], dict):
-                    users_data = data["data"]
-                else:
-                    users_data = data
-                
-                # Haal de users lijst op
-                users = users_data.get("users", [])
-                if not users:
-                    users = users_data.get("Users", [])
-                
-                if not users:
-                    consecutive_empty += 1
-                    if consecutive_empty >= 3:
-                        log.info("✅ Stoppen met ophalen na 3 lege pagina's")
-                        break
-                    page += 1
-                    time.sleep(0.5)
+            if r.status_code != 200:
+                log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
+                if r.status_code in [429, 500, 502, 503, 504]:
+                    time.sleep(2)
                     continue
+                break
                 
-                consecutive_empty = 0
-                all_users.extend(users)
-                log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)})")
-                
-                if len(users) < 50:
-                    log.info("✅ Laatste pagina bereikt (minder dan 50 gebruikers)")
+            data = r.json()
+            
+            # Verwerk 'data' wrapper
+            if "data" in data and isinstance(data["data"], dict):
+                users_data = data["data"]
+            else:
+                users_data = data
+            
+            # Haal de users lijst op
+            users = users_data.get("users", [])
+            if not users:
+                users = users_data.get("Users", [])
+            
+            if not users:
+                consecutive_empty += 1
+                if consecutive_empty >= 3:
+                    log.info("✅ Stoppen met ophalen na 3 lege pagina's")
                     break
-                
                 page += 1
-                time.sleep(0.3)
-                
-            except Exception as e:
-                log.error(f"⚠️ Fout bij ophalen pagina {page}: {str(e)}")
-                break
-
-        log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers")
-
-        # Stap 2: Zoek Daniel Berlo om de juiste groep te identificeren
-        log.info("🔍 Zoeken naar Daniel Berlo om de juiste groep te identificeren...")
-        berlo_email = "danja.berlo@bnc.nl"
-        for u in all_users:
-            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
-            name = str(u.get("name", "")).strip().lower()
+                time.sleep(0.5)
+                continue
             
-            # Check op Daniel Berlo (case-insensitive en domein check)
-            if berlo_email in email or ("berlo" in name and "bnc" in email):
-                danja_user = u
-                log.info(f"✅ GEVONDEN: Daniel Berlo - ID: {u.get('id')}, Email: {email}")
-                break
-
-        # Stap 3: Bepaal de juiste groep ID's op basis van Daniel Berlo
-        if danja_user:
-            # Haal site_id op uit Daniel Berlo's record
-            site_id_keys = ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]
-            for key in site_id_keys:
-                if key in danja_user and danja_user[key] is not None:
-                    try:
-                        dynamic_site_id = str(danja_user[key]).strip()
-                        log.info(f"✅ Gebruik site_id van Daniel Berlo: {dynamic_site_id} (gevonden via '{key}')")
-                        break
-                    except:
-                        continue
+            consecutive_empty = 0
+            all_users.extend(users)
+            log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)})")
             
-            # Haal client_id op uit Daniel Berlo's record
-            client_id_keys = ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]
-            for key in client_id_keys:
-                if key in danja_user and danja_user[key] is not None:
-                    try:
-                        dynamic_client_id = str(danja_user[key]).strip()
-                        log.info(f"✅ Gebruik client_id van Daniel Berlo: {dynamic_client_id} (gevonden via '{key}')")
-                        break
-                    except:
-                        continue
-            
-            # Valideer of we bruikbare ID's hebben gevonden
-            if not dynamic_site_id or not dynamic_client_id:
-                log.warning("⚠️ Kon geen volledige groepinformatie vinden in Daniel Berlo's record")
-                log.warning("➡️ Gebruik fallback naar hardcoded waarden (mogelijk niet de juiste gebruikers)")
-                dynamic_site_id = str(HALO_SITE_ID)
-                dynamic_client_id = str(HALO_CLIENT_ID_NUM)
-        else:
-            log.error("❌ FATAAL: Daniel Berlo niet gevonden in gebruikerslijst!")
-            log.error("➡️ Zorg dat:")
-            log.error("   1. De API key toegang heeft tot alle gebruikers")
-            log.error("   2. Daniel Berlo correct is ingesteld in Halo")
-            log.error("➡️ Gebruik hardcoded waarden als noodoplossing (risico op verkeerde gebruikers)")
-            dynamic_site_id = str(HALO_SITE_ID)
-            dynamic_client_id = str(HALO_CLIENT_ID_NUM)
-
-        # Stap 4: Filter alle gebruikers op basis van de dynamisch gevonden groep
-        log.info(f"🔍 Filter gebruikers op site_id={dynamic_site_id} en client_id={dynamic_client_id}")
-        main_users = []
-        for u in all_users:
-            # Site ID check
-            site_match = False
-            for key in ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]:
-                if key in u and u[key] is not None:
-                    try:
-                        if str(u[key]).strip() == dynamic_site_id:
-                            site_match = True
+            # Stap 2: Zoek Daniel Berlo terwijl we de gebruikers ophalen
+            if not danja_user:
+                for u in users:
+                    email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
+                    name = str(u.get("name", "")).strip().lower()
+                    
+                    # Controleer op varianten van Daniel Berlo's email
+                    email_found = False
+                    for variant in berlo_email_variants:
+                        if variant in email:
+                            email_found = True
                             break
-                    except:
-                        pass
+                    
+                    # Controleer op varianten van Daniel Berlo's naam
+                    name_found = False
+                    for variant in berlo_name_variants:
+                        if variant in name:
+                            name_found = True
+                            break
+                    
+                    # Als we Daniel Berlo vinden, stop met zoeken
+                    if email_found or name_found:
+                        danja_user = u
+                        log.info(f"✅ GEVONDEN: Daniel Berlo - ID: {u.get('id')}")
+                        log.info(f"   Email: {email}")
+                        log.info(f"   Naam: {name}")
+                        break
             
-            # Client ID check
-            client_match = False
-            for key in ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]:
+            if len(users) < 50:
+                log.info("✅ Laatste pagina bereikt (minder dan 50 gebruikers)")
+                break
+            
+            page += 1
+            time.sleep(0.3)
+            
+        except Exception as e:
+            log.error(f"⚠️ Fout bij ophalen pagina {page}: {str(e)}")
+            break
+
+    log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers")
+
+    # Als we Daniel Berlo niet hebben gevonden, geef een error
+    if not danja_user:
+        log.error("❌ FATAAL: Daniel Berlo niet gevonden in gebruikerslijst!")
+        log.error("➡️ Mogelijke oorzaken:")
+        log.error("   1. De API key heeft geen toegang tot alle gebruikers")
+        log.error("   2. Daniel Berlo heeft een andere email in Halo")
+        log.error("   3. Daniel Berlo zit niet in deze Halo omgeving")
+        return []
+    
+    # Stap 3: Haal de client_id en site_id van Daniel Berlo op
+    log.info("🔍 Bepaal de groep van Daniel Berlo via zijn gebruikersgegevens...")
+    
+    # Haal client_id op uit Daniel Berlo's record
+    client_id = None
+    client_id_keys = ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]
+    for key in client_id_keys:
+        if key in danja_user and danja_user[key] is not None:
+            try:
+                client_id = str(danja_user[key]).strip()
+                log.info(f"✅ Gebruik client_id van Daniel Berlo: {client_id} (gevonden via '{key}')")
+                break
+            except:
+                pass
+    
+    # Haal site_id op uit Daniel Berlo's record
+    site_id = None
+    site_id_keys = ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]
+    for key in site_id_keys:
+        if key in danja_user and danja_user[key] is not None:
+            try:
+                site_id = str(danja_user[key]).strip()
+                log.info(f"✅ Gebruik site_id van Daniel Berlo: {site_id} (gevonden via '{key}')")
+                break
+            except:
+                pass
+    
+    # Controleer of we bruikbare ID's hebben gevonden
+    if not client_id or not site_id:
+        log.warning("⚠️ Kon geen volledige groepinformatie vinden in Daniel Berlo's record")
+        log.warning("➡️ Probeer alternatieve benadering via client/site namen...")
+        
+        # Probeer via client/site namen
+        client_name = str(danja_user.get("client_name", "")).strip().lower()
+        site_name = str(danja_user.get("site_name", "")).strip().lower()
+        
+        if client_name:
+            log.info(f"ℹ️ Gebruik client_name: {client_name}")
+        if site_name:
+            log.info(f"ℹ️ Gebruik site_name: {site_name}")
+    
+    # Stap 4: Filter alle gebruikers op basis van Daniel Berlo's groep
+    log.info("🔍 Filter alle gebruikers op basis van Daniel Berlo's groep...")
+    main_users = []
+    
+    for u in all_users:
+        # Controleer client ID
+        client_match = False
+        if client_id:
+            for key in client_id_keys:
                 if key in u and u[key] is not None:
                     try:
-                        if str(u[key]).strip() == dynamic_client_id:
+                        if str(u[key]).strip() == client_id:
                             client_match = True
                             break
                     except:
                         pass
-            
-            # Site naam check als fallback
-            if not site_match and "site_name" in u:
-                site_name = str(u["site_name"]).strip().lower()
-                if "main" in site_name or "hoofd" in site_name:
-                    site_match = True
-            
-            # Client naam check als fallback
-            if not client_match and "client_name" in u:
-                client_name = str(u["client_name"]).strip().lower()
-                if "bossers" in client_name and "cnossen" in client_name:
-                    client_match = True
-            
-            # Email domein check (cruciaal voor BNC)
-            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
-            email_match = "bnc.nl" in email or "bossers" in email or "cnossen" in email
-            
-            # Bepaal of dit een Main-site gebruiker is
-            if (site_match and client_match) or (email_match and (site_match or client_match)):
-                main_users.append(u)
-
-        # Stap 5: Extra controle - zorg dat Daniel Berlo in de resultaten zit
-        berlo_found = False
-        for u in main_users:
-            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
-            if "danja.berlo@bnc.nl" in email:
-                berlo_found = True
+        elif client_name:  # Fallback op client naam
+            u_client_name = str(u.get("client_name", "")).strip().lower()
+            if client_name in u_client_name:
+                client_match = True
+        
+        # Controleer site ID
+        site_match = False
+        if site_id:
+            for key in site_id_keys:
+                if key in u and u[key] is not None:
+                    try:
+                        if str(u[key]).strip() == site_id:
+                            site_match = True
+                            break
+                    except:
+                        pass
+        elif site_name:  # Fallback op site naam
+            u_site_name = str(u.get("site_name", "")).strip().lower()
+            if site_name in u_site_name:
+                site_match = True
+        
+        # Bepaal of dit een gebruiker is uit dezelfde groep als Daniel Berlo
+        if client_match and site_match:
+            main_users.append(u)
+    
+    # Stap 5: Validatie - zorg dat Daniel Berlo in de resultaten zit
+    berlo_found = False
+    for u in main_users:
+        email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
+        name = str(u.get("name", "")).strip().lower()
+        
+        # Controleer op varianten van Daniel Berlo's email
+        email_found = False
+        for variant in berlo_email_variants:
+            if variant in email:
+                email_found = True
                 break
         
-        if not berlo_found:
-            log.warning("⚠️ WAARSCHUWING: Daniel Berlo niet gevonden in gefilterde resultaten!")
-            log.warning("➡️ Mogelijke oorzaken:")
-            log.warning("   1. Verkeerde site/client ID's gebruikt")
-            log.warning("   2. API geeft geen volledige gebruikersdata terug")
-            log.warning("   3. Daniel Berlo heeft een andere email in Halo")
-        else:
-            log.info("✅ BEVESTIGING: Daniel Berlo zit in de gefilterde resultaten")
-
-        log.info(f"📊 Totaal Main-site gebruikers: {len(main_users)}/{len(all_users)}")
-        return main_users
+        # Controleer op varianten van Daniel Berlo's naam
+        name_found = False
+        for variant in berlo_name_variants:
+            if variant in name:
+                name_found = True
+                break
+        
+        if email_found or name_found:
+            berlo_found = True
+            break
     
-    except Exception as e:
-        log.critical(f"🔥 FATALE FOUT: {str(e)}")
-        return []
+    if not berlo_found:
+        log.warning("⚠️ WAARSCHUWING: Daniel Berlo niet gevonden in gefilterde resultaten!")
+        log.warning("➡️ Mogelijke oorzaken:")
+        log.warning("   1. Verkeerde client/site ID's gebruikt")
+        log.warning("   2. API geeft geen volledige gebruikersdata terug")
+        log.warning("   3. Daniel Berlo heeft een andere email in Halo")
+    else:
+        log.info("✅ BEVESTIGING: Daniel Berlo zit in de gefilterde resultaten")
+    
+    log.info(f"📊 Totaal gebruikers in dezelfde groep als Daniel Berlo: {len(main_users)}/{len(all_users)}")
+    return main_users
 
 # ------------------------------------------------------------------------------
 # Routes
@@ -262,22 +304,24 @@ def health():
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
-            "1. Werkt MET DYNAMISCHE GROEPFILTERING (gebaseerd op Daniel Berlo)",
-            "2. Gebruikt EERST ID-KOPPELING, dan NAAM-KOPPELING",
-            "3. Bezoek /debug voor technische details"
+            "1. Haalt EERST alle gebruikers op",
+            "2. ZOEKT DAN Daniel Berlo in de lijst",
+            "3. FILTERT vervolgens op basis van ZIJN groep",
+            "4. Bezoek /debug voor technische details"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLEEN de Main-site gebruikers MET DYNAMISCHE FILTERING"""
+    """Toon ALLEEN de gebruikers uit dezelfde groep als Daniel Berlo"""
     main_users = fetch_all_users()
+    
     if not main_users:
         return jsonify({
-            "error": "Geen Main-site gebruikers gevonden",
+            "error": "Geen gebruikers gevonden in Daniel Berlo's groep",
             "solution": [
-                "1. Controleer of 'Teams' is aangevinkt in API-toegang",
-                "2. Zorg dat Daniel Berlo@bnc.nl bestaat in Halo",
+                "1. Controleer of Daniel Berlo@bnc.nl bestaat in Halo",
+                "2. Zorg dat de API key toegang heeft tot alle gebruikers",
                 "3. Bezoek /debug voor technische details"
             ]
         }), 500
@@ -288,11 +332,18 @@ def users():
         "email": u.get("emailaddress") or u.get("email") or "Geen email"
     } for u in main_users]
     
+    # Bepaal client en site namen voor de response
+    client_name = "Onbekend"
+    site_name = "Onbekend"
+    
+    if main_users:
+        first_user = main_users[0]
+        client_name = first_user.get("client_name") or "Bossers & Cnossen"
+        site_name = first_user.get("site_name") or "Main"
+    
     return jsonify({
-        "client_id": dynamic_client_id if 'dynamic_client_id' in locals() else HALO_CLIENT_ID_NUM,
-        "client_name": "Bossers & Cnossen",
-        "site_id": dynamic_site_id if 'dynamic_site_id' in locals() else HALO_SITE_ID,
-        "site_name": "Main",
+        "client_name": client_name,
+        "site_name": site_name,
         "total_users": len(main_users),
         "users": simplified
     })
@@ -302,52 +353,43 @@ def debug():
     """Toon technische details voor debugging"""
     main_users = fetch_all_users()
     
-    # Bepaal dynamische waarden voor debug info
-    site_id = "N/A"
-    client_id = "N/A"
-    if 'dynamic_site_id' in globals():
-        site_id = dynamic_site_id
-    if 'dynamic_client_id' in globals():
-        client_id = dynamic_client_id
-    
     return {
         "status": "debug-info",
-        "config": {
-            "halo_auth_url": HALO_AUTH_URL,
-            "halo_api_base": HALO_API_BASE,
-            "configured_client_id": HALO_CLIENT_ID_NUM,
-            "configured_site_id": HALO_SITE_ID,
-            "used_client_id": client_id,
-            "used_site_id": site_id
-        },
         "api_flow": [
             "1. Authenticatie naar /auth/token (scope=all)",
             "2. Haal ALLE gebruikers op via /Users met paginering (50 per pagina)",
-            "3. IDENTIFICEER GROEP VIA DANIEL BERLO",
-            "4. Filter gebruikers op basis van gevonden groep"
+            "3. ZOEK DANIEL BERLO IN DE LIJST",
+            "4. FILTER OP BASIS VAN ZIJN CLIENT/SITE ID"
         ],
         "halo_notes": [
-            "1. Werkt met dynamische groepidentificatie (geen hardcoded waarden)",
-            "2. Paginering gebruikt 'pageSize=50' (maximaal toegestaan)",
-            "3. Controleert expliciet op Daniel Berlo@bnc.nl"
+            "1. Eerst ALLE gebruikers ophalen, DAN filteren",
+            "2. Gebruikt dynamische groepidentificatie via Daniel Berlo",
+            "3. Ondersteunt meerdere varianten van Daniel Berlo's email/naam"
         ],
         "current_counts": {
             "total_users_found": len(main_users),
-            "expected_users": "Alle gebruikers van Daniel Berlo's groep"
+            "expected_users": "Alle gebruikers uit dezelfde groep als Daniel Berlo"
         },
         "safety_mechanisms": [
             "• Maximaal 100 pagina's om oneindige lus te voorkomen",
             "• 0.3s delay tussen aanvragen om rate limiting te voorkomen",
             "• 3 opeenvolgende lege pagina's stoppen de lus",
             "• Herkansingen bij tijdelijke netwerkfouten",
-            "• Fallback naar hardcoded waarden als Daniel Berlo niet wordt gevonden"
+            "• Fallback op client/site namen als ID's ontbreken"
         ],
-        "test_curl": (
-                f"curl -X GET '{HALO_API_BASE}/Users?page=1&pageSize=50' \\\n"
-                "-H 'Authorization: Bearer $(curl -X POST \\\"{HALO_AUTH_URL}\\\" \\\n"
-                "-d \\\"grant_type=client_credentials&client_id={HALO_CLIENT_ID}&client_secret=******&scope=all\\\" \\\n"
-                "| jq -r '.access_token')'"
-            )
+        "berlo_email_variants": [
+            "danja.berlo@bnc.nl",
+            "danja.berlo@bnc",
+            "daniel.berlo@bnc.nl",
+            "d.berlo@bnc.nl",
+            "berlo@bnc.nl"
+        ],
+        "berlo_name_variants": [
+            "danja berlo",
+            "daniel berlo",
+            "berlo",
+            "danja"
+        ]
     }
 
 # ------------------------------------------------------------------------------
@@ -356,11 +398,11 @@ def debug():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - DYNAMISCHE GROEPFILTERING")
+    log.info("🚀 HALO MAIN USERS - CORRECTE GROEPFILTERING")
     log.info("-"*70)
-    log.info("✅ Identificeert groep automatisch via Daniel Berlo@bnc.nl")
-    log.info("✅ Gebruikt dynamische ID's i.p.v. hardcoded waarden")
-    log.info("✅ Werkt met jouw specifieke Halo UAT omgeving")
+    log.info("✅ EERST ALLE gebruikers ophalen")
+    log.info("✅ DAN ZOEKEN naar Daniel Berlo")
+    log.info("✅ TENSLUITEN FILTEREN op basis van ZIJN groep")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
     log.info("1. Bezoek /debug voor technische details")
