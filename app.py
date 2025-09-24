@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET TYPEVEILIGE FILTERING
+# Logging - MET JUISTE URL-IDS
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - VOLLEDIG TYPEVEILIG
+# Config - MET DE JUISTE URL-IDS (GEEN API-IDS!)
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -27,9 +27,9 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Jouw IDs (als NUMBERS, niet strings)
-HALO_CLIENT_ID_NUM = 1706  # Bossers & Cnossen (API ID)
-HALO_SITE_ID       = 1714  # Main (API ID)
+# 🔑 DE JUISTE URL-IDS (ZOALS IN DE BROWSER)
+HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (URL ID)
+HALO_SITE_ID       = 18  # Main (URL ID)
 
 # Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
@@ -37,7 +37,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET TYPEVEILIGE FILTERING
+# Halo API helpers - MET JUISTE URL-IDS
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -66,7 +66,7 @@ def get_halo_headers():
         raise
 
 def fetch_main_users():
-    """HAAL MAIN-SITE GEBRUIKERS OP MET TYPEVEILIGE FILTERING"""
+    """HAAL MAIN-SITE GEBRUIKERS OP MET JUISTE URL-IDS"""
     log.info(f"🔍 Start proces voor client {HALO_CLIENT_ID_NUM}, site {HALO_SITE_ID}")
     
     try:
@@ -81,9 +81,9 @@ def fetch_main_users():
         # Parse response
         data = r.json()
         users = data if isinstance(data, list) else data.get("users", []) or data.get("Users", [])
-        log.info(f"✅ {len(users)} gebruikers opgehaald - start TYPEVEILIGE filtering")
+        log.info(f"✅ {len(users)} gebruikers opgehaald - start filtering")
         
-        # Filter met TYPECONVERSIE (GEEN STRING VERGELIJKING!)
+        # Filter met DE JUISTE URL-IDS (12 en 18)
         main_users = []
         for u in users:
             # Haal site ID op (alle varianten) + converteer naar float
@@ -106,7 +106,7 @@ def fetch_main_users():
                     except (TypeError, ValueError):
                         pass
             
-            # TYPEVEILIGE VALIDATIE (geen string vergelijking!)
+            # TYPEVEILIGE VALIDATIE VOOR URL-IDS (12 en 18)
             is_site_match = site_id_val is not None and abs(site_id_val - HALO_SITE_ID) < 0.1
             is_client_match = client_id_val is not None and abs(client_id_val - HALO_CLIENT_ID_NUM) < 0.1
             
@@ -122,9 +122,6 @@ def fetch_main_users():
             return main_users
         
         log.error(f"❌ Geen Main-site gebruikers gevonden met client_id={HALO_CLIENT_ID_NUM} en site_id={HALO_SITE_ID}")
-        log.error("👉 Mogelijke oorzaken:")
-        log.error("1. Verkeerde ID types (API gebruikt floats/ints, geen strings)")
-        log.error("2. Onjuiste ID waarden (gebruik /id-helper voor correcte waarden)")
         return []
     
     except Exception as e:
@@ -132,7 +129,7 @@ def fetch_main_users():
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET TYPEVEILIGE ID MAPPING
+# Routes - MET JUISTE URL-IDS
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
@@ -140,9 +137,9 @@ def health():
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
-            "1. Werkt MET TYPEVEILIGE filtering (geen string vergelijking!)",
-            "2. Gebruikt numerieke vergelijking voor IDs (1714.0 == 1714)",
-            "3. Bezoek /id-helper voor correcte ID waarden"
+            "1. Gebruikt URL-IDs (12/18) i.p.v. API-IDs (1706/1714)",
+            "2. Bezoek /id-mapper voor duidelijke koppeling",
+            "3. Werkt met typeveilige vergelijking (18.0 == 18)"
         ]
     }
 
@@ -154,11 +151,11 @@ def users():
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
-                "1. Bezoek /id-helper om de EXACTE ID waarden te zien",
-                "2. Let op: IDs kunnen floats zijn (1714.0 i.p.v. 1714)",
-                "3. Gebruik NUMERIEKE vergelijking, niet string"
+                "1. Gebruik DE JUISTE URL-IDs: client_id=12, site_id=18",
+                "2. Bezoek /id-mapper voor visuele koppeling",
+                "3. Zorg dat 'Teams' is aangevinkt in API-toegang"
             ],
-            "debug_info": "Deze app gebruikt TYPEVEILIGE filtering voor IDs"
+            "debug_info": "Deze app gebruikt de IDs zoals ze in de URL staan (12/18)"
         }), 500
     
     simplified = [{
@@ -176,9 +173,9 @@ def users():
         "users": simplified
     })
 
-@app.route("/id-helper", methods=["GET"])
-def id_helper():
-    """HULP BIJ ID MAPPING MET TYPEINFORMATIE"""
+@app.route("/id-mapper", methods=["GET"])
+def id_mapper():
+    """TOON DUIDELIJKE KOPPELING TUSSEN URL-IDS EN API-IDS"""
     try:
         headers = get_halo_headers()
         r = requests.get(f"{HALO_API_BASE}/Users", headers=headers, timeout=30)
@@ -191,75 +188,75 @@ def id_helper():
         if not users:
             return {"error": "Geen gebruikers gevonden in API response"}, 500
         
-        # Verzamel unieke client/site IDs MET TYPE
-        client_ids = {}
-        site_ids = {}
-        
+        # Zoek de gebruiker met jouw URL-IDs
         for u in users:
-            # Client IDs
-            for key in ["clientid", "client_id", "ClientId", "clientId"]:
+            # Haal URL-IDs op
+            url_client_id = None
+            for key in ["clientid", "client_id"]:
                 if key in u and u[key] is not None:
-                    val = u[key]
                     try:
-                        num_val = float(val)
-                        client_ids[num_val] = client_ids.get(num_val, 0) + 1
+                        url_client_id = int(float(u[key]))
+                        break
                     except (TypeError, ValueError):
                         pass
             
-            # Site IDs
-            for key in ["siteid", "site_id", "SiteId", "siteId"]:
+            url_site_id = None
+            for key in ["siteid", "site_id"]:
                 if key in u and u[key] is not None:
-                    val = u[key]
                     try:
-                        num_val = float(val)
-                        site_ids[num_val] = site_ids.get(num_val, 0) + 1
+                        url_site_id = int(float(u[key]))
+                        break
                     except (TypeError, ValueError):
                         pass
+            
+            # Is dit jouw gebruiker?
+            if url_client_id == 12 and url_site_id == 18:
+                return {
+                    "status": "success",
+                    "client": {
+                        "url_id": 12,
+                        "api_id": url_client_id,
+                        "name": u.get("client_name") or "Bossers & Cnossen"
+                    },
+                    "site": {
+                        "url_id": 18,
+                        "api_id": url_site_id,
+                        "name": u.get("site_name") or "Main"
+                    },
+                    "user_example": {
+                        "id": u.get("id"),
+                        "name": u.get("name"),
+                        "email": u.get("email")
+                    },
+                    "note": "Gebruik deze URL-IDs in je code (12 en 18)"
+                }
         
-        # Sorteer op count (meeste gebruikers eerst)
-        sorted_client_ids = sorted(
-            [{"api_id": cid, "count": count} for cid, count in client_ids.items()],
-            key=lambda x: x["count"],
-            reverse=True
-        )
-        
-        sorted_site_ids = sorted(
-            [{"api_id": sid, "count": count} for sid, count in site_ids.items()],
-            key=lambda x: x["count"],
-            reverse=True
-        )
-        
+        # Als geen gebruiker exact 12/18 heeft
         return {
-            "status": "success",
-            "client_ids": sorted_client_ids,
-            "site_ids": sorted_site_ids,
-            "note": "Gebruik DEZE NUMMERS in je code (niet als strings!)",
-            "example": {
-                "api_value": 1714.0,
-                "correct_usage": "HALO_SITE_ID = 1714  # Gebruik integer, geen string"
-            }
+            "status": "warning",
+            "message": "Geen gebruiker gevonden met exact client_id=12 en site_id=18",
+            "suggestion": "Probeer de meest voorkomende waarden voor jouw klant"
         }
     
     except Exception as e:
         return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
-# App Start - MET TYPEVEILIGE FILTERING
+# App Start - MET JUISTE URL-IDS
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - MET TYPEVEILIGE FILTERING")
+    log.info("🚀 HALO MAIN USERS - MET JUISTE URL-IDS")
     log.info("-"*70)
-    log.info("✅ Werkt MET TYPECONVERSIE (1714.0 == 1714)")
-    log.info("✅ Gebruikt numerieke vergelijking voor IDs")
+    log.info("✅ Gebruikt URL-IDs (12/18) i.p.v. API-IDs (1706/1714)")
+    log.info("✅ Typeveilige vergelijking (18.0 == 18)")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN:")
-    log.info("1. Bezoek EERST /id-helper")
-    log.info("2. Noteer de NUMMERIEKE waarden (geen strings!)")
-    log.info("3. Pas HALO_CLIENT_ID_NUM en HALO_SITE_ID aan in de code")
-    log.info("4. Bezoek DAN /users")
+    log.info("1. Bezoek EERST /id-mapper")
+    log.info("2. Bevestig dat client_id=12 en site_id=18 kloppen")
+    log.info("3. Bezoek DAN /users")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
