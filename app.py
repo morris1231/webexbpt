@@ -1,11 +1,10 @@
-import os, urllib.parse, logging, sys, time
+import os, urllib.parse, logging, sys
 from flask import Flask, jsonify
 from dotenv import load_dotenv
 import requests
-import json
 
 # ------------------------------------------------------------------------------
-# Logging
+# Logging - MET DEBUGGING VOOR HALO API
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -15,34 +14,38 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config
+# Config - VOLLEDIG AANPASSEN VOOR JOUW OMGEVING
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
 
-# API credentials
+# API credentials (NIET AANPASSEN - dit komt uit .env)
 HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 
-# Correcte URL voor UAT
+# UAT OMGEVING (NIET AANPASSEN - dit is correct voor jou)
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Controleer .env
+# JOUW SPECIFIEKE ID'S (CONTROLEER DEZE!)
+HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (controleer in Halo: Clients > ID kolom)
+HALO_SITE_ID       = 18  # Main (controleer in Halo: Sites > ID kolom)
+
+# Controleer of .env bestaat
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers
+# Halo API helpers - CORRECTE IMPLEMENTATIE VOOR UAT
 # ------------------------------------------------------------------------------
 def get_halo_headers():
-    """Authenticatie met 'all' scope"""
+    """Authenticatie met ALLE benodigde scopes"""
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
-        "scope": "all"
+        "scope": "all"  # Cruciaal voor client/site data
     }
     try:
         r = requests.post(
@@ -58,466 +61,191 @@ def get_halo_headers():
         }
     except Exception as e:
         log.critical(f"❌ AUTH MISLUKT: {str(e)}")
-        if 'r' in locals():
-            log.critical(f"➡️ Response: {r.text}")
-            log.critical(f"➡️ Status code: {r.status_code}")
-        return None
+        log.critical(f"➡️ Response: {r.text if 'r' in locals() else 'Geen response'}")
+        raise
 
-def get_all_email_addresses(user):
-    """Haal ALLE mogelijke email adressen op uit de gebruiker"""
-    email_fields = [
-        "emailaddress", "email", "email2", "email3",
-        "email_1", "email_2", "email_primary", "email_secondary",
-        "EmailAddress", "Email", "Email2", "Email3"
-    ]
-    
-    emails = []
-    for field in email_fields:
-        if field in user and user[field]:
-            email = str(user[field]).strip()
-            if email and "@" in email:
-                emails.append((email.lower(), field))
-    
-    return emails
-
-def get_all_client_info(user):
-    """Verzamel ALLE client informatie uit de gebruiker"""
-    client_info = {
-        "names": [],
-        "ids": [],
-        "raw_data": {}
-    }
-    
-    # Mogelijke client naam velden
-    client_name_keys = ["client_name", "clientName", "ClientName", "clientname"]
-    for key in client_name_keys:
-        if key in user and user[key]:
-            client_info["names"].append((user[key], key))
-            client_info["raw_data"][key] = user[key]
-    
-    # Mogelijke client ID velden
-    client_id_keys = ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]
-    for key in client_id_keys:
-        if key in user and user[key] is not None:
-            client_info["ids"].append((str(user[key]), key))
-            client_info["raw_data"][key] = str(user[key])
-    
-    return client_info
-
-def get_all_site_info(user):
-    """Verzamel ALLE site informatie uit de gebruiker"""
-    site_info = {
-        "names": [],
-        "ids": [],
-        "raw_data": {}
-    }
-    
-    # Mogelijke site naam velden
-    site_name_keys = ["site_name", "siteName", "SiteName", "sitename"]
-    for key in site_name_keys:
-        if key in user and user[key]:
-            site_info["names"].append((user[key], key))
-            site_info["raw_data"][key] = user[key]
-    
-    # Mogelijke site ID velden
-    site_id_keys = ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]
-    for key in site_id_keys:
-        if key in user and user[key] is not None:
-            site_info["ids"].append((str(user[key]), key))
-            site_info["raw_data"][key] = str(user[key])
-    
-    return site_info
-
-def fetch_all_bnc_users():
-    """HAAL ALLE GEBRUIKERS OP EN FILTER OP '@bnc' ZONDER CLIENT/SITE FILTERING"""
-    log.info("🔍 Start met het ophalen van alle gebruikers met '@bnc' email (geen filtering)")
-    
-    # Stap 1: Haal alle gebruikers op in ÉÉN API call
-    log.info("➡️ API-aanvraag: Probeer alle gebruikers in één call op te halen")
-    all_users = []
-    api_issues = []
-    
+def fetch_all_users():
+    """HAAL ALLE GEBRUIKERS OP MET CORRECTE KOPPELINGEN"""
+    log.info("🔍 Start volledige gebruikersophaal met Halo UAT API")
     try:
         headers = get_halo_headers()
-        if not headers:
-            api_issues.append("Geen geldige API headers - authenticatie mislukt")
-            return [], api_issues
+        all_users = []
+        page = 1
+        total_users = 0
+
+        while True:
+            # CORRECTE API AANROEP MET PAGINERING + INCLUDES
+            params = {
+                "page": page,
+                "pageSize": 100,  # Maximaal toegestaan
+                "include": "client,site"  # Cruciaal voor koppelingen
+            }
             
-        # Gebruik een grote pageSize om alles in één call op te halen
-        users_url = f"{HALO_API_BASE}/Users?pageSize=250"
-        log.info(f"➡️ API-aanvraag: {users_url}")
-        
-        r = requests.get(users_url, headers=headers, timeout=30)
-        
-        if r.status_code != 200:
-            issue = f"API FOUT ({r.status_code}): {r.text}"
-            log.error(f"❌ {issue}")
-            api_issues.append(issue)
-            return [], api_issues
+            log.info(f"➡️ Ophalen pagina {page} met parameters: {params}")
+            r = requests.get(
+                f"{HALO_API_BASE}/User",  # LET OP: Enkelvoud (User i.p.v. Users)
+                headers=headers,
+                params=params,
+                timeout=30
+            )
             
-        try:
+            if r.status_code != 200:
+                log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
+                break
+                
             data = r.json()
-            log.debug(f"   ➡️ Volledige API response (eerste 500 tekens): {json.dumps(data)[:500]}")
-        except Exception as e:
-            issue = f"Kan API response niet parsen als JSON: {str(e)}"
-            log.error(f"❌ {issue}")
-            log.error(f"➡️ Raw response: {r.text[:500]}")
-            api_issues.append(issue)
-            return [], api_issues
-        
-        # Verwerk 'data' wrapper
-        if "data" in data and isinstance(data["data"], dict):
-            users_data = data["data"]
-        else:
-            users_data = data
-        
-        # Haal de users lijst op
-        users = users_data.get("users", [])
-        if not users:
-            users = users_data.get("Users", [])
-        
-        if not users:
-            issue = "Geen gebruikers gevonden in API response"
-            log.error(f"❌ {issue}")
-            api_issues.append(issue)
-            return [], api_issues
-        
-        # Log paginering metadata
-        total_records = data.get("record_count", len(users))
-        log.info(f"   ➡️ API response bevat {len(users)} gebruikers (Totaal records: {total_records})")
-        
-        # Stap 2: Filter op '@bnc' in ALLE email velden
-        log.info("🔍 Filter gebruikers op '@bnc' in ALLE email velden (geen client/site filtering)")
-        
-        bnc_users = []
-        no_email_count = 0
-        bnc_count = 0
-        
-        for u in users:
-            # Haal alle email adressen op
-            emails = get_all_email_addresses(u)
             
-            # Controleer of we een @bnc email hebben
-            bnc_emails = []
-            for email, field in emails:
-                if "@bnc" in email:
-                    bnc_emails.append((email, field))
+            # HALO SPECIFIEK: Gebruikers zitten in 'users' array
+            users_page = data.get("users", [])
             
-            # Sla alleen op als we @bnc email hebben
-            if bnc_emails:
-                bnc_count += 1
+            if not users_page:
+                log.warning("⚠️ Geen gebruikers gevonden op deze pagina")
+                break
                 
-                # Verzamel client en site informatie
-                client_info = get_all_client_info(u)
-                site_info = get_all_site_info(u)
+            all_users.extend(users_page)
+            total_users += len(users_page)
+            log.info(f"✅ Pagina {page}: {len(users_page)} gebruikers ontvangen (totaal: {total_users})")
+            
+            # Stop als we de laatste pagina hebben
+            if len(users_page) < 100:
+                break
                 
-                # Log gedetailleerde informatie
-                user_name = u.get("name", "Onbekend")
-                user_id = u.get("id", "Onbekend")
-                
-                # Log de gebruiker en alle relevante informatie
-                log.info(f"📧 @bnc gebruiker gevonden: {user_name} (ID: {user_id})")
-                
-                # Log alle email adressen
-                for email, field in emails:
-                    if "@bnc" in email:
-                        log.info(f"   ✅ @bnc email gevonden: {email} (veld: {field})")
-                    else:
-                        log.info(f"   ➡️ Email gevonden: {email} (veld: {field})")
-                
-                # Log client informatie
-                if client_info["names"] or client_info["ids"]:
-                    log.info("   ➡️ Client informatie gevonden:")
-                    for name, field in client_info["names"]:
-                        log.info(f"      - Naam: {name} (veld: {field})")
-                    for id_val, field in client_info["ids"]:
-                        log.info(f"      - ID: {id_val} (veld: {field})")
-                else:
-                    log.warning("   ⚠️ Waarschuwing: Geen client informatie gevonden")
-                
-                # Log site informatie
-                if site_info["names"] or site_info["ids"]:
-                    log.info("   ➡️ Site informatie gevonden:")
-                    for name, field in site_info["names"]:
-                        log.info(f"      - Naam: {name} (veld: {field})")
-                    for id_val, field in site_info["ids"]:
-                        log.info(f"      - ID: {id_val} (veld: {field})")
-                else:
-                    log.warning("   ⚠️ Waarschuwing: Geen site informatie gevonden")
-                
-                # Voeg toe aan resultaten
-                bnc_users.append({
-                    "user": u,
-                    "client_info": client_info,
-                    "site_info": site_info,
-                    "bnc_emails": bnc_emails
+            page += 1
+
+        log.info(f"🎉 VOLLEDIGE OPHAAL GEREED: {total_users} gebruikers ontvangen")
+
+        # FILTER LOGICA - MET CORRECTE KOPPELINGEN
+        main_users = []
+        for user in all_users:
+            # 1. CONTROLEER CLIENT KOPPELING (via include=client)
+            client_match = False
+            if "client" in user and isinstance(user["client"], dict):
+                try:
+                    client_id = int(user["client"].get("id", 0))
+                    if client_id == HALO_CLIENT_ID_NUM:
+                        client_match = True
+                except (TypeError, ValueError):
+                    pass
+
+            # 2. CONTROLEER SITE KOPPELING (via include=site)
+            site_match = False
+            if "site" in user and isinstance(user["site"], dict):
+                try:
+                    site_id = int(user["site"].get("id", 0))
+                    if site_id == HALO_SITE_ID:
+                        site_match = True
+                except (TypeError, ValueError):
+                    pass
+
+            if client_match and site_match:
+                main_users.append({
+                    "id": user.get("id"),
+                    "name": user.get("name") or "Onbekend",
+                    "email": user.get("emailaddress") or user.get("email") or "Geen email",
+                    "client_name": user["client"].get("name", "Onbekend") if "client" in user else "N/A",
+                    "site_name": user["site"].get("name", "Onbekend") if "site" in user else "N/A",
+                    "debug": {
+                        "raw_client_id": user["client"].get("id") if "client" in user else None,
+                        "raw_site_id": user["site"].get("id") if "site" in user else None
+                    }
                 })
-            else:
-                log.debug(f"   ➡️ Gebruiker {u.get('name', 'Onbekend')} (ID: {u.get('id', 'Onbekend')}) heeft geen @bnc email")
-        
-        # Log samenvatting
-        log.info(f"✅ Totaal @bnc gebruikers gevonden: {bnc_count}")
-        if len(bnc_users) == 0:
-            log.error("❌ Geen @bnc gebruikers gevonden - controleer de API response")
-            api_issues.append("Geen @bnc gebruikers gevonden - controleer of de emailadressen correct zijn")
-    
+
+        log.info(f"✅ FILTERRESULTAAT: {len(main_users)}/{total_users} Main-site gebruikers gevonden")
+        return main_users
+
     except Exception as e:
-        issue = f"Fout bij ophalen gebruikers: {str(e)}"
-        log.error(f"⚠️ {issue}")
-        api_issues.append(issue)
-        return [], api_issues
-    
-    return bnc_users, api_issues
+        log.critical(f"🔥 FATALE FOUT: {str(e)}")
+        return []
 
 # ------------------------------------------------------------------------------
-# Routes
+# Routes - MET REAL-TIME DEBUGGING
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
-        "message": "Halo ALL BNC USERS app draait! Bezoek /users voor alle @bnc gebruikers",
-        "endpoints": [
-            "/users - Toon alle @bnc gebruikers met hun client/site",
-            "/debug - Technische informatie over de API response"
-        ]
+        "message": "Halo Main-site gebruikers API (UAT) - Bezoek /users voor data",
+        "environment": "UAT",
+        "client_id": HALO_CLIENT_ID_NUM,
+        "site_id": HALO_SITE_ID
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLE @bnc gebruikers met hun client/site informatie"""
-    try:
-        bnc_users, api_issues = fetch_all_bnc_users()
-        
-        if not bnc_users:
-            log.warning("⚠️ Geen @bnc gebruikers gevonden in Halo")
-            return jsonify({
-                "warning": "Geen @bnc gebruikers gevonden",
-                "api_issues": api_issues,
-                "solution": [
-                    "1. Controleer of de API key toegang heeft tot alle gebruikers",
-                    "2. Zorg dat 'Teams' is aangevinkt in API-toegang",
-                    "3. Controleer of er gebruikers met '@bnc' in Halo staan"
-                ]
-            }), 200
-        
-        log.info(f"✅ Succesvol {len(bnc_users)} @bnc gebruikers geretourneerd")
-        
-        simplified = []
-        for item in bnc_users:
-            u = item["user"]
-            
-            # Gebruik het eerste @bnc email adres
-            email, email_field = item["bnc_emails"][0]
-            
-            # Bepaal client naam en ID
-            client_name = "Onbekend"
-            if item["client_info"]["names"]:
-                client_name = item["client_info"]["names"][0][0]
-            
-            client_id = "Onbekend"
-            if item["client_info"]["ids"]:
-                client_id = item["client_info"]["ids"][0][0]
-            
-            # Bepaal site naam en ID
-            site_name = "Onbekend"
-            if item["site_info"]["names"]:
-                site_name = item["site_info"]["names"][0][0]
-            
-            site_id = "Onbekend"
-            if item["site_info"]["ids"]:
-                site_id = item["site_info"]["ids"][0][0]
-            
-            simplified.append({
-                "id": u.get("id"),
-                "name": u.get("name") or "Onbekend",
-                "email": email,
-                "email_field": email_field,
-                "client_name": client_name,
-                "client_id": client_id,
-                "site_name": site_name,
-                "site_id": site_id
-            })
-        
+    """Toon ALLEEN de Main-site gebruikers"""
+    main_users = fetch_all_users()
+    
+    if not main_users:
         return jsonify({
-            "total_users": len(bnc_users),
-            "users": simplified,
-            "api_issues": api_issues if api_issues else "Geen API problemen"
-        })
-    except Exception as e:
-        log.critical(f"🔥 FATALE FOUT in /users: {str(e)}")
-        return jsonify({
-            "error": "Interne serverfout",
-            "details": str(e)
+            "error": "Geen Main-site gebruikers gevonden",
+            "solution": [
+                "1. Controleer of HALO_CLIENT_ID_NUM=12 en HALO_SITE_ID=18 correct zijn",
+                "2. Zorg dat in Halo: API-toegang > 'Teams' is aangevinkt",
+                "3. Bezoek /debug voor technische details"
+            ],
+            "raw_data_sample": "Bezoek /debug voor API-response voorbeeld"
         }), 500
+    
+    return jsonify({
+        "client_id": HALO_CLIENT_ID_NUM,
+        "client_name": "Bossers & Cnossen",
+        "site_id": HALO_SITE_ID,
+        "site_name": "Main",
+        "total_users": len(main_users),
+        "users": main_users
+    })
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """Toon technische informatie over de API response"""
+    """Technische debug informatie voor probleemoplossing"""
     try:
-        bnc_users, api_issues = fetch_all_bnc_users()
+        # Haal 1 gebruiker op voor debugging
+        headers = get_halo_headers()
+        r = requests.get(
+            f"{HALO_API_BASE}/User?page=1&pageSize=1",
+            headers=headers,
+            params={"include": "client,site"},
+            timeout=10
+        )
         
-        # Verzamel voorbeeldgegevens
-        sample_users = []
-        for i, item in enumerate(bnc_users[:5], 1):
-            u = item["user"]
-            # Gebruik het eerste @bnc email adres
-            email, email_field = item["bnc_emails"][0]
-            name = u.get("name") or "Onbekend"
-            
-            # Client informatie
-            client_names = []
-            for name_val, field in item["client_info"]["names"]:
-                client_names.append(f"{name_val} ({field})")
-            
-            client_ids = []
-            for id_val, field in item["client_info"]["ids"]:
-                client_ids.append(f"{id_val} ({field})")
-            
-            # Site informatie
-            site_names = []
-            for name_val, field in item["site_info"]["names"]:
-                site_names.append(f"{name_val} ({field})")
-            
-            site_ids = []
-            for id_val, field in item["site_info"]["ids"]:
-                site_ids.append(f"{id_val} ({field})")
-            
-            # Verzamel alle email velden
-            email_fields = []
-            for email, field in item["bnc_emails"]:
-                email_fields.append(f"{field}: {email}")
-            
-            sample_users.append({
-                "volgorde": i,
-                "name": name,
-                "email": email,
-                "email_field": email_field,
-                "client_names": ", ".join(client_names) if client_names else "Niet gevonden",
-                "client_ids": ", ".join(client_ids) if client_ids else "Niet gevonden",
-                "site_names": ", ".join(site_names) if site_names else "Niet gevonden",
-                "site_ids": ", ".join(site_ids) if site_ids else "Niet gevonden",
-                "email_fields": ", ".join(email_fields) if email_fields else "Geen emails",
-                "user_id": u.get("id", "Onbekend")
-            })
+        sample = r.json().get("users", [{}])[0] if r.status_code == 200 else {}
         
-        # Analyseer de meest voorkomende client/sites
-        client_name_counts = {}
-        client_id_counts = {}
-        site_name_counts = {}
-        site_id_counts = {}
-        
-        for item in bnc_users:
-            # Client namen
-            for name, _ in item["client_info"]["names"]:
-                client_name_counts[name] = client_name_counts.get(name, 0) + 1
-            
-            # Client ID's
-            for id_val, _ in item["client_info"]["ids"]:
-                client_id_counts[id_val] = client_id_counts.get(id_val, 0) + 1
-            
-            # Site namen
-            for name, _ in item["site_info"]["names"]:
-                site_name_counts[name] = site_name_counts.get(name, 0) + 1
-            
-            # Site ID's
-            for id_val, _ in item["site_info"]["ids"]:
-                site_id_counts[id_val] = site_id_counts.get(id_val, 0) + 1
-        
-        # Sorteer op aantal
-        top_client_names = sorted(client_name_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_client_ids = sorted(client_id_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_site_names = sorted(site_name_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_site_ids = sorted(site_id_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        # Analyseer email velden
-        email_field_counts = {}
-        for item in bnc_users:
-            for _, email_field in item["bnc_emails"]:
-                email_field_counts[email_field] = email_field_counts.get(email_field, 0) + 1
-        
-        # Analyseer client/site combinaties
-        client_site_combinations = {}
-        for item in bnc_users:
-            client_name = item["client_info"]["names"][0][0] if item["client_info"]["names"] else "Onbekend"
-            site_name = item["site_info"]["names"][0][0] if item["site_info"]["names"] else "Onbekend"
-            
-            combination = f"{client_name} - {site_name}"
-            client_site_combinations[combination] = client_site_combinations.get(combination, 0) + 1
-        
-        # Sorteer op aantal
-        top_combinations = sorted(client_site_combinations.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        return {
-            "status": "debug-info",
-            "api_flow": [
-                "1. Authenticatie naar /auth/token (scope=all)",
-                "2. Haal ALLE gebruikers op in ÉÉN API call (pageSize=250)",
-                "3. FILTER OP '@bnc' IN ALLE EMAIL VELDEN (geen client/site filtering)"
-            ],
-            "configuration": {
-                "halo_api_base": HALO_API_BASE
-            },
-            "current_counts": {
-                "total_users_fetched": len(bnc_users),
-                "total_bnc_users_found": len(bnc_users)
-            },
-            "api_issues": api_issues if api_issues else ["Geen API problemen gedetecteerd"],
-            "email_field_usage": [{"field": field, "count": count} for field, count in email_field_counts.items()],
-            "client_analysis": {
-                "top_names": [{"name": name, "count": count} for name, count in top_client_names],
-                "top_ids": [{"id": id_val, "count": count} for id_val, count in top_client_ids]
-            },
-            "site_analysis": {
-                "top_names": [{"name": name, "count": count} for name, count in top_site_names],
-                "top_ids": [{"id": id_val, "count": count} for id_val, count in top_site_ids]
-            },
-            "client_site_combinations": [{"combination": comb, "count": count} for comb, count in top_combinations],
-            "sample_users": sample_users,
-            "safety_mechanisms": [
-                "• Gebruikt ÉÉN API call met pageSize=250",
-                "• Scan ALLE mogelijke email velden voor '@bnc'",
-                "• Verzamel ALLE client/site informatie (geen filtering)",
-                "• Gedetailleerde logging van alle gevonden velden",
-                "• Case-insensitive email matching"
-            ],
-            "troubleshooting": [
-                "Als geen @bnc gebruikers worden gevonden:",
-                "1. Controleer de logs op 'Gebruiker heeft geen @bnc email' meldingen",
-                "2. Controleer of de emailadressen in Halo correct zijn ingesteld",
-                "3. Bezoek /debug om te zien welke email velden worden gebruikt",
-                "",
-                "Als client/site informatie ontbreekt:",
-                "1. Controleer of de gebruikers zijn gekoppeld aan een client/site in Halo",
-                "2. Controleer of de API key toegang heeft tot client/site informatie",
-                "3. Gebruik de 'client_analysis' en 'site_analysis' secties om te zien welke velden beschikbaar zijn"
-            ],
-            "note": "Deze app scant ALLE email velden voor '@bnc' en toont ALLE client/site informatie zoals deze in de API staat, zonder enige filtering"
-        }
-    except Exception as e:
-        log.critical(f"🔥 FATALE FOUT in /debug: {str(e)}")
         return jsonify({
-            "error": "Interne serverfout",
-            "details": str(e)
-        }), 500
+            "status": "debug_info",
+            "api_call_example": {
+                "url": f"{HALO_API_BASE}/User?page=1&pageSize=1&include=client,site",
+                "headers": {"Authorization": "Bearer [token]"}
+            },
+            "sample_user_structure": {
+                "id": sample.get("id"),
+                "name": sample.get("name"),
+                "client": sample.get("client", "NIET GEVONDEN - controleer 'include'"),
+                "site": sample.get("site", "NIET GEVONDEN - controleer 'include'")
+            },
+            "troubleshooting": [
+                "1. Als 'client' of 'site' NIET GEVONDEN is: scope 'all' ontbreekt in API-toegang",
+                "2. Geen gebruikers? Controleer of client_id=12 en site_id=18 correct zijn",
+                "3. 401 error? Controleer HALO_CLIENT_ID/HALO_CLIENT_SECRET in .env"
+            ]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 # ------------------------------------------------------------------------------
-# App Start
+# Render.com Deployment - KLAAR VOOR DIRECTE DEPLOY
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info("="*70)
-    log.info("🚀 HALO ALL BNC USERS - ZONDER FILTERING")
+    log.info("🚀 HALO UAT USERS API - VOLLEDIG GEAUTOMATISEERD")
     log.info("-"*70)
-    log.info("✅ Toont ALLE gebruikers met '@bnc' email, ongeacht client/site")
-    log.info("✅ Verzamelt ALLE client/site informatie zoals deze in de API staat")
-    log.info("✅ Geen aannames over client/site namen of ID's")
+    log.info("✅ Werkt met echte UAT omgeving (bncuat.halopsa.com)")
+    log.info("✅ Ondersteunt client/site koppelingen via 'include' parameter")
+    log.info("✅ Paginering voor 1000+ gebruikers")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
-    log.info("1. Bezoek /debug voor een complete analyse van de API response")
-    log.info("2. Controleer de logs op gedetailleerde informatie over elke gebruiker")
-    log.info("3. Gebruik de client/site analyse om te zien welke combinaties bestaan")
+    log.info("👉 VOLG DEZE STAPPEN:")
+    log.info("1. Maak .env bestand met HALO_CLIENT_ID en HALO_CLIENT_SECRET")
+    log.info("2. Deploy direct naar Render.com")
+    log.info("3. Bezoek /debug voor configuratiecheck")
     log.info("="*70)
-    
-    # Gebruik de poort zoals ingesteld in de omgeving
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
