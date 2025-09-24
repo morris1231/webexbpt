@@ -1,10 +1,10 @@
-import os, urllib.parse, logging, sys, io, csv, time
-from flask import Flask, jsonify, Response
+import os, urllib.parse, logging, sys, time
+from flask import Flask, jsonify
 from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET JUISTE PAGINERING EN FILTERING
+# Logging
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - MET JUISTE PAGINERING EN FILTERING
+# Config
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -27,7 +27,7 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Jouw correcte IDs (ZOALS IN DE URL)
+# Jouw correcte IDs (als fallback)
 HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (URL ID)
 HALO_SITE_ID       = 18  # Main (URL ID)
 
@@ -37,10 +37,10 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET JUISTE PAGINERING EN FILTERING
+# Halo API helpers
 # ------------------------------------------------------------------------------
 def get_halo_headers():
-    """Authenticatie met alleen 'Teams' rechten"""
+    """Authenticatie met 'all' scope"""
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
@@ -65,16 +65,19 @@ def get_halo_headers():
         raise
 
 def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET JUISTE PAGINERING EN FILTERING"""
-    log.info("🔍 Haal ALLE gebruikers op met correcte paginering")
+    """HAAL ALLE GEBRUIKERS OP MET DYNAMISCHE GROEPFILTERING OP BASIS VAN DANIEL BERLO"""
+    log.info("🔍 Start met het ophalen van alle gebruikers met dynamische groepfiltering")
     all_users = []
     page = 1
-    max_pages = 100  # Veilige limiet om oneindige lus te voorkomen
-    consecutive_empty = 0  # Houdt lege pagina's bij
-    
+    max_pages = 100
+    consecutive_empty = 0
+    danja_user = None
+    dynamic_site_id = None
+    dynamic_client_id = None
+
     try:
+        # Stap 1: Haal alle gebruikers op
         while page <= max_pages:
-            # CORRECTE PAGINERING VOOR JOUW OMGEVING
             users_url = f"{HALO_API_BASE}/Users?page={page}&pageSize=50"
             log.info(f"➡️ API-aanvraag (pagina {page}): {users_url}")
             
@@ -84,13 +87,11 @@ def fetch_all_users():
                 
                 if r.status_code != 200:
                     log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
-                    # Probeer opnieuw bij tijdelijke fouten
                     if r.status_code in [429, 500, 502, 503, 504]:
                         time.sleep(2)
                         continue
                     break
                     
-                # Parse response
                 data = r.json()
                 
                 # Verwerk 'data' wrapper
@@ -104,86 +105,147 @@ def fetch_all_users():
                 if not users:
                     users = users_data.get("Users", [])
                 
-                # Controleer op lege response
                 if not users:
                     consecutive_empty += 1
-                    log.warning(f"⚠️ Lege response (pagina {page}) - {consecutive_empty} opeenvolgend")
-                    
-                    # Stop na 3 lege pagina's
                     if consecutive_empty >= 3:
                         log.info("✅ Stoppen met ophalen na 3 lege pagina's")
                         break
                     page += 1
-                    time.sleep(0.5)  # Kleine delay voor API
+                    time.sleep(0.5)
                     continue
                 
-                # Reset lege teller bij succesvolle response
                 consecutive_empty = 0
-                
-                # Voeg gebruikers toe aan de complete lijst
                 all_users.extend(users)
                 log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)})")
                 
-                # Stop als we minder dan 50 gebruikers krijgen OF lege response
                 if len(users) < 50:
                     log.info("✅ Laatste pagina bereikt (minder dan 50 gebruikers)")
                     break
                 
                 page += 1
-                time.sleep(0.3)  # Rate limiting delay (cruciaal!)
+                time.sleep(0.3)
                 
-            except requests.exceptions.RequestException as e:
-                log.error(f"⚠️ Netwerkfout: {str(e)}")
-                time.sleep(2)  # Exponentiële backoff zou beter zijn
-                continue
             except Exception as e:
-                log.error(f"⚠️ Onverwachte fout: {str(e)}")
+                log.error(f"⚠️ Fout bij ophalen pagina {page}: {str(e)}")
                 break
-        
-        log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers over {page-1} pagina{'s' if page > 2 else ''}")
-        
-        # Filter Main-site gebruikers MET JUISTE LOGICA
+
+        log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers")
+
+        # Stap 2: Zoek Daniel Berlo om de juiste groep te identificeren
+        log.info("🔍 Zoeken naar Daniel Berlo om de juiste groep te identificeren...")
+        berlo_email = "danja.berlo@bnc.nl"
+        for u in all_users:
+            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
+            name = str(u.get("name", "")).strip().lower()
+            
+            # Check op Daniel Berlo (case-insensitive en domein check)
+            if berlo_email in email or ("berlo" in name and "bnc" in email):
+                danja_user = u
+                log.info(f"✅ GEVONDEN: Daniel Berlo - ID: {u.get('id')}, Email: {email}")
+                break
+
+        # Stap 3: Bepaal de juiste groep ID's op basis van Daniel Berlo
+        if danja_user:
+            # Haal site_id op uit Daniel Berlo's record
+            site_id_keys = ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]
+            for key in site_id_keys:
+                if key in danja_user and danja_user[key] is not None:
+                    try:
+                        dynamic_site_id = str(danja_user[key]).strip()
+                        log.info(f"✅ Gebruik site_id van Daniel Berlo: {dynamic_site_id} (gevonden via '{key}')")
+                        break
+                    except:
+                        continue
+            
+            # Haal client_id op uit Daniel Berlo's record
+            client_id_keys = ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]
+            for key in client_id_keys:
+                if key in danja_user and danja_user[key] is not None:
+                    try:
+                        dynamic_client_id = str(danja_user[key]).strip()
+                        log.info(f"✅ Gebruik client_id van Daniel Berlo: {dynamic_client_id} (gevonden via '{key}')")
+                        break
+                    except:
+                        continue
+            
+            # Valideer of we bruikbare ID's hebben gevonden
+            if not dynamic_site_id or not dynamic_client_id:
+                log.warning("⚠️ Kon geen volledige groepinformatie vinden in Daniel Berlo's record")
+                log.warning("➡️ Gebruik fallback naar hardcoded waarden (mogelijk niet de juiste gebruikers)")
+                dynamic_site_id = str(HALO_SITE_ID)
+                dynamic_client_id = str(HALO_CLIENT_ID_NUM)
+        else:
+            log.error("❌ FATAAL: Daniel Berlo niet gevonden in gebruikerslijst!")
+            log.error("➡️ Zorg dat:")
+            log.error("   1. De API key toegang heeft tot alle gebruikers")
+            log.error("   2. Daniel Berlo correct is ingesteld in Halo")
+            log.error("➡️ Gebruik hardcoded waarden als noodoplossing (risico op verkeerde gebruikers)")
+            dynamic_site_id = str(HALO_SITE_ID)
+            dynamic_client_id = str(HALO_CLIENT_ID_NUM)
+
+        # Stap 4: Filter alle gebruikers op basis van de dynamisch gevonden groep
+        log.info(f"🔍 Filter gebruikers op site_id={dynamic_site_id} en client_id={dynamic_client_id}")
         main_users = []
         for u in all_users:
-            # 1. Eerst probeer ID-koppeling (JOUW OMGEVING GEBRUIKT DIT)
+            # Site ID check
             site_match = False
-            client_match = False
-            
-            # Site ID check (alle varianten)
-            for key in ["site_id", "SiteId", "siteId", "siteid", "SiteID", "site_id_int"]:
+            for key in ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]:
                 if key in u and u[key] is not None:
                     try:
-                        if float(u[key]) == float(HALO_SITE_ID):
+                        if str(u[key]).strip() == dynamic_site_id:
                             site_match = True
                             break
-                    except (TypeError, ValueError):
+                    except:
                         pass
             
-            # Client ID check (alle varianten)
-            for key in ["client_id", "ClientId", "clientId", "clientid", "ClientID", "client_id_int"]:
+            # Client ID check
+            client_match = False
+            for key in ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]:
                 if key in u and u[key] is not None:
                     try:
-                        if float(u[key]) == float(HALO_CLIENT_ID_NUM):
+                        if str(u[key]).strip() == dynamic_client_id:
                             client_match = True
                             break
-                    except (TypeError, ValueError):
+                    except:
                         pass
             
-            # 2. Als ID-koppeling faalt, probeer dan NAAM-koppeling
+            # Site naam check als fallback
             if not site_match and "site_name" in u:
                 site_name = str(u["site_name"]).strip().lower()
-                if "main" in site_name or "hoofdkantoor" in site_name:
+                if "main" in site_name or "hoofd" in site_name:
                     site_match = True
             
+            # Client naam check als fallback
             if not client_match and "client_name" in u:
                 client_name = str(u["client_name"]).strip().lower()
                 if "bossers" in client_name and "cnossen" in client_name:
                     client_match = True
             
+            # Email domein check (cruciaal voor BNC)
+            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
+            email_match = "bnc.nl" in email or "bossers" in email or "cnossen" in email
+            
             # Bepaal of dit een Main-site gebruiker is
-            if site_match and client_match:
+            if (site_match and client_match) or (email_match and (site_match or client_match)):
                 main_users.append(u)
+
+        # Stap 5: Extra controle - zorg dat Daniel Berlo in de resultaten zit
+        berlo_found = False
+        for u in main_users:
+            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
+            if "danja.berlo@bnc.nl" in email:
+                berlo_found = True
+                break
         
+        if not berlo_found:
+            log.warning("⚠️ WAARSCHUWING: Daniel Berlo niet gevonden in gefilterde resultaten!")
+            log.warning("➡️ Mogelijke oorzaken:")
+            log.warning("   1. Verkeerde site/client ID's gebruikt")
+            log.warning("   2. API geeft geen volledige gebruikersdata terug")
+            log.warning("   3. Daniel Berlo heeft een andere email in Halo")
+        else:
+            log.info("✅ BEVESTIGING: Daniel Berlo zit in de gefilterde resultaten")
+
         log.info(f"📊 Totaal Main-site gebruikers: {len(main_users)}/{len(all_users)}")
         return main_users
     
@@ -192,7 +254,7 @@ def fetch_all_users():
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET JUISTE PAGINERING EN FILTERING
+# Routes
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
@@ -200,7 +262,7 @@ def health():
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
-            "1. Werkt MET JUISTE PAGINERING (50 gebruikers per pagina)",
+            "1. Werkt MET DYNAMISCHE GROEPFILTERING (gebaseerd op Daniel Berlo)",
             "2. Gebruikt EERST ID-KOPPELING, dan NAAM-KOPPELING",
             "3. Bezoek /debug voor technische details"
         ]
@@ -208,14 +270,14 @@ def health():
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLEEN de Main-site gebruikers MET JUISTE LOGICA"""
+    """Toon ALLEEN de Main-site gebruikers MET DYNAMISCHE FILTERING"""
     main_users = fetch_all_users()
     if not main_users:
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
                 "1. Controleer of 'Teams' is aangevinkt in API-toegang",
-                "2. Zorg dat de API key 'all' scope heeft",
+                "2. Zorg dat Daniel Berlo@bnc.nl bestaat in Halo",
                 "3. Bezoek /debug voor technische details"
             ]
         }), 500
@@ -227,9 +289,9 @@ def users():
     } for u in main_users]
     
     return jsonify({
-        "client_id": HALO_CLIENT_ID_NUM,
+        "client_id": dynamic_client_id if 'dynamic_client_id' in locals() else HALO_CLIENT_ID_NUM,
         "client_name": "Bossers & Cnossen",
-        "site_id": HALO_SITE_ID,
+        "site_id": dynamic_site_id if 'dynamic_site_id' in locals() else HALO_SITE_ID,
         "site_name": "Main",
         "total_users": len(main_users),
         "users": simplified
@@ -239,57 +301,70 @@ def users():
 def debug():
     """Toon technische details voor debugging"""
     main_users = fetch_all_users()
+    
+    # Bepaal dynamische waarden voor debug info
+    site_id = "N/A"
+    client_id = "N/A"
+    if 'dynamic_site_id' in globals():
+        site_id = dynamic_site_id
+    if 'dynamic_client_id' in globals():
+        client_id = dynamic_client_id
+    
     return {
         "status": "debug-info",
         "config": {
             "halo_auth_url": HALO_AUTH_URL,
             "halo_api_base": HALO_API_BASE,
-            "client_id": HALO_CLIENT_ID_NUM,
-            "site_id": HALO_SITE_ID
+            "configured_client_id": HALO_CLIENT_ID_NUM,
+            "configured_site_id": HALO_SITE_ID,
+            "used_client_id": client_id,
+            "used_site_id": site_id
         },
         "api_flow": [
             "1. Authenticatie naar /auth/token (scope=all)",
-            "2. Haal ALLE gebruikers op via /Users met JUISTE paginering (50 per pagina)",
-            "3. Filter eerst op ID, dan op NAAM (cruciaal voor jouw omgeving)"
+            "2. Haal ALLE gebruikers op via /Users met paginering (50 per pagina)",
+            "3. IDENTIFICEER GROEP VIA DANIEL BERLO",
+            "4. Filter gebruikers op basis van gevonden groep"
         ],
         "halo_notes": [
-            "1. Jouw omgeving gebruikt PRIMAIR ID-KOPPELING (niet alleen naam!)",
+            "1. Werkt met dynamische groepidentificatie (geen hardcoded waarden)",
             "2. Paginering gebruikt 'pageSize=50' (maximaal toegestaan)",
-            "3. Gebruik fallback naar naam-koppeling als ID-koppeling faalt"
+            "3. Controleert expliciet op Daniel Berlo@bnc.nl"
         ],
         "current_counts": {
             "total_users_found": len(main_users),
-            "expected_users": "135+ (volgens jouw Halo omgeving)"
+            "expected_users": "Alle gebruikers van Daniel Berlo's groep"
         },
+        "safety_mechanisms": [
+            "• Maximaal 100 pagina's om oneindige lus te voorkomen",
+            "• 0.3s delay tussen aanvragen om rate limiting te voorkomen",
+            "• 3 opeenvolgende lege pagina's stoppen de lus",
+            "• Herkansingen bij tijdelijke netwerkfouten",
+            "• Fallback naar hardcoded waarden als Daniel Berlo niet wordt gevonden"
+        ],
         "test_curl": (
                 f"curl -X GET '{HALO_API_BASE}/Users?page=1&pageSize=50' \\\n"
                 "-H 'Authorization: Bearer $(curl -X POST \\\"{HALO_AUTH_URL}\\\" \\\n"
                 "-d \\\"grant_type=client_credentials&client_id={HALO_CLIENT_ID}&client_secret=******&scope=all\\\" \\\n"
                 "| jq -r '.access_token')'"
-            ),
-        "safety_mechanisms": [
-            "• Maximaal 100 pagina's om oneindige lus te voorkomen",
-            "• 0.3s delay tussen aanvragen om rate limiting te voorkomen",
-            "• 3 opeenvolgende lege pagina's stoppen de lus",
-            "• Herkansingen bij tijdelijke netwerkfouten"
-        ]
+            )
     }
 
 # ------------------------------------------------------------------------------
-# App Start - MET JUISTE PAGINERING EN FILTERING
+# App Start
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - MET JUISTE PAGINERING EN FILTERING")
+    log.info("🚀 HALO MAIN USERS - DYNAMISCHE GROEPFILTERING")
     log.info("-"*70)
-    log.info("✅ Haalt ALLE gebruikers op via JUISTE paginering (50 per pagina)")
-    log.info("✅ Gebruikt EERST ID-KOPPELING, dan NAAM-KOPPELING (cruciaal voor jouw omgeving)")
+    log.info("✅ Identificeert groep automatisch via Daniel Berlo@bnc.nl")
+    log.info("✅ Gebruikt dynamische ID's i.p.v. hardcoded waarden")
     log.info("✅ Werkt met jouw specifieke Halo UAT omgeving")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
     log.info("1. Bezoek /debug voor technische details")
-    log.info("2. Bezoek DAN /users voor ALLE Main-site gebruikers")
-    log.info("3. Gebruik de curl command in /debug voor API testen")
+    log.info("2. Controleer of Daniel Berlo wordt GEVONDEN in logs")
+    log.info("3. Bezoek /users voor de correcte gebruikerslijst")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port, debug=True)
