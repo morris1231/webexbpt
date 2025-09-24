@@ -63,13 +63,28 @@ def get_halo_headers():
             log.critical(f"➡️ Status code: {r.status_code}")
         return None
 
-def fetch_all_bnc_users():
-    """HAAL ALLE @bnc GEBRUIKERS OP MET DE ENIGE WERKENDE METHODE VOOR JOUW API"""
-    log.info("🔍 Start met het ophalen van alle @bnc gebruikers (specifieke oplossing voor jouw API)")
+def get_email_from_user(user):
+    """Haal email op uit alle mogelijke velden"""
+    email_fields = [
+        "emailaddress", "email", "email2", "email3",
+        "email_1", "email_2", "email_primary", "email_secondary"
+    ]
     
-    # Stap 1: Haal EERST alle gebruikers op in ÉÉN API call
+    for field in email_fields:
+        if field in user and user[field]:
+            email = str(user[field]).strip().lower()
+            if email:
+                return email, field
+    
+    return "", "geen"
+
+def fetch_all_bnc_users():
+    """HAAL ALLE @bnc GEBRUIKERS OP MET ALLE EMAIL VELDEN"""
+    log.info("🔍 Start met het ophalen van alle @bnc gebruikers (alle email velden)")
+    
+    # Stap 1: Haal alle gebruikers op in ÉÉN API call
     log.info("➡️ API-aanvraag: Probeer alle gebruikers in één call op te halen")
-    all_users = []
+    bnc_users = []
     api_issues = []
     
     try:
@@ -78,7 +93,7 @@ def fetch_all_bnc_users():
             api_issues.append("Geen geldige API headers - authenticatie mislukt")
             return [], api_issues
             
-        # Probeer een grote pageSize om alles in één call op te halen
+        # Gebruik een grote pageSize om alles in één call op te halen
         users_url = f"{HALO_API_BASE}/Users?pageSize=250"
         log.info(f"➡️ API-aanvraag: {users_url}")
         
@@ -118,60 +133,92 @@ def fetch_all_bnc_users():
             return [], api_issues
         
         # Log paginering metadata
-        total_records = data.get("record_count", "Onbekend")
+        total_records = data.get("record_count", len(users))
         log.info(f"   ➡️ API response bevat {len(users)} gebruikers (Totaal records: {total_records})")
         
-        # Stap 2: Filter op @bnc
-        log.info("🔍 Filter gebruikers op '@bnc' (geen client/site filtering)")
+        # Stap 2: Filter op @bnc in ALLE email velden
+        log.info("🔍 Filter gebruikers op '@bnc' in ALLE email velden")
         
-        bnc_users = []
+        # Definieer mogelijke veldnamen voor client en site
         client_id_keys = ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]
         site_id_keys = ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]
         client_name_keys = ["client_name", "clientName", "ClientName"]
         site_name_keys = ["site_name", "siteName", "SiteName"]
         
+        # Teller voor debugging
+        bnc_count = 0
+        no_email_count = 0
+        no_client_site_count = 0
+        
         for u in users:
-            # Haal email op
-            email = str(u.get("emailaddress", "") or u.get("email", "")).strip().lower()
-            original_email = u.get("emailaddress") or u.get("email") or "Geen email"
+            # Haal email op uit alle mogelijke velden
+            email, email_field = get_email_from_user(u)
+            original_email = email
             
+            # Controleer of we een email hebben
+            if not email:
+                no_email_count += 1
+                log.debug(f"   ⚠️ Gebruiker {u.get('name', 'Onbekend')} heeft geen emailadres")
+                continue
+                
             # Filter op @bnc
             if "@bnc" not in email:
                 continue
                 
+            bnc_count += 1
+            
             # Bepaal client naam
             client_name = "Onbekend"
+            client_name_field = "geen"
             for key in client_name_keys:
                 if key in u and u[key]:
-                    client_status = "✅" if "Bossers & Cnossen" in str(u[key]).lower() else "⚠️"
-                    log.info(f"   {client_status} Client naam gevonden: {u[key]} ({key})")
                     client_name = u[key]
+                    client_name_field = key
                     break
             
             # Bepaal site naam
             site_name = "Onbekend"
+            site_name_field = "geen"
             for key in site_name_keys:
                 if key in u and u[key]:
-                    site_status = "✅" if "main" in str(u[key]).lower() else "⚠️"
-                    log.info(f"   {site_status} Site naam gevonden: {u[key]} ({key})")
                     site_name = u[key]
+                    site_name_field = key
                     break
             
             # Bepaal client ID
             client_id = "Onbekend"
+            client_id_field = "geen"
             for key in client_id_keys:
                 if key in u and u[key] is not None:
-                    log.info(f"   ➡️ Client ID gevonden: {u[key]} ({key})")
                     client_id = str(u[key])
+                    client_id_field = key
                     break
             
             # Bepaal site ID
             site_id = "Onbekend"
+            site_id_field = "geen"
             for key in site_id_keys:
                 if key in u and u[key] is not None:
-                    log.info(f"   ➡️ Site ID gevonden: {u[key]} ({key})")
                     site_id = str(u[key])
+                    site_id_field = key
                     break
+            
+            # Log gedetailleerde informatie
+            client_info = f"{client_name}/{client_id} ({client_name_field}/{client_id_field})"
+            site_info = f"{site_name}/{site_id} ({site_name_field}/{site_id_field})"
+            
+            if "bossers" in client_name.lower() or "cnossen" in client_name.lower():
+                client_status = "✅"
+            else:
+                client_status = "⚠️"
+                
+            if "main" in site_name.lower() or "hoofd" in site_name.lower():
+                site_status = "✅"
+            else:
+                site_status = "⚠️"
+            
+            log.info(f"{client_status}{site_status} @bnc gebruiker: {u.get('name', 'Onbekend')} - {original_email} "
+                     f"(email veld: {email_field}, client: {client_info}, site: {site_info})")
             
             # Voeg toe aan resultaten
             bnc_users.append({
@@ -179,22 +226,23 @@ def fetch_all_bnc_users():
                 "client_name": client_name,
                 "site_name": site_name,
                 "client_id": client_id,
-                "site_id": site_id
+                "site_id": site_id,
+                "email_field": email_field
             })
-            
-            log.info(f"📧 @bnc gebruiker: {u.get('name', 'Onbekend')} - {original_email} "
-                     f"(client: {client_name}/{client_id}, site: {site_name}/{site_id})")
+        
+        # Log samenvatting
+        log.info(f"✅ Totaal @bnc gebruikers gevonden: {bnc_count}")
+        if no_email_count > 0:
+            log.warning(f"⚠️ {no_email_count} gebruikers zonder emailadres overgeslagen")
+        if len(bnc_users) == 0:
+            log.error("❌ Geen @bnc gebruikers gevonden - controleer de API response")
+            api_issues.append("Geen @bnc gebruikers gevonden - controleer of de emailadressen correct zijn")
     
     except Exception as e:
         issue = f"Fout bij ophalen gebruikers: {str(e)}"
         log.error(f"⚠️ {issue}")
         api_issues.append(issue)
         return [], api_issues
-    
-    log.info(f"✅ Totaal @bnc gebruikers gevonden: {len(bnc_users)}")
-    
-    if len(bnc_users) == 0:
-        api_issues.append("Geen @bnc gebruikers gevonden - controleer of de emailadressen correct zijn")
     
     return bnc_users, api_issues
 
@@ -238,7 +286,8 @@ def users():
             simplified.append({
                 "id": u.get("id"),
                 "name": u.get("name") or "Onbekend",
-                "email": u.get("emailaddress") or u.get("email") or "Geen email",
+                "email": u.get(item["email_field"]) or "Geen email",
+                "email_field": item["email_field"],
                 "client_name": item["client_name"],
                 "site_name": item["site_name"],
                 "client_id": item["client_id"],
@@ -267,7 +316,8 @@ def debug():
         sample_users = []
         for i, item in enumerate(bnc_users[:5], 1):
             u = item["user"]
-            email = u.get("emailaddress") or u.get("email") or "Geen email"
+            email_field = item["email_field"]
+            email = u.get(email_field) or "Geen email"
             name = u.get("name") or "Onbekend"
             
             # Verzamel alle mogelijke ID's
@@ -285,6 +335,7 @@ def debug():
                 "volgorde": i,
                 "name": name,
                 "email": email,
+                "email_field": email_field,
                 "client_name": item["client_name"],
                 "site_name": item["site_name"],
                 "client_ids": ", ".join(client_ids) if client_ids else "Niet gevonden",
@@ -307,31 +358,40 @@ def debug():
         top_clients = sorted(client_counts.items(), key=lambda x: x[1], reverse=True)[:5]
         top_sites = sorted(site_counts.items(), key=lambda x: x[1], reverse=True)[:5]
         
+        # Analyseer email velden
+        email_field_counts = {}
+        for item in bnc_users:
+            field = item["email_field"]
+            email_field_counts[field] = email_field_counts.get(field, 0) + 1
+        
         return {
             "status": "debug-info",
             "api_flow": [
                 "1. Authenticatie naar /auth/token (scope=all)",
                 "2. Haal ALLE gebruikers op in ÉÉN API call (pageSize=250)",
-                "3. FILTER OP '@bnc' IN EMAIL"
+                "3. FILTER OP '@bnc' IN ALLE EMAIL VELDEN"
             ],
             "configuration": {
                 "halo_api_base": HALO_API_BASE
             },
             "current_counts": {
                 "total_users_fetched": len(bnc_users),
-                "total_bnc_users_found": len(bnc_users)
+                "total_bnc_users_found": len(bnc_users),
+                "users_without_email": sum(1 for u in fetch_all_bnc_users()[0] if not u["user"].get("emailaddress") and not u["user"].get("email"))
             },
             "api_issues": api_issues if api_issues else ["Geen API problemen gedetecteerd"],
+            "email_field_usage": [{"field": field, "count": count} for field, count in email_field_counts.items()],
             "top_clients": [{"name": name, "count": count} for name, count in top_clients],
             "top_sites": [{"name": name, "count": count} for name, count in top_sites],
             "sample_users": sample_users,
             "safety_mechanisms": [
-                "• Gebruikt pageSize=250 om alles in één call op te halen",
-                "• Geen paginering (omdat jouw API dit niet ondersteunt)",
-                "• Gedetailleerde logging van gevonden client/site velden",
+                "• Controleert ALLE mogelijke email velden (emailaddress, email2, email3, etc.)",
+                "• Geen paginering (één API call voor alle gebruikers)",
+                "• Gedetailleerde logging van welk email veld wordt gebruikt",
+                "• Herkent Bossers & Cnossen klant met meerdere criteria",
                 "• Case-insensitive email matching"
             ],
-            "note": "Deze app haalt ALLE gebruikers op in ÉÉN API call (geen paginering) omdat jouw Halo API geen correcte paginering ondersteunt"
+            "note": "Deze app scant ALLE email velden voor '@bnc' en toont welk veld is gebruikt voor elke gebruiker"
         }
     except Exception as e:
         log.critical(f"🔥 FATALE FOUT in /debug: {str(e)}")
@@ -346,15 +406,15 @@ def debug():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info("="*70)
-    log.info("🚀 HALO ALL BNC USERS - ÉÉN API CALL OPLOSSING")
+    log.info("🚀 HALO ALL BNC USERS - ALLE EMAIL VELDEN GESCAND")
     log.info("-"*70)
-    log.info("✅ Omdat jouw API GEEN correcte paginering ondersteunt, gebruiken we ÉÉN API call")
-    log.info("✅ Gebruikt pageSize=250 om alles in één call op te halen")
-    log.info("✅ Gedetailleerde logging van client/site informatie")
+    log.info("✅ Controleert ALLE email velden (emailaddress, email2, email3, etc.)")
+    log.info("✅ Gebruikt ÉÉN API call om alle gebruikers op te halen")
+    log.info("✅ Toont welk email veld is gebruikt voor elke gebruiker")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
     log.info("1. Bezoek /debug voor technische details")
-    log.info("2. Controleer de logs op 'Client naam gevonden' en 'Site naam gevonden' meldingen")
+    log.info("2. Controleer de logs op 'email veld' informatie")
     log.info("3. Bezoek /users voor ALLE @bnc gebruikers met hun client/site")
     log.info("="*70)
     
