@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET JUISTE URL-IDS
+# Logging - MAXIMAAL TRANSPARANT
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - MET DE JUISTE URL-IDS (GEEN API-IDS!)
+# Config - VOLLEDIG TRANSPARANT
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -23,11 +23,11 @@ app = Flask(__name__)
 HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 
-# ✅ CORRECTE URL VOOR UAT
+# Correcte URL voor UAT
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# 🔑 DE JUISTE URL-IDS (ZOALS IN DE BROWSER)
+# Jouw correcte IDs
 HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (URL ID)
 HALO_SITE_ID       = 18  # Main (URL ID)
 
@@ -37,7 +37,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET JUISTE URL-IDS
+# Halo API helpers - MET VOLLEDIGE TRANSPARANTIE
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -65,9 +65,9 @@ def get_halo_headers():
         log.critical(f"➡️ Response: {r.text if 'r' in locals() else 'Geen response'}")
         raise
 
-def fetch_main_users():
-    """HAAL MAIN-SITE GEBRUIKERS OP MET JUISTE URL-IDS"""
-    log.info(f"🔍 Start proces voor client {HALO_CLIENT_ID_NUM}, site {HALO_SITE_ID}")
+def fetch_all_users():
+    """HAAL ALLE GEBRUIKERS OP MET VOLLEDIGE DETAILS"""
+    log.info("🔍 Haal ALLE gebruikers op voor volledig overzicht")
     
     try:
         # Haal ALLE gebruikers op
@@ -81,97 +81,151 @@ def fetch_main_users():
         # Parse response
         data = r.json()
         users = data if isinstance(data, list) else data.get("users", []) or data.get("Users", [])
-        log.info(f"✅ {len(users)} gebruikers opgehaald - start filtering")
+        log.info(f"✅ {len(users)} gebruikers opgehaald - volledig overzicht beschikbaar")
         
-        # Filter met DE JUISTE URL-IDS (12 en 18)
-        main_users = []
+        # Verrijk met filtering status
+        enriched_users = []
+        main_users_count = 0
+        
         for u in users:
             # Haal site ID op (alle varianten) + converteer naar float
             site_id_val = None
+            site_key_used = None
             for key in ["siteid", "site_id", "SiteId", "siteId"]:
                 if key in u and u[key] is not None:
                     try:
                         site_id_val = float(u[key])
+                        site_key_used = key
                         break
                     except (TypeError, ValueError):
                         pass
             
             # Haal client ID op (alle varianten) + converteer naar float
             client_id_val = None
+            client_key_used = None
             for key in ["clientid", "client_id", "ClientId", "clientId"]:
                 if key in u and u[key] is not None:
                     try:
                         client_id_val = float(u[key])
+                        client_key_used = key
                         break
                     except (TypeError, ValueError):
                         pass
             
-            # TYPEVEILIGE VALIDATIE VOOR URL-IDS (12 en 18)
-            is_site_match = site_id_val is not None and abs(site_id_val - HALO_SITE_ID) < 0.1
-            is_client_match = client_id_val is not None and abs(client_id_val - HALO_CLIENT_ID_NUM) < 0.1
+            # Bepaal of dit een Main-site gebruiker is
+            is_main_user = (
+                site_id_val is not None and 
+                client_id_val is not None and
+                abs(site_id_val - HALO_SITE_ID) < 0.1 and
+                abs(client_id_val - HALO_CLIENT_ID_NUM) < 0.1
+            )
             
-            if is_site_match and is_client_match:
-                main_users.append(u)
+            if is_main_user:
+                main_users_count += 1
+            
+            enriched_users.append({
+                "user": u,
+                "is_main_user": is_main_user,
+                "debug": {
+                    "site_key_used": site_key_used,
+                    "site_id_value": site_id_val,
+                    "client_key_used": client_key_used,
+                    "client_id_value": client_id_val,
+                    "matches_criteria": is_main_user
+                }
+            })
         
-        # Rapporteer resultaat
-        if main_users:
-            log.info(f"✅ {len(main_users)} JUISTE Main-site gebruikers gevonden!")
-            if main_users:
-                example = main_users[0]
-                log.info(f"  → Voorbeeldgebruiker: ID={example.get('id')}, Naam='{example.get('name')}'")
-            return main_users
+        log.info(f"📊 Totaal Main-site gebruikers: {main_users__count}/{len(users)}")
         
-        log.error(f"❌ Geen Main-site gebruikers gevonden met client_id={HALO_CLIENT_ID_NUM} en site_id={HALO_SITE_ID}")
-        return []
+        # Log de eerste Main-site gebruiker voor debugging
+        if main_users_count > 0:
+            main_user = next(u for u in enriched_users if u["is_main_user"])
+            log.info(f"🔍 Voorbeeld Main-gebruiker: ID={main_user['user'].get('id')}, Naam='{main_user['user'].get('name')}'")
+            log.info(f"  Site: {main_user['debug']['site_id_value']} (via '{main_user['debug']['site_key_used']}')")
+            log.info(f"  Client: {main_user['debug']['client_id_value']} (via '{main_user['debug']['client_key_used']}')")
+        
+        return enriched_users
     
     except Exception as e:
         log.critical(f"🔥 FATALE FOUT: {str(e)}")
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET JUISTE URL-IDS
+# Routes - MET VOLLEDIGE TRANSPARANTIE
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
-        "message": "Halo Main users app draait! Bezoek /users voor data",
-        "critical_notes": [
-            "1. Gebruikt URL-IDs (12/18) i.p.v. API-IDs (1706/1714)",
-            "2. Bezoek /id-mapper voor duidelijke koppeling",
-            "3. Werkt met typeveilige vergelijking (18.0 == 18)"
+        "message": "Halo Main users app draait! Bezoek /users voor gefilterde data",
+        "debug_routes": [
+            "/all-users - Toon ALLE gebruikers met filtering details",
+            "/users - Toon ALLEEN Main-site gebruikers",
+            "/id-mapper - Toon URL/API ID koppeling"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    site_users = fetch_main_users()
+    """Toon ALLEEN de Main-site gebruikers"""
+    enriched_users = fetch_all_users()
+    main_users = [u for u in enriched_users if u["is_main_user"]]
     
-    if not site_users:
+    if not main_users:
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
-                "1. Gebruik DE JUISTE URL-IDs: client_id=12, site_id=18",
-                "2. Bezoek /id-mapper voor visuele koppeling",
+                "1. Bezoek /all-users voor volledig overzicht",
+                "2. Controleer of client_id=12 en site_id=18 correct zijn",
                 "3. Zorg dat 'Teams' is aangevinkt in API-toegang"
-            ],
-            "debug_info": "Deze app gebruikt de IDs zoals ze in de URL staan (12/18)"
+            ]
         }), 500
     
     simplified = [{
-        "id": u.get("id"),
-        "name": u.get("name") or "Onbekend",
-        "email": u.get("EmailAddress") or u.get("email") or "Geen email"
-    } for u in site_users]
+        "id": u["user"].get("id"),
+        "name": u["user"].get("name") or "Onbekend",
+        "email": u["user"].get("EmailAddress") or u["user"].get("email") or "Geen email"
+    } for u in main_users]
     
     return jsonify({
         "client_id": HALO_CLIENT_ID_NUM,
         "client_name": "Bossers & Cnossen",
         "site_id": HALO_SITE_ID,
         "site_name": "Main",
-        "total_users": len(site_users),
+        "total_users": len(main_users),
         "users": simplified
     })
+
+@app.route("/all-users", methods=["GET"])
+def all_users():
+    """Toon ALLE gebruikers MET FILTERING DETAILS"""
+    enriched_users = fetch_all_users()
+    
+    # Bereid respons voor
+    response = {
+        "total_users": len(enriched_users),
+        "main_site_users": 0,
+        "users": []
+    }
+    
+    for eu in enriched_users:
+        user_data = {
+            "id": eu["user"].get("id"),
+            "name": eu["user"].get("name") or "Onbekend",
+            "email": eu["user"].get("EmailAddress") or eu["user"].get("email") or "Geen email",
+            "is_main_user": eu["is_main_user"],
+            "debug": eu["debug"]
+        }
+        
+        if eu["is_main_user"]:
+            response["main_site_users"] += 1
+        
+        response["users"].append(user_data)
+    
+    # Log resultaat voor transparantie
+    log.info(f"📊 /all-users: {response['main_site_users']} Main-site gebruikers gevonden van {response['total_users']} totaal")
+    
+    return jsonify(response)
 
 @app.route("/id-mapper", methods=["GET"])
 def id_mapper():
@@ -231,7 +285,6 @@ def id_mapper():
                     "note": "Gebruik deze URL-IDs in je code (12 en 18)"
                 }
         
-        # Als geen gebruiker exact 12/18 heeft
         return {
             "status": "warning",
             "message": "Geen gebruiker gevonden met exact client_id=12 en site_id=18",
@@ -242,21 +295,21 @@ def id_mapper():
         return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
-# App Start - MET JUISTE URL-IDS
+# App Start - VOLLEDIG TRANSPARANT
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - MET JUISTE URL-IDS")
+    log.info("🚀 HALO MAIN USERS - VOLLEDIG TRANSPARANTE MODUS")
     log.info("-"*70)
-    log.info("✅ Gebruikt URL-IDs (12/18) i.p.v. API-IDs (1706/1714)")
-    log.info("✅ Typeveilige vergelijking (18.0 == 18)")
+    log.info("✅ Toont ALLE gebruikers met filtering details via /all-users")
+    log.info("✅ Markeert duidelijk welke gebruikers tot Main-site behoren")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE STAPPEN:")
-    log.info("1. Bezoek EERST /id-mapper")
-    log.info("2. Bevestig dat client_id=12 en site_id=18 kloppen")
-    log.info("3. Bezoek DAN /users")
+    log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIG OVERZICHT:")
+    log.info("1. Bezoek /all-users voor COMPLEET overzicht")
+    log.info("2. Controleer de 'is_main_user' vlag voor elke gebruiker")
+    log.info("3. Gebruik /users voor ALLEEN de Main-site gebruikers")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
