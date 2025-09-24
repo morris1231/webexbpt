@@ -1,4 +1,4 @@
-import os, urllib.parse, logging, sys, io, csv
+import os, urllib.parse, logging, sys, io, csv, time
 from flask import Flask, jsonify, Response
 from dotenv import load_dotenv
 import requests
@@ -47,7 +47,6 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    
     try:
         r = requests.post(
             HALO_AUTH_URL,
@@ -68,57 +67,80 @@ def get_halo_headers():
 def fetch_all_users():
     """HAAL ALLE GEBRUIKERS OP MET JUISTE PAGINERING EN FILTERING"""
     log.info("🔍 Haal ALLE gebruikers op met correcte paginering")
-    
     all_users = []
     page = 1
-    pages_fetched = 0
+    max_pages = 100  # Veilige limiet om oneindige lus te voorkomen
+    consecutive_empty = 0  # Houdt lege pagina's bij
     
     try:
-        while True:
+        while page <= max_pages:
             # CORRECTE PAGINERING VOOR JOUW OMGEVING
             users_url = f"{HALO_API_BASE}/Users?page={page}&pageSize=50"
             log.info(f"➡️ API-aanvraag (pagina {page}): {users_url}")
             
-            headers = get_halo_headers()
-            r = requests.get(users_url, headers=headers, timeout=30)
-            
-            if r.status_code != 200:
-                log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
+            try:
+                headers = get_halo_headers()
+                r = requests.get(users_url, headers=headers, timeout=30)
+                
+                if r.status_code != 200:
+                    log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
+                    # Probeer opnieuw bij tijdelijke fouten
+                    if r.status_code in [429, 500, 502, 503, 504]:
+                        time.sleep(2)
+                        continue
+                    break
+                    
+                # Parse response
+                data = r.json()
+                
+                # Verwerk 'data' wrapper
+                if "data" in data and isinstance(data["data"], dict):
+                    users_data = data["data"]
+                else:
+                    users_data = data
+                
+                # Haal de users lijst op
+                users = users_data.get("users", [])
+                if not users:
+                    users = users_data.get("Users", [])
+                
+                # Controleer op lege response
+                if not users:
+                    consecutive_empty += 1
+                    log.warning(f"⚠️ Lege response (pagina {page}) - {consecutive_empty} opeenvolgend")
+                    
+                    # Stop na 3 lege pagina's
+                    if consecutive_empty >= 3:
+                        log.info("✅ Stoppen met ophalen na 3 lege pagina's")
+                        break
+                    page += 1
+                    time.sleep(0.5)  # Kleine delay voor API
+                    continue
+                
+                # Reset lege teller bij succesvolle response
+                consecutive_empty = 0
+                
+                # Voeg gebruikers toe aan de complete lijst
+                all_users.extend(users)
+                log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)})")
+                
+                # Stop als we minder dan 50 gebruikers krijgen OF lege response
+                if len(users) < 50:
+                    log.info("✅ Laatste pagina bereikt (minder dan 50 gebruikers)")
+                    break
+                
+                page += 1
+                time.sleep(0.3)  # Rate limiting delay (cruciaal!)
+                
+            except requests.exceptions.RequestException as e:
+                log.error(f"⚠️ Netwerkfout: {str(e)}")
+                time.sleep(2)  # Exponentiële backoff zou beter zijn
+                continue
+            except Exception as e:
+                log.error(f"⚠️ Onverwachte fout: {str(e)}")
                 break
-            
-            # Parse response
-            data = r.json()
-            log.info(f"🔍 RESPONSE STRUCTUUR: {type(data).__name__}")
-            
-            # Verwerk 'data' wrapper
-            if "data" in data and isinstance(data["data"], dict):
-                log.info("✅ Response heeft 'data' wrapper")
-                users_data = data["data"]
-            else:
-                users_data = data
-            
-            # Haal de users lijst op
-            users = users_data.get("users", [])
-            if not users:
-                users = users_data.get("Users", [])
-            
-            if not users:
-                log.warning("⚠️ Geen gebruikers gevonden in API response")
-                break
-            
-            # Voeg gebruikers toe aan de complete lijst
-            all_users.extend(users)
-            pages_fetched += 1
-            
-            log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)})")
-            
-            # Stop als we geen volgende pagina hebben
-            if len(users) < 50:
-                break
-            
-            page += 1
         
-        log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers over {pages_fetched} pagina{'s' if pages_fetched > 1 else ''}")
+        log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers over {page-1} pagina{'s' if page > 2 else ''}")
         
         # Filter Main-site gebruikers MET JUISTE LOGICA
         main_users = []
@@ -131,7 +153,6 @@ def fetch_all_users():
             for key in ["site_id", "SiteId", "siteId", "siteid", "SiteID", "site_id_int"]:
                 if key in u and u[key] is not None:
                     try:
-                        # Directe vergelijking met jouw URL-IDs
                         if float(u[key]) == float(HALO_SITE_ID):
                             site_match = True
                             break
@@ -142,7 +163,6 @@ def fetch_all_users():
             for key in ["client_id", "ClientId", "clientId", "clientid", "ClientID", "client_id_int"]:
                 if key in u and u[key] is not None:
                     try:
-                        # Directe vergelijking met jouw URL-IDs
                         if float(u[key]) == float(HALO_CLIENT_ID_NUM):
                             client_match = True
                             break
@@ -150,13 +170,13 @@ def fetch_all_users():
                         pass
             
             # 2. Als ID-koppeling faalt, probeer dan NAAM-koppeling
-            if not site_match:
-                site_name = str(u.get("site_name", "")).strip().lower()
+            if not site_match and "site_name" in u:
+                site_name = str(u["site_name"]).strip().lower()
                 if "main" in site_name or "hoofdkantoor" in site_name:
                     site_match = True
             
-            if not client_match:
-                client_name = str(u.get("client_name", "")).strip().lower()
+            if not client_match and "client_name" in u:
+                client_name = str(u["client_name"]).strip().lower()
                 if "bossers" in client_name and "cnossen" in client_name:
                     client_match = True
             
@@ -165,7 +185,6 @@ def fetch_all_users():
                 main_users.append(u)
         
         log.info(f"📊 Totaal Main-site gebruikers: {len(main_users)}/{len(all_users)}")
-        
         return main_users
     
     except Exception as e:
@@ -191,7 +210,6 @@ def health():
 def users():
     """Toon ALLEEN de Main-site gebruikers MET JUISTE LOGICA"""
     main_users = fetch_all_users()
-    
     if not main_users:
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
@@ -221,7 +239,6 @@ def users():
 def debug():
     """Toon technische details voor debugging"""
     main_users = fetch_all_users()
-    
     return {
         "status": "debug-info",
         "config": {
@@ -249,7 +266,13 @@ def debug():
                 "-H 'Authorization: Bearer $(curl -X POST \\\"{HALO_AUTH_URL}\\\" \\\n"
                 "-d \\\"grant_type=client_credentials&client_id={HALO_CLIENT_ID}&client_secret=******&scope=all\\\" \\\n"
                 "| jq -r '.access_token')'"
-            )
+            ),
+        "safety_mechanisms": [
+            "• Maximaal 100 pagina's om oneindige lus te voorkomen",
+            "• 0.3s delay tussen aanvragen om rate limiting te voorkomen",
+            "• 3 opeenvolgende lege pagina's stoppen de lus",
+            "• Herkansingen bij tijdelijke netwerkfouten"
+        ]
     }
 
 # ------------------------------------------------------------------------------
@@ -257,7 +280,6 @@ def debug():
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    
     log.info("="*70)
     log.info("🚀 HALO MAIN USERS - MET JUISTE PAGINERING EN FILTERING")
     log.info("-"*70)
@@ -270,5 +292,4 @@ if __name__ == "__main__":
     log.info("2. Bezoek DAN /users voor ALLE Main-site gebruikers")
     log.info("3. Gebruik de curl command in /debug voor API testen")
     log.info("="*70)
-    
     app.run(host="0.0.0.0", port=port, debug=True)
