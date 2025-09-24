@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET JUISTE PAGINERING (50 per pagina)
+# Logging - MET JUISTE PAGINERING EN FILTERING
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +37,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET JUISTE PAGINERING (50 per pagina)
+# Halo API helpers - MET JUISTE PAGINERING EN FILTERING
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -66,17 +66,16 @@ def get_halo_headers():
         raise
 
 def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET JUISTE PAGINERING (50 per pagina)"""
-    log.info("🔍 Haal ALLE gebruikers op met correcte paginering (50 per pagina)")
+    """HAAL ALLE GEBRUIKERS OP MET JUISTE PAGINERING EN FILTERING"""
+    log.info("🔍 Haal ALLE gebruikers op met correcte paginering")
     
     all_users = []
     page = 1
-    total_records = 0
     pages_fetched = 0
     
     try:
         while True:
-            # JUISTE PAGINERING VOOR JOUW OMGEVING (50 per pagina)
+            # CORRECTE PAGINERING VOOR JOUW OMGEVING
             users_url = f"{HALO_API_BASE}/Users?page={page}&pageSize=50"
             log.info(f"➡️ API-aanvraag (pagina {page}): {users_url}")
             
@@ -111,74 +110,55 @@ def fetch_all_users():
             all_users.extend(users)
             pages_fetched += 1
             
-            # Bepaal totalen
-            if "record_count" in users_data:
-                total_records = users_data["record_count"]
-            elif "total" in users_data:
-                total_records = users_data["total"]
-            elif "Total" in users_data:
-                total_records = users_data["Total"]
-            else:
-                # Probeer de eerste pagina om het totaal aantal te bepalen
-                if page == 1:
-                    # Haal de eerste pagina op zonder paginering om het totaal aantal te zien
-                    first_page_url = f"{HALO_API_BASE}/Users"
-                    r_first = requests.get(first_page_url, headers=headers, timeout=30)
-                    
-                    if r_first.status_code == 200:
-                        first_data = r_first.json()
-                        if "data" in first_data and isinstance(first_data["data"], dict):
-                            total_records = first_data["data"].get("record_count", len(all_users))
-                        else:
-                            total_records = first_data.get("record_count", len(all_users))
+            log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)})")
             
-            log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)}/{total_records})")
-            
-            # Stop als we alle pagina's hebben
-            if total_records <= len(all_users) or len(users) < 50:
+            # Stop als we geen volgende pagina hebben
+            if len(users) < 50:
                 break
             
             page += 1
         
         log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers over {pages_fetched} pagina{'s' if pages_fetched > 1 else ''}")
         
-        # Filter Main-site gebruikers MET NAAMGEBASEERDE MATCHING
+        # Filter Main-site gebruikers MET JUISTE LOGICA
         main_users = []
         for u in all_users:
-            # 1. Naamgebaseerde matching (JOUW OMGEVING GEBRUIKT DIT)
+            # 1. Eerst probeer ID-koppeling (JOUW OMGEVING GEBRUIKT DIT)
             site_match = False
             client_match = False
             
-            # Site naam check (case-insensitive)
-            site_name = str(u.get("site_name", "")).strip().lower()
-            if site_name == "main" or site_name == "hoofdkantoor":
-                site_match = True
+            # Site ID check (alle varianten)
+            for key in ["site_id", "SiteId", "siteId", "siteid", "SiteID", "site_id_int"]:
+                if key in u and u[key] is not None:
+                    try:
+                        # Directe vergelijking met jouw URL-IDs
+                        if float(u[key]) == float(HALO_SITE_ID):
+                            site_match = True
+                            break
+                    except (TypeError, ValueError):
+                        pass
             
-            # Client naam check (case-insensitive, met variaties)
-            client_name = str(u.get("client_name", "")).strip().lower()
-            if "bossers" in client_name and "cnossen" in client_name:
-                client_match = True
+            # Client ID check (alle varianten)
+            for key in ["client_id", "ClientId", "clientId", "clientid", "ClientID", "client_id_int"]:
+                if key in u and u[key] is not None:
+                    try:
+                        # Directe vergelijking met jouw URL-IDs
+                        if float(u[key]) == float(HALO_CLIENT_ID_NUM):
+                            client_match = True
+                            break
+                    except (TypeError, ValueError):
+                        pass
             
-            # 2. Integer ID koppeling (als fallback)
+            # 2. Als ID-koppeling faalt, probeer dan NAAM-koppeling
             if not site_match:
-                for key in ["site_id", "SiteId", "siteId", "siteid", "SiteID"]:
-                    if key in u and u[key] is not None:
-                        try:
-                            if float(u[key]) == float(HALO_SITE_ID):
-                                site_match = True
-                                break
-                        except (TypeError, ValueError):
-                            pass
+                site_name = str(u.get("site_name", "")).strip().lower()
+                if "main" in site_name or "hoofdkantoor" in site_name:
+                    site_match = True
             
             if not client_match:
-                for key in ["client_id", "ClientId", "clientId", "clientid", "ClientID"]:
-                    if key in u and u[key] is not None:
-                        try:
-                            if float(u[key]) == float(HALO_CLIENT_ID_NUM):
-                                client_match = True
-                                break
-                        except (TypeError, ValueError):
-                            pass
+                client_name = str(u.get("client_name", "")).strip().lower()
+                if "bossers" in client_name and "cnossen" in client_name:
+                    client_match = True
             
             # Bepaal of dit een Main-site gebruiker is
             if site_match and client_match:
@@ -202,14 +182,14 @@ def health():
         "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
             "1. Werkt MET JUISTE PAGINERING (50 gebruikers per pagina)",
-            "2. Gebruikt NAAMGEBASEERDE MATCHING (cruciaal voor jouw omgeving)",
+            "2. Gebruikt EERST ID-KOPPELING, dan NAAM-KOPPELING",
             "3. Bezoek /debug voor technische details"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLEEN de Main-site gebruikers MET NAAMGEBASEERDE MATCHING"""
+    """Toon ALLEEN de Main-site gebruikers MET JUISTE LOGICA"""
     main_users = fetch_all_users()
     
     if not main_users:
@@ -253,12 +233,12 @@ def debug():
         "api_flow": [
             "1. Authenticatie naar /auth/token (scope=all)",
             "2. Haal ALLE gebruikers op via /Users met JUISTE paginering (50 per pagina)",
-            "3. Filter op NAAM (cruciaal voor jouw omgeving)"
+            "3. Filter eerst op ID, dan op NAAM (cruciaal voor jouw omgeving)"
         ],
         "halo_notes": [
-            "1. Jouw omgeving gebruikt NAAMGEBASEERDE koppeling (niet ID koppeling!)",
+            "1. Jouw omgeving gebruikt PRIMAIR ID-KOPPELING (niet alleen naam!)",
             "2. Paginering gebruikt 'pageSize=50' (maximaal toegestaan)",
-            "3. Gebruik case-insensitive matching voor namen"
+            "3. Gebruik fallback naar naam-koppeling als ID-koppeling faalt"
         ],
         "current_counts": {
             "total_users_found": len(main_users),
@@ -279,10 +259,10 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - MET JUISTE PAGINERING (50 per pagina)")
+    log.info("🚀 HALO MAIN USERS - MET JUISTE PAGINERING EN FILTERING")
     log.info("-"*70)
     log.info("✅ Haalt ALLE gebruikers op via JUISTE paginering (50 per pagina)")
-    log.info("✅ Gebruikt NAAMGEBASEERDE MATCHING (cruciaal voor jouw omgeving)")
+    log.info("✅ Gebruikt EERST ID-KOPPELING, dan NAAM-KOPPELING (cruciaal voor jouw omgeving)")
     log.info("✅ Werkt met jouw specifieke Halo UAT omgeving")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
