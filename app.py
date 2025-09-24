@@ -2,6 +2,7 @@ import os, urllib.parse, logging, sys, time
 from flask import Flask, jsonify
 from dotenv import load_dotenv
 import requests
+import hashlib
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -26,10 +27,6 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 # Correcte URL voor UAT
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
-
-# Jouw specifieke client en site IDs
-HALO_CLIENT_ID_NUM = 12  # Bossers & Cnossen (URL ID)
-HALO_SITE_ID       = 18  # Main (URL ID)
 
 # Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
@@ -66,16 +63,40 @@ def get_halo_headers():
             log.critical(f"➡️ Status code: {r.status_code}")
         return None
 
-def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET JUISTE PAGINERING"""
-    log.info("🔍 Start met het ophalen van alle gebruikers")
+def calculate_response_hash(response_data):
+    """Bereken een hash van de API response om herhaling te detecteren"""
+    try:
+        # Haal de users lijst op
+        users = response_data.get("users", [])
+        if not users:
+            users = response_data.get("Users", [])
+        
+        if not users:
+            return "empty_response"
+        
+        # Maak een string van alle gebruikers ID's
+        user_ids = [str(u.get("id", "")) for u in users if u.get("id") is not None]
+        user_ids.sort()  # Zorg voor consistente volgorde
+        
+        # Bereken een hash van de samengevoegde ID's
+        hash_input = "|".join(user_keys)
+        return hashlib.md5(hash_input.encode()).hexdigest()
+    except Exception as e:
+        log.error(f"⚠️ Fout bij berekenen response hash: {str(e)}")
+        return "error_hash"
+
+def fetch_all_bnc_users():
+    """HAAL ALLE @bnc GEBRUIKERS OP MET CORRECTE PAGINERING EN HERHALING DETECTIE"""
+    log.info("🔍 Start met het ophalen van alle @bnc gebruikers met correcte paginering")
     
     # Gebruik een dictionary om duplicaten te voorkomen
     all_users = {}
+    seen_hashes = set()
     page = 1
     max_pages = 100
     consecutive_empty = 0
     total_bnc_count = 0
+    repeated_pages = 0
 
     while page <= max_pages:
         users_url = f"{HALO_API_BASE}/Users?page={page}&pageSize=50"
@@ -102,6 +123,21 @@ def fetch_all_users():
                 log.error(f"➡️ Raw response: {r.text[:500]}")
                 return []
             
+            # Bereken een hash van de response om herhaling te detecteren
+            response_hash = calculate_response_hash(data)
+            log.debug(f"   ➡️ Response hash: {response_hash}")
+            
+            # Controleer op herhaalde response
+            if response_hash in seen_hashes:
+                repeated_pages += 1
+                log.warning(f"⚠️ Waarschuwing: Dezelfde inhoud ontvangen als op een eerdere pagina (herhaling #{repeated_pages})")
+                
+                if repeated_pages >= 3:
+                    log.info("✅ Stoppen met ophalen na 3 herhalingen van dezelfde inhoud")
+                    break
+            else:
+                seen_hashes.add(response_hash)
+            
             # Verwerk 'data' wrapper
             if "data" in data and isinstance(data["data"], dict):
                 users_data = data["data"]
@@ -122,6 +158,12 @@ def fetch_all_users():
                 time.sleep(0.5)
                 continue
             
+            # Log de eerste gebruiker van de pagina voor debugging
+            first_user = users[0]
+            first_user_email = first_user.get("emailaddress") or first_user.get("email") or "Geen email"
+            first_user_id = first_user.get("id", "Onbekend")
+            log.info(f"   ➡️ Eerste gebruiker op deze pagina: {first_user.get('name', 'Onbekend')} - {first_user_email} (ID: {first_user_id})")
+            
             # Verwerk gebruikers en voorkom duplicaten
             new_users = 0
             bnc_users = 0
@@ -130,7 +172,7 @@ def fetch_all_users():
                 user_id = str(u.get("id", ""))
                 if not user_id:
                     # Probeer alternatieve ID velden
-                    for key in ["UserId", "userID", "user_id", "ID"]:
+                    for key in ["UserId", "userID", "user_id", "ID", "id_int"]:
                         if key in u and u[key]:
                             user_id = str(u[key])
                             break
@@ -152,6 +194,7 @@ def fetch_all_users():
             log.info(f"   ➡️ {new_users} nieuwe gebruikers toegevoegd aan de database")
             log.info(f"   ➡️ {bnc_users} @bnc gebruikers gevonden op deze pagina (totaal: {total_bnc_count})")
             
+            # Controleer of we minder dan 50 gebruikers hebben (laatste pagina)
             if len(users) < 50:
                 log.info("✅ Laatste pagina bereikt (minder dan 50 gebruikers)")
                 break
@@ -167,17 +210,16 @@ def fetch_all_users():
     log.info(f"✅ Totaal unieke gebruikers opgehaald: {len(all_users)}")
     log.info(f"✅ Totaal unieke @bnc gebruikers gevonden: {total_bnc_count}")
     
-    # Stap 2: Filter op @bnc en valideer client/site koppeling
-    log.info(f"🔍 Filter gebruikers op '@bnc' en valideer client/site koppeling (client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID})")
+    # Stap 2: Filter alleen op @bnc, geen client/site filtering
+    log.info("🔍 Filter gebruikers op '@bnc' (geen client/site filtering)")
     
     bnc_users = []
-    exact_match_count = 0
-    client_site_matches = 0
-    no_client_site_info = 0
     
-    # Definieer alle mogelijke veldnamen voor client en site ID's
+    # Definieer mogelijke veldnamen voor client en site
     client_id_keys = ["client_id", "ClientId", "clientId", "ClientID", "clientid", "client_id_int"]
     site_id_keys = ["site_id", "SiteId", "siteId", "SiteID", "siteid", "site_id_int"]
+    client_name_keys = ["client_name", "clientName", "ClientName"]
+    site_name_keys = ["site_name", "siteName", "SiteName"]
     
     for user_id, u in all_users.items():
         # Haal email op (case-insensitive)
@@ -190,56 +232,47 @@ def fetch_all_users():
         if "@bnc" not in email:
             continue
             
-        # Controleer client ID
-        client_match = False
-        client_id_value = None
+        # Bepaal client naam
+        client_name = "Onbekend"
+        for key in client_name_keys:
+            if key in u and u[key]:
+                client_name = u[key]
+                break
+        
+        # Bepaal site naam
+        site_name = "Onbekend"
+        for key in site_name_keys:
+            if key in u and u[key]:
+                site_name = u[key]
+                break
+        
+        # Bepaal client ID
+        client_id = "Onbekend"
         for key in client_id_keys:
             if key in u and u[key] is not None:
-                try:
-                    if str(u[key]).strip() == str(HALO_CLIENT_ID_NUM):
-                        client_match = True
-                        client_id_value = u[key]
-                        break
-                except:
-                    pass
+                client_id = str(u[key])
+                break
         
-        # Controleer site ID
-        site_match = False
-        site_id_value = None
+        # Bepaal site ID
+        site_id = "Onbekend"
         for key in site_id_keys:
             if key in u and u[key] is not None:
-                try:
-                    if str(u[key]).strip() == str(HALO_SITE_ID):
-                        site_match = True
-                        site_id_value = u[key]
-                        break
-                except:
-                    pass
+                site_id = str(u[key])
+                break
         
-        # Bepaal of dit een geldige gebruiker is
-        if client_match and site_match:
-            client_site_matches += 1
-            bnc_users.append(u)
-            
-            # Controleer op exacte email matches
-            is_exact_match = False
-            if "edwin.nieborg@bnc.nl" in email or "danja.berlo@bnc.nl" in email:
-                is_exact_match = True
-                exact_match_count += 1
-            
-            match_type = "EXACT" if is_exact_match else "MATCH"
-            log.info(f"{match_type} @bnc gebruiker: {u.get('name', 'Onbekend')} - {original_email} "
-                     f"(client: {client_id_value}, site: {site_id_value})")
-        else:
-            no_client_site_info += 1
-            log.warning(f"⚠️ @bnc gebruiker GEEN client/site koppeling: {u.get('name', 'Onbekend')} - {original_email} "
-                        f"(client: {client_id_value}, site: {site_id_value})")
+        # Voeg toe aan resultaten
+        bnc_users.append({
+            "user": u,
+            "client_name": client_name,
+            "site_name": site_name,
+            "client_id": client_id,
+            "site_id": site_id
+        })
+        
+        log.info(f"📧 @bnc gebruiker: {u.get('name', 'Onbekend')} - {original_email} "
+                 f"(client: {client_name}/{client_id}, site: {site_name}/{site_id})")
     
-    log.info(f"✅ Totaal @bnc gebruikers met correcte client/site koppeling: {len(bnc_users)}")
-    log.info(f"✅ Totaal @bnc gebruikers zonder client/site koppeling: {no_client_site_info}")
-    
-    if exact_match_count == 0:
-        log.warning("⚠️ WAARSCHUWING: Geen exacte matches gevonden voor Edwin.Nieborg@bnc.nl of danja.berlo@bnc.nl")
+    log.info(f"✅ Totaal @bnc gebruikers gevonden: {len(bnc_users)}")
     
     return bnc_users
 
@@ -250,71 +283,46 @@ def fetch_all_users():
 def health():
     return {
         "status": "ok",
-        "message": "Halo Main users app draait! Bezoek /users voor data",
-        "critical_notes": [
-            "1. Haalt ALLE gebruikers op via /Users endpoint",
-            "2. Filtert op '@bnc' in de email",
-            "3. Valideert client/site koppeling (client_id=12, site_id=18)",
-            "4. Bezoek /debug voor technische details"
+        "message": "Halo BNC users app draait! Bezoek /users voor alle @bnc gebruikers",
+        "endpoints": [
+            "/users - Toon alle @bnc gebruikers met hun client/site",
+            "/debug - Technische informatie over de API response"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLE @bnc gebruikers met correcte client/site koppeling"""
+    """Toon ALLE @bnc gebruikers met hun client/site informatie"""
     try:
-        bnc_users = fetch_all_users()
+        bnc_users = fetch_all_bnc_users()
         
         if not bnc_users:
-            log.error("❌ Geen @bnc gebruikers gevonden met correcte client/site koppeling")
+            log.warning("⚠️ Geen @bnc gebruikers gevonden in Halo")
             return jsonify({
-                "error": "Geen @bnc gebruikers gevonden met correcte client/site koppeling",
+                "warning": "Geen @bnc gebruikers gevonden",
                 "solution": [
-                    "1. Controleer of de API key 'all' scope heeft",
+                    "1. Controleer of de API key toegang heeft tot alle gebruikers",
                     "2. Zorg dat 'Teams' is aangevinkt in API-toegang",
-                    "3. Bezoek /debug voor technische details"
-                ],
-                "config": {
-                    "client_id": HALO_CLIENT_ID_NUM,
-                    "site_id": HALO_SITE_ID
-                }
-            }), 500
+                    "3. Controleer of er gebruikers met '@bnc' in Halo staan"
+                ]
+            }), 200  # Geen fout, gewoon een waarschuwing
         
-        log.info(f"✅ Succesvol {len(bnc_users)} @bnc gebruikers met correcte koppeling geretourneerd")
+        log.info(f"✅ Succesvol {len(bnc_users)} @bnc gebruikers geretourneerd")
         
         simplified = []
-        for u in bnc_users:
-            # Zoek client en site namen
-            client_name = "Onbekend"
-            site_name = "Onbekend"
-            
-            # Probeer client naam te vinden
-            for key in ["client_name", "clientName", "ClientName"]:
-                if key in u and u[key]:
-                    client_name = u[key]
-                    break
-            
-            # Probeer site naam te vinden
-            for key in ["site_name", "siteName", "SiteName"]:
-                if key in u and u[key]:
-                    site_name = u[key]
-                    break
-            
+        for item in bnc_users:
+            u = item["user"]
             simplified.append({
                 "id": u.get("id"),
                 "name": u.get("name") or "Onbekend",
                 "email": u.get("emailaddress") or u.get("email") or "Geen email",
-                "client_id": str(HALO_CLIENT_ID_NUM),
-                "client_name": client_name,
-                "site_id": str(HALO_SITE_ID),
-                "site_name": site_name
+                "client_name": item["client_name"],
+                "site_name": item["site_name"],
+                "client_id": item["client_id"],
+                "site_id": item["site_id"]
             })
         
         return jsonify({
-            "client_id": HALO_CLIENT_ID_NUM,
-            "client_name": "Bossers & Cnossen",
-            "site_id": HALO_SITE_ID,
-            "site_name": "Main",
             "total_users": len(bnc_users),
             "users": simplified
         })
@@ -327,31 +335,16 @@ def users():
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """Toon uitgebreide debug informatie"""
+    """Toon technische informatie over de API response"""
     try:
-        bnc_users = fetch_all_users()
+        bnc_users = fetch_all_bnc_users()
         
         # Verzamel voorbeeldgegevens
         sample_users = []
-        for i, u in enumerate(bnc_users[:5], 1):
+        for i, item in enumerate(bnc_users[:5], 1):
+            u = item["user"]
             email = u.get("emailaddress") or u.get("email") or "Geen email"
             name = u.get("name") or "Onbekend"
-            
-            # Zoek client en site namen
-            client_name = "Onbekend"
-            site_name = "Onbekend"
-            
-            # Probeer client naam te vinden
-            for key in ["client_name", "clientName", "ClientName"]:
-                if key in u and u[key]:
-                    client_name = u[key]
-                    break
-            
-            # Probeer site naam te vinden
-            for key in ["site_name", "siteName", "SiteName"]:
-                if key in u and u[key]:
-                    site_name = u[key]
-                    break
             
             # Verzamel alle mogelijke ID's
             client_ids = []
@@ -368,48 +361,54 @@ def debug():
                 "volgorde": i,
                 "name": name,
                 "email": email,
-                "client_name": client_name,
-                "site_name": site_name,
+                "client_name": item["client_name"],
+                "site_name": item["site_name"],
                 "client_ids": ", ".join(client_ids) if client_ids else "Niet gevonden",
                 "site_ids": ", ".join(site_ids) if site_ids else "Niet gevonden",
                 "user_id": u.get("id", "Onbekend")
             })
+        
+        # Analyseer de meest voorkomende client/sites
+        client_counts = {}
+        site_counts = {}
+        
+        for item in bnc_users:
+            client_key = f"{item['client_name']} ({item['client_id']})"
+            site_key = f"{item['site_name']} ({item['site_id']})"
+            
+            client_counts[client_key] = client_counts.get(client_key, 0) + 1
+            site_counts[site_key] = site_counts.get(site_key, 0) + 1
+        
+        # Sorteer op aantal
+        top_clients = sorted(client_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_sites = sorted(site_counts.items(), key=lambda x: x[1], reverse=True)[:5]
         
         return {
             "status": "debug-info",
             "api_flow": [
                 "1. Authenticatie naar /auth/token (scope=all)",
                 "2. Haal ALLE gebruikers op via /Users met paginering (50 per pagina)",
-                "3. FILTER OP '@bnc' IN EMAIL",
-                "4. VALIDEER CLIENT/SITE KOPPELING"
+                "3. FILTER OP '@bnc' IN EMAIL (geen client/site filtering)"
             ],
             "configuration": {
-                "client_id": HALO_CLIENT_ID_NUM,
-                "site_id": HALO_SITE_ID,
                 "halo_api_base": HALO_API_BASE
             },
             "current_counts": {
-                "total_unique_users_fetched": len(fetch_all_users.cache) if hasattr(fetch_all_users, 'cache') else "N/A",
-                "total_bnc_users_found": len(bnc_users),
-                "exact_email_matches": sum(1 for u in bnc_users 
-                    if "edwin.nieborg@bnc.nl" in str(u.get("emailaddress") or u.get("email") or "").lower() 
-                    or "danja.berlo@bnc.nl" in str(u.get("emailaddress") or u.get("email") or "").lower())
+                "total_unique_users_fetched": len(bnc_users),
+                "total_bnc_users_found": len(bnc_users)
             },
+            "top_clients": [{"name": name, "count": count} for name, count in top_clients],
+            "top_sites": [{"name": name, "count": count} for name, count in top_sites],
             "sample_users": sample_users,
             "safety_mechanisms": [
                 "• Gebruik van dictionary om duplicaten te voorkomen",
+                "• Response hashing om herhaling te detecteren",
+                "• Logt eerste gebruiker van elke pagina voor debugging",
                 "• 0.3s delay tussen aanvragen om rate limiting te voorkomen",
                 "• Herkansingen bij tijdelijke netwerkfouten",
                 "• Case-insensitive email matching"
             ],
-            "troubleshooting": [
-                "Als geen gebruikers worden gevonden:",
-                "1. Controleer of client_id=12 en site_id=18 correct zijn",
-                "2. Bezoek /debug om te zien welke ID-velden beschikbaar zijn",
-                "3. Pas de client_id/site_id aan in de code als nodig",
-                "4. Controleer of de API key toegang heeft tot alle gebruikers"
-            ],
-            "note": "Deze app haalt ALLE gebruikers op en filtert alleen op basis van de aanwezige data in de /Users endpoint"
+            "note": "Deze app toont ALLE @bnc gebruikers met hun bijbehorende client en site informatie, zonder filtering"
         }
     except Exception as e:
         log.critical(f"🔥 FATALE FOUT in /debug: {str(e)}")
@@ -424,16 +423,16 @@ def debug():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info("="*70)
-    log.info("🚀 HALO ALL USERS - DIRECTE FILTERING OP /Users")
+    log.info("🚀 HALO ALL BNC USERS - CORRECTE PAGINERING")
     log.info("-"*70)
-    log.info(f"✅ Gebruikt alleen /Users endpoint (geen /Clients of /Sites)")
-    log.info(f"✅ Filtert op '@bnc' en valideert client_id={HALO_CLIENT_ID_NUM}/site_id={HALO_SITE_ID}")
-    log.info("✅ Geen duplicaten door unieke gebruikersopslag")
+    log.info("✅ Detecteert herhalingen in API paginering")
+    log.info("✅ Logt eerste gebruiker van elke pagina voor debugging")
+    log.info("✅ Toont ALLE @bnc gebruikers zoals ze in Halo staan")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
     log.info("1. Bezoek /debug voor technische details")
-    log.info("2. Controleer de logs op '@bnc gebruiker' meldingen")
-    log.info("3. Bezoek /users voor ALLE @bnc gebruikers met correcte koppeling")
+    log.info("2. Controleer de logs op 'Eerste gebruiker op deze pagina' meldingen")
+    log.info("3. Bezoek /users voor ALLE @bnc gebruikers met hun client/site")
     log.info("="*70)
     
     # Gebruik de poort zoals ingesteld in de omgeving
