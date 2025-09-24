@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET JUISTE ID VALIDATIE
+# Logging - MET ENKEL TEAMS RECHTEN
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - MET DE GEVONDEN ECHTE IDs
+# Config - ALLEEN TEAMS RECHTEN NODIG
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -27,9 +27,9 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# 🔑 DE ECHTE IDs ZOALS GEVONDEN IN DE API (NIET DE URL IDS!)
-HALO_CLIENT_ID_NUM = 1706  # ✅ ECHTE client ID (Bossers & Cnossen)
-HALO_SITE_ID       = 1714  # ✅ ECHTE site ID (Main)
+# Jouw IDs (pas aan op basis van /id-mapper)
+HALO_CLIENT_ID_NUM = 1706  # Bossers & Cnossen (API ID)
+HALO_SITE_ID       = 1714  # Main (API ID)
 
 # Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
@@ -37,10 +37,10 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET EXPLICIETE ID VALIDATIE
+# Halo API helpers - MET ENKEL TEAMS RECHTEN
 # ------------------------------------------------------------------------------
 def get_halo_headers():
-    """Authenticatie met UAT-specifieke instellingen"""
+    """Authenticatie met alleen 'Teams' rechten"""
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
@@ -66,11 +66,11 @@ def get_halo_headers():
         raise
 
 def fetch_main_users():
-    """HAAL MAIN-SITE GEBRUIKERS OP MET DE ECHTE IDs"""
+    """HAAL MAIN-SITE GEBRUIKERS OP MET ENKEL TEAMS RECHTEN"""
     log.info(f"🔍 Start proces voor client {HALO_CLIENT_ID_NUM}, site {HALO_SITE_ID}")
     
     try:
-        # Haal ALLE gebruikers op
+        # Haal ALLE gebruikers op (geen externe endpoints nodig)
         users_url = f"{HALO_API_BASE}/Users"
         log.info(f"➡️ API-aanvraag: {users_url}")
         
@@ -119,17 +119,17 @@ def fetch_main_users():
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET ID VALIDATIE
+# Routes - MET ENKEL TEAMS RECHTEN
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
-        "critical_info": [
-            f"1. Gebruikt ECHTE client ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen)",
-            f"2. Gebruikt ECHTE site ID: {HALO_SITE_ID} (Main)",
-            "3. Deze IDs komen UIT DE API - niet uit de URL!"
+        "critical_notes": [
+            "1. Werkt MET ENKEL 'Teams' rechten (geen Clients/Sites nodig)",
+            "2. Gebruikt API IDs (1706/1714) i.p.v. URL IDs (12/18)",
+            "3. Bezoek /id-helper voor hulp bij ID mapping"
         ]
     }
 
@@ -142,10 +142,10 @@ def users():
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
                 f"1. Gebruik DE ECHTE IDs: client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID}",
-                "2. Bezoek /id-mapper om de juiste IDs te vinden",
+                "2. Bezoek /id-helper om jouw juiste IDs te vinden",
                 "3. Zorg dat 'Teams' is aangevinkt in API-toegang"
             ],
-            "debug_info": "Deze app gebruikt de IDs zoals gevonden in de API response"
+            "debug_info": "Deze app gebruikt alleen de /Users endpoint (geen Clients/Sites nodig)"
         }), 500
     
     simplified = [{
@@ -163,86 +163,81 @@ def users():
         "users": simplified
     })
 
-@app.route("/id-mapper", methods=["GET"])
-def id_mapper():
-    """Toon de KOPPELING tussen URL-IDS en API-IDS"""
+@app.route("/id-helper", methods=["GET"])
+def id_helper():
+    """HULP BIJ ID MAPPING MET ALLEEN /Users ENDPOINT"""
     try:
         headers = get_halo_headers()
+        r = requests.get(f"{HALO_API_BASE}/Users", headers=headers, timeout=30)
+        r.raise_for_status()
         
-        # Haal alle clients op
-        clients_url = f"{HALO_API_BASE}/Clients"
-        r_clients = requests.get(clients_url, headers=headers, timeout=15)
+        # Parse response
+        data = r.json()
+        users = data if isinstance(data, list) else data.get("users", []) or []
         
-        # Haal alle sites op
-        sites_url = f"{HALO_API_BASE}/Sites"
-        r_sites = requests.get(sites_url, headers=headers, timeout=15)
+        if not users:
+            return {"error": "Geen gebruikers gevonden in API response"}, 500
         
-        if r_clients.status_code != 200 or r_sites.status_code != 200:
-            return {
-                "error": "Kan clients/sites niet ophalen",
-                "solution": [
-                    "1. Zorg dat 'Teams' is aangevinkt in API-toegang",
-                    "2. Gebruik scope 'all'"
-                ]
-            }, 500
+        # Verzamel unieke client/site IDs
+        client_ids = {}
+        site_ids = {}
         
-        # Parse responses
-        clients = r_clients.json() if isinstance(r_clients.json(), list) else r_clients.json().get("clients", [])
-        sites = r_sites.json() if isinstance(r_sites.json(), list) else r_sites.json().get("sites", [])
-        
-        # Maak koppeling
-        client_mapping = {}
-        for c in clients:
-            url_id = str(c.get("external_id", ""))  # Dit is de ID uit de URL
-            api_id = str(c.get("id", ""))
-            name = c.get("name", "Onbekend")
-            if url_id and api_id:
-                client_mapping[url_id] = {
-                    "api_id": api_id,
-                    "name": name
-                }
-        
-        site_mapping = {}
-        for s in sites:
-            url_id = str(s.get("external_id", ""))
-            api_id = str(s.get("id", ""))
-            name = s.get("name", "Onbekend")
-            client_id = str(s.get("client_id", ""))
-            if url_id and api_id:
-                site_mapping[url_id] = {
-                    "api_id": api_id,
-                    "name": name,
-                    "client_id": client_id
-                }
+        for u in users:
+            # Client IDs
+            client_id_val = str(
+                u.get("clientid") or 
+                u.get("client_id") or 
+                ""
+            ).strip()
+            if client_id_val:
+                client_ids[client_id_val] = client_ids.get(client_id_val, 0) + 1
+            
+            # Site IDs
+            site_id_val = str(
+                u.get("siteid") or 
+                u.get("site_id") or 
+                ""
+            ).strip()
+            if site_id_val:
+                site_ids[site_id_val] = site_ids.get(site_id_val, 0) + 1
         
         return {
             "status": "success",
-            "client_mapping": client_mapping,
-            "site_mapping": site_mapping,
-            "note": "Gebruik deze mapping om URL-IDs te vertalen naar API-IDs"
+            "client_ids": [
+                {"api_id": cid, "count": count}
+                for cid, count in client_ids.items()
+            ],
+            "site_ids": [
+                {"api_id": sid, "count": count}
+                for sid, count in site_ids.items()
+            ],
+            "note": "Gebruik deze IDs in je code (NIET de URL IDs!)",
+            "example": {
+                "url_example": "https://bncuat.halopsa.com/customer?clientid=12&siteid=18",
+                "api_example": "Gebruik client_id=1706, site_id=1714 in je code"
+            }
         }
     
     except Exception as e:
         return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
-# App Start - MET ID VALIDATIE
+# App Start - MET ENKEL TEAMS RECHTEN
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - MET ECHTE API IDs")
+    log.info("🚀 HALO MAIN USERS - MET ENKEL 'Teams' RECHTEN")
     log.info("-"*70)
-    log.info(f"✅ Gebruikt ECHTE client ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen)")
-    log.info(f"✅ Gebruikt ECHTE site ID: {HALO_SITE_ID} (Main)")
+    log.info("✅ Werkt MET ENKEL 'Teams' aangevinkt (geen Clients/Sites nodig!)")
+    log.info("✅ Gebruikt API IDs (1706/1714) i.p.v. URL IDs (12/18)")
     log.info("-"*70)
-    log.info("💡 BELANGRIJK:")
-    log.info("1. Deze IDs KOMEN UIT DE API - niet uit de URL")
-    log.info("2. Bezoek /id-mapper om de koppeling te zien")
-    log.info("3. Gebruik deze waarden in je code:")
-    log.info(f"   HALO_CLIENT_ID_NUM = {HALO_CLIENT_ID_NUM}")
-    log.info(f"   HALO_SITE_ID = {HALO_SITE_ID}")
+    log.info("👉 VOLG DEZE STAPPEN:")
+    log.info("1. Bezoek EERST /id-helper")
+    log.info("2. Noteer de API IDs voor jouw klant/site")
+    log.info("3. Pas HALO_CLIENT_ID_NUM en HALO_SITE_ID aan in de code")
+    log.info("4. Bezoek DAN /users")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
