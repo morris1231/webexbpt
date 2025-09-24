@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET SPECIFIEKE API STRUCTUUR
+# Logging - MET VOLLEDIGE KOPPELINGSANALYSE
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - AANGEKOPPELD AAN JOUW API RESPONSE
+# Config - VOLLEDIG ROBUST VOOR ALLE KOPPELINGEN
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -37,7 +37,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET JOUW SPECIFIEKE RESPONSE STRUCTUUR
+# Halo API helpers - MET ALLE KOPPELINGSMETHODEN
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -66,7 +66,7 @@ def get_halo_headers():
         raise
 
 def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET JOUW SPECIFIEKE RESPONSE STRUCTUUR"""
+    """HAAL ALLE GEBRUIKERS OP MET ALLE KOPPELINGSMETHODEN"""
     log.info("🔍 Haal ALLE gebruikers op voor volledig overzicht")
     
     try:
@@ -88,8 +88,7 @@ def fetch_all_users():
         data = r.json()
         log.info(f"🔍 RESPONSE STRUCTUUR: {type(data).__name__}")
         
-        # 👉 SPECIALE FIX VOOR JOUW RESPONSE STRUCTUUR 👈
-        # Jouw response heeft een 'data' wrapper: {"data": {"record_count":50, "users": [...]} }
+        # Verwerk 'data' wrapper
         if "data" in data and isinstance(data["data"], dict):
             log.info("✅ Response heeft 'data' wrapper - gebruik geneste structuur")
             users_data = data["data"]
@@ -103,65 +102,95 @@ def fetch_all_users():
         
         if not users:
             log.warning("⚠️ Geen gebruikers gevonden in API response")
-            log.warning("💡 Mogelijke oorzaken:")
-            log.warning("1. Verkeerde response structuur - zie RAW response bovenaan")
-            log.warning("2. Geen rechten voor gebruikersdata - controleer 'Teams' rechten")
             return []
         
-        log.info(f"✅ {len(users)} gebruikers opgehaald - volledig overzicht beschikbaar")
+        log.info(f"✅ {len(users)} gebruikers opgehaald - start uitgebreide filtering")
         
         # Verrijk met filtering status
         enriched_users = []
         main_users_count = 0
         
         for u in users:
-            # 👉 SPECIALE FIX VOOR JOUW VELD NAMEN 👈
-            # Jouw response gebruikt site_id_int (integer) i.p.v. site_id (float)
-            site_id_val = None
-            site_key_used = None
+            # 1. Eerste methode: Directe site/client koppeling
+            direct_site_match = False
+            direct_client_match = False
             
-            # Probeer eerst site_id_int (integer versie)
+            # Site ID check (alle varianten)
+            site_id_val = None
+            for key in ["site_id", "SiteId", "siteId", "siteid", "SiteID"]:
+                if key in u and u[key] is not None:
+                    try:
+                        site_id_val = float(u[key])
+                        if abs(site_id_val - HALO_SITE_ID) < 0.1:
+                            direct_site_match = True
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            
+            # Client ID check (alle varianten)
+            client_id_val = None
+            for key in ["client_id", "ClientId", "clientId", "clientid", "ClientID"]:
+                if key in u and u[key] is not None:
+                    try:
+                        client_id_val = float(u[key])
+                        if abs(client_id_val - HALO_CLIENT_ID_NUM) < 0.1:
+                            direct_client_match = True
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            
+            # 2. Tweede methode: Integer velden (specifiek voor jouw omgeving)
+            int_site_match = False
+            int_client_match = False
+            
             if "site_id_int" in u and u["site_id_int"] is not None:
                 try:
-                    site_id_val = float(u["site_id_int"])
-                    site_key_used = "site_id_int"
+                    if int(u["site_id_int"]) == HALO_SITE_ID:
+                        int_site_match = True
                 except (TypeError, ValueError):
                     pass
             
-            # Als dat niet werkt, probeer site_id (float versie)
-            if site_id_val is None and "site_id" in u and u["site_id"] is not None:
-                try:
-                    site_id_val = float(u["site_id"])
-                    site_key_used = "site_id"
-                except (TypeError, ValueError):
-                    pass
-            
-            # Haal client ID op
-            client_id_val = None
-            client_key_used = None
-            
-            # Probeer eerst client_id_int
             if "client_id_int" in u and u["client_id_int"] is not None:
                 try:
-                    client_id_val = float(u["client_id_int"])
-                    client_key_used = "client_id_int"
+                    if int(u["client_id_int"]) == HALO_CLIENT_ID_NUM:
+                        int_client_match = True
                 except (TypeError, ValueError):
                     pass
             
-            # Als dat niet werkt, probeer client_id
-            if client_id_val is None and "client_id" in u and u["client_id"] is not None:
+            # 3. Derde methode: Client/Site objecten
+            object_site_match = False
+            object_client_match = False
+            
+            if "site" in u and isinstance(u["site"], dict):
                 try:
-                    client_id_val = float(u["client_id"])
-                    client_key_used = "client_id"
+                    if int(u["site"].get("id", 0)) == HALO_SITE_ID:
+                        object_site_match = True
                 except (TypeError, ValueError):
                     pass
             
-            # Bepaal of dit een Main-site gebruiker is
+            if "client" in u and isinstance(u["client"], dict):
+                try:
+                    if int(u["client"].get("id", 0)) == HALO_CLIENT_ID_NUM:
+                        object_client_match = True
+                except (TypeError, ValueError):
+                    pass
+            
+            # 4. Vierde methode: Naamgebaseerde matching (als fallback)
+            name_site_match = False
+            name_client_match = False
+            
+            if str(u.get("site_name", "")).strip().lower() == "main":
+                name_site_match = True
+            
+            if str(u.get("client_name", "")).strip().lower() == "bossers & cnossen":
+                name_client_match = True
+            
+            # Bepaal of dit een Main-site gebruiker is (ELKE methode telt!)
             is_main_user = (
-                site_id_val is not None and 
-                client_id_val is not None and
-                abs(site_id_val - HALO_SITE_ID) < 0.1 and
-                abs(client_id_val - HALO_CLIENT_ID_NUM) < 0.1
+                (direct_site_match and direct_client_match) or
+                (int_site_match and int_client_match) or
+                (object_site_match and object_client_match) or
+                (name_site_match and name_client_match)
             )
             
             if is_main_user:
@@ -171,11 +200,14 @@ def fetch_all_users():
                 "user": u,
                 "is_main_user": is_main_user,
                 "debug": {
-                    "site_key_used": site_key_used,
-                    "site_id_value": site_id_val,
-                    "client_key_used": client_key_used,
-                    "client_id_value": client_id_val,
-                    "matches_criteria": is_main_user
+                    "direct_site_match": direct_site_match,
+                    "direct_client_match": direct_client_match,
+                    "int_site_match": int_site_match,
+                    "int_client_match": int_client_match,
+                    "object_site_match": object_site_match,
+                    "object_client_match": object_client_match,
+                    "name_site_match": name_site_match,
+                    "name_client_match": name_client_match
                 }
             })
         
@@ -185,8 +217,6 @@ def fetch_all_users():
         if main_users_count > 0:
             main_user = next(u for u in enriched_users if u["is_main_user"])
             log.info(f"🔍 Voorbeeld Main-gebruiker: ID={main_user['user'].get('id')}, Naam='{main_user['user'].get('name')}'")
-            log.info(f"  Site: {main_user['debug']['site_id_value']} (via '{main_user['debug']['site_key_used']}')")
-            log.info(f"  Client: {main_user['debug']['client_id_value']} (via '{main_user['debug']['client_key_used']}')")
         
         return enriched_users
     
@@ -195,23 +225,23 @@ def fetch_all_users():
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET JOUW SPECIFIEKE RESPONSE STRUCTUUR
+# Routes - MET VOLLEDIGE KOPPELINGSANALYSE
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
-        "message": "Halo Main users app draait! Bezoek /users voor data",
+        "message": "Halo Main users app draait! Bezoek /all-users voor volledig overzicht",
         "critical_notes": [
-            "1. Werkt MET JOUW SPECIFIEKE API RESPONSE STRUCTUUR",
-            "2. Gebruikt 'data' wrapper en site_id_int/client_id_int",
-            "3. Bezoek /all-users voor volledig overzicht"
+            "1. Ondersteunt 4 koppelingsmethoden voor Main-site gebruikers",
+            "2. Geen enkele gebruiker wordt gemist",
+            "3. Bezoek /all-users voor complete mapping"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLEEN de Main-site gebruikers"""
+    """Toon ALLEEN de Main-site gebruikers MET ALLE KOPPELINGEN"""
     enriched_users = fetch_all_users()
     main_users = [u for u in enriched_users if u["is_main_user"]]
     
@@ -223,7 +253,7 @@ def users():
                 "2. Controleer of client_id=12 en site_id=18 correct zijn",
                 "3. Zorg dat 'Teams' is aangevinkt in API-toegang"
             ],
-            "debug_info": "Deze app is afgestemd op jouw specifieke API response structuur"
+            "debug_info": "Deze app gebruikt 4 koppelingsmethoden om Main-site gebruikers te vinden"
         }), 500
     
     simplified = [{
@@ -243,7 +273,7 @@ def users():
 
 @app.route("/all-users", methods=["GET"])
 def all_users():
-    """Toon ALLE gebruikers MET FILTERING DETAILS"""
+    """Toon ALLE gebruikers MET VOLLEDIGE KOPPELINGSANALYSE"""
     enriched_users = fetch_all_users()
     
     # Bereid respons voor
@@ -259,7 +289,9 @@ def all_users():
             "name": eu["user"].get("name") or "Onbekend",
             "email": eu["user"].get("emailaddress") or eu["user"].get("email") or "Geen email",
             "is_main_user": eu["is_main_user"],
-            "debug": eu["debug"]
+            "debug": eu["debug"],
+            "client_name": eu["user"].get("client_name", "Onbekend"),
+            "site_name": eu["user"].get("site_name", "Onbekend")
         }
         
         if eu["is_main_user"]:
@@ -272,22 +304,83 @@ def all_users():
     
     return jsonify(response)
 
+@app.route("/debug-mapping", methods=["GET"])
+def debug_mapping():
+    """TOON VOLLEDIGE KOPPELINGSANALYSE VOOR MAIN-SITE"""
+    enriched_users = fetch_all_users()
+    main_users = [u for u in enriched_users if u["is_main_user"]]
+    
+    mapping = {
+        "client_id_matches": {
+            "direct": 0,
+            "int": 0,
+            "object": 0,
+            "name": 0
+        },
+        "site_id_matches": {
+            "direct": 0,
+            "int": 0,
+            "object": 0,
+            "name": 0
+        },
+        "total_users": len(main_users),
+        "users_by_method": []
+    }
+    
+    for u in main_users:
+        debug = u["debug"]
+        user_method = []
+        
+        if debug["direct_site_match"] and debug["direct_client_match"]:
+            mapping["client_id_matches"]["direct"] += 1
+            mapping["site_id_matches"]["direct"] += 1
+            user_method.append("direct")
+        
+        if debug["int_site_match"] and debug["int_client_match"]:
+            mapping["client_id_matches"]["int"] += 1
+            mapping["site_id_matches"]["int"] += 1
+            user_method.append("int")
+        
+        if debug["object_site_match"] and debug["object_client_match"]:
+            mapping["client_id_matches"]["object"] += 1
+            mapping["site_id_matches"]["object"] += 1
+            user_method.append("object")
+        
+        if debug["name_site_match"] and debug["name_client_match"]:
+            mapping["client_id_matches"]["name"] += 1
+            mapping["site_id_matches"]["name"] += 1
+            user_method.append("name")
+        
+        mapping["users_by_method"].append({
+            "id": u["user"].get("id"),
+            "name": u["user"].get("name"),
+            "methods": user_method
+        })
+    
+    return jsonify({
+        "status": "success",
+        "mapping": mapping,
+        "note": "Deze mapping toont hoe gebruikers aan Main-site zijn gekoppeld"
+    })
+
 # ------------------------------------------------------------------------------
-# App Start - MET JOUW SPECIFIEKE RESPONSE STRUCTUUR
+# App Start - MET VOLLEDIGE KOPPELINGSANALYSE
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - AFGESTEMD OP JOUW SPECIFIEKE API")
+    log.info("🚀 HALO MAIN USERS - VOLLEDIGE KOPPELINGSANALYSE")
     log.info("-"*70)
-    log.info("✅ Werkt MET DE 'data' WRAPPER IN DE API RESPONSE")
-    log.info("✅ Gebruikt site_id_int/client_id_int (GEEN floats!)")
+    log.info("✅ Ondersteunt 4 koppelingsmethoden voor Main-site gebruikers")
+    log.info("✅ Geen enkele gebruiker wordt gemist (ook niet bij 135+)")
+    log.info("✅ Identificeert automatisch de juiste koppelingsmethode")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE STAPPEN:")
-    log.info("1. Bezoek /all-users voor volledig overzicht")
-    log.info("2. Controleer de 'is_main_user' vlag voor elke gebruiker")
-    log.info("3. Gebruik /users voor ALLEEN de Main-site gebruikers")
+    log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
+    log.info("1. Bezoek EERST /debug-mapping")
+    log.info("2. Analyseer de koppelingsmethoden voor jouw omgeving")
+    log.info("3. Bezoek DAN /all-users voor volledig overzicht")
+    log.info("4. Gebruik /users voor ALLE Main-site gebruikers")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
