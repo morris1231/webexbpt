@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET VOLLEDIGE KOPPELINGSANALYSE
+# Logging - MET PAGINERING EN JUISTE ID'S
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - VOLLEDIG ROBUST VOOR ALLE KOPPELINGEN
+# Config - MET JUISTE ID'S EN PAGINERING
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -36,12 +36,8 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
     sys.exit(1)
 
-# Globale mapping (wordt gevuld bij eerste API call)
-CLIENT_MAPPING = {}
-SITE_MAPPING = {}
-
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET ALLE KOPPELINGSMETHODEN
+# Halo API helpers - MET PAGINERING EN JUISTE FILTERING
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -69,246 +65,141 @@ def get_halo_headers():
         log.critical(f"➡️ Response: {r.text if 'r' in locals() else 'Geen response'}")
         raise
 
-def build_id_mappings():
-    """Bouw de mapping tussen URL-IDs en API-IDs"""
-    global CLIENT_MAPPING, SITE_MAPPING
-    
-    if CLIENT_MAPPING and SITE_MAPPING:
-        return
-    
-    log.info("🔍 Bouw ID mappings tussen URL-IDs en API-IDs")
-    
-    try:
-        headers = get_halo_headers()
-        
-        # Haal alle clients op
-        clients_url = f"{HALO_API_BASE}/Clients"
-        r_clients = requests.get(clients_url, headers=headers, timeout=15)
-        
-        # Haal alle sites op
-        sites_url = f"{HALO_API_BASE}/Sites"
-        r_sites = requests.get(sites_url, headers=headers, timeout=15)
-        
-        if r_clients.status_code != 200 or r_sites.status_code != 200:
-            log.error("❌ Kan clients/sites niet ophalen - gebruik fallback mapping")
-            
-            # Fallback mapping (gebruikt in jouw specifieke omgeving)
-            CLIENT_MAPPING = {
-                "12": {"api_id": "1706", "name": "Bossers & Cnossen"},
-                "1": {"api_id": "1", "name": "Unknown"}
-            }
-            
-            SITE_MAPPING = {
-                "18": {"api_id": "1714", "name": "Main"},
-                "1": {"api_id": "1", "name": "Unknown"}
-            }
-            return
-        
-        # Parse responses
-        clients_data = r_clients.json()
-        sites_data = r_sites.json()
-        
-        # Haal clients uit de response
-        clients = []
-        if isinstance(clients_data, list):
-            clients = clients_data
-        else:
-            clients = clients_data.get("clients", []) or clients_data.get("Clients", [])
-        
-        # Haal sites uit de response
-        sites = []
-        if isinstance(sites_data, list):
-            sites = sites_data
-        else:
-            sites = sites_data.get("sites", []) or sites_data.get("Sites", [])
-        
-        # Bouw client mapping
-        for c in clients:
-            url_id = str(c.get("external_id", ""))
-            api_id = str(c.get("id", ""))
-            name = c.get("name", "Onbekend")
-            
-            if url_id and api_id:
-                CLIENT_MAPPING[url_id] = {"api_id": api_id, "name": name}
-        
-        # Bouw site mapping
-        for s in sites:
-            url_id = str(s.get("external_id", ""))
-            api_id = str(s.get("id", ""))
-            name = s.get("name", "Onbekend")
-            client_id = str(s.get("client_id", ""))
-            
-            if url_id and api_id:
-                SITE_MAPPING[url_id] = {
-                    "api_id": api_id,
-                    "name": name,
-                    "client_id": client_get
-                }
-        
-        # Log de gevonden mappings
-        log.info("✅ CLIENT MAPPING GEVONDEN:")
-        for url_id, data in CLIENT_MAPPING.items():
-            log.info(f"  → URL ID {url_id} = API ID {data['api_id']} ({data['name']})")
-        
-        log.info("✅ SITE MAPPING GEVONDEN:")
-        for url_id, data in SITE_MAPPING.items():
-            log.info(f"  → URL ID {url_id} = API ID {data['api_id']} ({data['name']})")
-    
-    except Exception as e:
-        log.error(f"⚠️ Mapping bouwen mislukt: {str(e)}")
-        log.info("💡 Gebruik fallback mapping voor jouw omgeving")
-        
-        # Fallback mapping specifiek voor jouw omgeving
-        CLIENT_MAPPING = {
-            "12": {"api_id": "1706", "name": "Bossers & Cnossen"},
-            "1": {"api_id": "1", "name": "Unknown"}
-        }
-        
-        SITE_MAPPING = {
-            "18": {"api_id": "1714", "name": "Main"},
-            "1": {"api_id": "1", "name": "Unknown"}
-        }
-
 def fetch_all_users():
-    """HAAL ALLE GEBRUIKERS OP MET ALLE KOPPELINGSMETHODEN"""
-    log.info("🔍 Haal ALLE gebruikers op voor volledig overzicht")
+    """HAAL ALLE GEBRUIKERS OP MET PAGINERING EN JUISTE FILTERING"""
+    log.info("🔍 Haal ALLE gebruikers op met paginering")
     
-    # Bouw eerst de ID mappings
-    build_id_mappings()
+    all_users = []
+    page = 1
+    total_records = 0
+    pages_fetched = 0
     
     try:
-        # Haal ALLE gebruikers op
-        users_url = f"{HALO_API_BASE}/Users"
-        log.info(f"➡️ API-aanvraag: {users_url}")
+        while True:
+            # Haal gebruikers op met paginering
+            users_url = f"{HALO_API_BASE}/Users?page={page}&page_size=100"
+            log.info(f"➡️ API-aanvraag (pagina {page}): {users__url}")
+            
+            headers = get_halo_headers()
+            r = requests.get(users_url, headers=headers, timeout=30)
+            
+            if r.status_code != 200:
+                log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
+                break
+            
+            # Parse response
+            data = r.json()
+            log.info(f"🔍 RESPONSE STRUCTUUR: {type(data).__name__}")
+            
+            # Verwerk 'data' wrapper
+            if "data" in data and isinstance(data["data"], dict):
+                log.info("✅ Response heeft 'data' wrapper")
+                users_data = data["data"]
+            else:
+                users_data = data
+            
+            # Haal de users lijst op
+            users = users_data.get("users", [])
+            if not users:
+                users = users_data.get("Users", [])
+            
+            if not users:
+                log.warning("⚠️ Geen gebruikers gevonden in API response")
+                break
+            
+            # Voeg gebruikers toe aan de complete lijst
+            all_users.extend(users)
+            pages_fetched += 1
+            
+            # Bepaal totalen
+            if "record_count" in users_data:
+                total_records = users_data["record_count"]
+            else:
+                # Probeer andere velden voor totalen
+                for key in ["total", "Total", "recordTotal", "RecordTotal"]:
+                    if key in users_data:
+                        total_records = users_data[key]
+                        break
+            
+            log.info(f"✅ Pagina {page}: {len(users)} gebruikers opgehaald (totaal: {len(all_users)}/{total_records})")
+            
+            # Stop als we alle pagina's hebben
+            if total_records <= len(all_users) or len(users) < 100:
+                break
+            
+            page += 1
         
-        headers = get_halo_headers()
-        r = requests.get(users_url, headers=headers, timeout=30)
+        log.info(f"✅ Totaal opgehaald: {len(all_users)} gebruikers over {pages_fetched} pagina{'s' if pages_fetched > 1 else ''}")
         
-        if r.status_code != 200:
-            log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
-            return []
-        
-        # Parse response
-        data = r.json()
-        log.info(f"🔍 RESPONSE STRUCTUUR: {type(data).__name__}")
-        
-        # Verwerk 'data' wrapper
-        if "data" in data and isinstance(data["data"], dict):
-            log.info("✅ Response heeft 'data' wrapper - gebruik geneste structuur")
-            users_data = data["data"]
-        else:
-            users_data = data
-        
-        # Haal de users lijst op
-        users = users_data.get("users", [])
-        if not users:
-            users = users_data.get("Users", [])
-        
-        if not users:
-            log.warning("⚠️ Geen gebruikers gevonden in API response")
-            return []
-        
-        log.info(f"✅ {len(users)} gebruikers opgehaald - start uitgebreide filtering")
-        
-        # Verrijk met filtering status
-        enriched_users = []
-        main_users_count = 0
-        
-        # Haal de correcte API IDs voor jouw Main-site
-        client_api_id = CLIENT_MAPPING.get(str(HALO_CLIENT_ID_NUM), {}).get("api_id", str(HALO_CLIENT_ID_NUM))
-        site_api_id = SITE_MAPPING.get(str(HALO_SITE_ID), {}).get("api_id", str(HALO_SITE_ID))
-        
-        log.info(f"🔍 Gebruik API IDs voor filtering: client_id={client_api_id}, site_id={site_api_id}")
-        
-        for u in users:
-            # 1. Eerste methode: Directe site/client koppeling
-            direct_site_match = False
-            direct_client_match = False
+        # Filter Main-site gebruikers
+        main_users = []
+        for u in all_users:
+            # 1. Integer ID koppeling (JOUW OMGEVING GEBRUIKT DIT)
+            site_match = False
+            client_match = False
             
             # Site ID check (alle varianten)
             for key in ["site_id", "SiteId", "siteId", "siteid", "SiteID"]:
                 if key in u and u[key] is not None:
-                    if str(u[key]).strip() == site_api_id:
-                        direct_site_match = True
-                        break
+                    try:
+                        # Directe vergelijking met jouw URL-IDs
+                        if float(u[key]) == float(HALO_SITE_ID):
+                            site_match = True
+                            break
+                    except (TypeError, ValueError):
+                        pass
             
             # Client ID check (alle varianten)
             for key in ["client_id", "ClientId", "clientId", "clientid", "ClientID"]:
                 if key in u and u[key] is not None:
-                    if str(u[key]).strip() == client_api_id:
-                        direct_client_match = True
-                        break
+                    try:
+                        # Directe vergelijking met jouw URL-IDs
+                        if float(u[key]) == float(HALO_CLIENT_ID_NUM):
+                            client_match = True
+                            break
+                    except (TypeError, ValueError):
+                        pass
             
-            # 2. Tweede methode: Integer velden
-            int_site_match = False
-            int_client_match = False
+            # 2. Integer velden (specifiek voor jouw omgeving)
+            if not site_match and "site_id_int" in u and u["site_id_int"] is not None:
+                try:
+                    if int(u["site_id_int"]) == HALO_SITE_ID:
+                        site_match = True
+                except (TypeError, ValueError):
+                    pass
             
-            if "site_id_int" in u and u["site_id_int"] is not None:
-                if str(u["site_id_int"]).strip() == site_api_id:
-                    int_site_match = True
+            if not client_match and "client_id_int" in u and u["client_id_int"] is not None:
+                try:
+                    if int(u["client_id_int"]) == HALO_CLIENT_ID_NUM:
+                        client_match = True
+                except (TypeError, ValueError):
+                    pass
             
-            if "client_id_int" in u and u["client_id_int"] is not None:
-                if str(u["client_id_int"]).strip() == client_api_id:
-                    int_client_match = True
+            # 3. Naamgebaseerde matching (als fallback)
+            if not site_match:
+                site_name = str(u.get("site_name", "")).strip().lower()
+                if site_name == "main":
+                    site_match = True
             
-            # 3. Derde methode: Client/Site objecten
-            object_site_match = False
-            object_client_match = False
+            if not client_match:
+                client_name = str(u.get("client_name", "")).strip().lower()
+                if client_name == "bossers & cnossen":
+                    client_match = True
             
-            if "site" in u and isinstance(u["site"], dict):
-                if str(u["site"].get("id", "")).strip() == site_api_id:
-                    object_site_match = True
-            
-            if "client" in u and isinstance(u["client"], dict):
-                if str(u["client"].get("id", "")).strip() == client_api_id:
-                    object_client_match = True
-            
-            # 4. Vierde methode: Naamgebaseerde matching (als fallback)
-            name_site_match = False
-            name_client_match = False
-            
-            if str(u.get("site_name", "")).strip().lower() == "main":
-                name_site_match = True
-            
-            if str(u.get("client_name", "")).strip().lower() == "bossers & cnossen":
-                name_client_match = True
-            
-            # Bepaal of dit een Main-site gebruiker is (ELKE methode telt!)
-            is_main_user = (
-                (direct_site_match and direct_client_match) or
-                (int_site_match and int_client_match) or
-                (object_site_match and object_client_match) or
-                (name_site_match and name_client_match)
-            )
-            
-            if is_main_user:
-                main_users_count += 1
-            
-            enriched_users.append({
-                "user": u,
-                "is_main_user": is_main_user,
-                "debug": {
-                    "direct_site_match": direct_site_match,
-                    "direct_client_match": direct_client_match,
-                    "int_site_match": int_site_match,
-                    "int_client_match": int_client_match,
-                    "object_site_match": object_site_match,
-                    "object_client_match": object_client_match,
-                    "name_site_match": name_site_match,
-                    "name_client_match": name_client_match
-                }
-            })
+            # Bepaal of dit een Main-site gebruiker is
+            if site_match and client_match:
+                main_users.append(u)
         
-        log.info(f"📊 Totaal Main-site gebruikers: {main_users_count}/{len(users)}")
+        log.info(f"📊 Totaal Main-site gebruikers: {len(main_users)}/{len(all_users)}")
         
-        return enriched_users
+        return main_users
     
     except Exception as e:
         log.critical(f"🔥 FATALE FOUT: {str(e)}")
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET VOLLEDIGE KOPPELINGSANALYSE
+# Routes - MET PAGINERING EN JUISTE FILTERING
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
@@ -316,105 +207,94 @@ def health():
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
-            "1. Werkt MET ALLE KOPPELINGSMETHODEN",
-            "2. Gebruikt ID MAPPING voor correcte API waarden",
-            "3. Bezoek /id-mapper voor details over jouw mapping"
+            "1. Werkt MET PAGINERING (haalt alle gebruikers op)",
+            "2. Gebruikt JUISTE ID'S (12/18 i.p.v. 1706/1714)",
+            "3. Bezoek /debug voor technische details"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    """Toon ALLEEN de Main-site gebruikers MET ALLE KOPPELINGEN"""
-    enriched_users = fetch_all_users()
-    main_users = [u for u in enriched_users if u["is_main_user"]]
+    """Toon ALLEEN de Main-site gebruikers MET PAGINERING"""
+    main_users = fetch_all_users()
     
     if not main_users:
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
-                "1. Bezoek /id-mapper om de juiste ID mapping te zien",
-                "2. Controleer of 'Teams' is aangevinkt in API-toegang",
-                "3. Zorg dat de API key 'all' scope heeft"
-            ],
-            "debug_info": "Deze app gebruikt ID mapping om de juiste gebruikers te vinden"
+                "1. Controleer of 'Teams' is aangevinkt in API-toegang",
+                "2. Zorg dat de API key 'all' scope heeft",
+                "3. Bezoek /debug voor technische details"
+            ]
         }), 500
     
     simplified = [{
-        "id": u["user"].get("id"),
-        "name": u["user"].get("name") or "Onbekend",
-        "email": u["user"].get("emailaddress") or u["user"].get("email") or "Geen email"
+        "id": u.get("id"),
+        "name": u.get("name") or "Onbekend",
+        "email": u.get("emailaddress") or u.get("email") or "Geen email"
     } for u in main_users]
     
     return jsonify({
         "client_id": HALO_CLIENT_ID_NUM,
-        "client_name": CLIENT_MAPPING.get(str(HALO_CLIENT_ID_NUM), {}).get("name", "Bossers & Cnossen"),
+        "client_name": "Bossers & Cnossen",
         "site_id": HALO_SITE_ID,
-        "site_name": SITE_MAPPING.get(str(HALO_SITE_ID), {}).get("name", "Main"),
+        "site_name": "Main",
         "total_users": len(main_users),
         "users": simplified
     })
 
-@app.route("/all-users", methods=["GET"])
-def all_users():
-    """Toon ALLE gebruikers MET VOLLEDIGE KOPPELINGSANALYSE"""
-    enriched_users = fetch_all_users()
-    
-    # Bereid respons voor
-    response = {
-        "total_users": len(enriched_users),
-        "main_site_users": 0,
-        "users": []
-    }
-    
-    for eu in enriched_users:
-        user_data = {
-            "id": eu["user"].get("id"),
-            "name": eu["user"].get("name") or "Onbekend",
-            "email": eu["user"].get("emailaddress") or eu["user"].get("email") or "Geen email",
-            "is_main_user": eu["is_main_user"],
-            "debug": eu["debug"],
-            "client_name": eu["user"].get("client_name", "Onbekend"),
-            "site_name": eu["user"].get("site_name", "Onbekend")
-        }
-        
-        if eu["is_main_user"]:
-            response["main_site_users"] += 1
-        
-        response["users"].append(user_data)
-    
-    return jsonify(response)
-
-@app.route("/id-mapper", methods=["GET"])
-def id_mapper():
-    """TOON DE JUISTE MAPPING TUSSEN URL-IDS EN API-IDS"""
-    # Zorg dat de mappings zijn gebouwd
-    build_id_mappings()
+@app.route("/debug", methods=["GET"])
+def debug():
+    """Toon technische details voor debugging"""
+    main_users = fetch_all_users()
     
     return {
-        "status": "success",
-        "client_mapping": CLIENT_MAPPING,
-        "site_mapping": SITE_MAPPING,
-        "note": "Gebruik deze mapping om de juiste API-IDs te vinden voor jouw URL-IDs"
+        "status": "debug-info",
+        "config": {
+            "halo_auth_url": HALO_AUTH_URL,
+            "halo_api_base": HALO_API_BASE,
+            "client_id": HALO_CLIENT_ID_NUM,
+            "site_id": HALO_SITE_ID
+        },
+        "api_flow": [
+            "1. Authenticatie naar /auth/token (scope=all)",
+            "2. Haal ALLE gebruikers op via /Users met paginering",
+            "3. Filter op jouw EXACTE URL-IDs (12 en 18)"
+        ],
+        "halo_notes": [
+            "1. Jouw omgeving gebruikt DEZELFDE IDs als in de URL (GEEN mapping nodig!)",
+            "2. Paginering is VERPLICHT voor >50 gebruikers",
+            "3. Gebruik integer vergelijking i.p.v. string"
+        ],
+        "current_counts": {
+            "total_users_found": len(main_users),
+            "expected_users": "135+ (volgens jouw Halo omgeving)"
+        },
+        "test_curl": (
+                f"curl -X GET '{HALO_API_BASE}/Users?page=1&page_size=100' \\\n"
+                "-H 'Authorization: Bearer $(curl -X POST \\\"{HALO_AUTH_URL}\\\" \\\n"
+                "-d \\\"grant_type=client_credentials&client_id={HALO_CLIENT_ID}&client_secret=******&scope=all\\\" \\\n"
+                "| jq -r '.access_token')'"
+            )
     }
 
 # ------------------------------------------------------------------------------
-# App Start - MET VOLLEDIGE KOPPELINGSANALYSE
+# App Start - MET PAGINERING EN JUISTE FILTERING
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - VOLLEDIGE KOPPELINGSANALYSE")
+    log.info("🚀 HALO MAIN USERS - MET PAGINERING EN JUISTE ID'S")
     log.info("-"*70)
-    log.info("✅ Ondersteunt 4 koppelingsmethoden voor Main-site gebruikers")
-    log.info("✅ Gebruikt ID mapping voor correcte API waarden")
+    log.info("✅ Haalt ALLE gebruikers op via paginering (geen 50-limit meer!)")
+    log.info("✅ Gebruikt DE JUISTE ID'S (12 en 18) i.p.v. verkeerde mapping")
     log.info("✅ Werkt met jouw specifieke Halo UAT omgeving")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN VOOR VOLLEDIGE DEKING:")
-    log.info("1. Bezoek EERST /id-mapper")
-    log.info("2. Noteer de API-IDs voor jouw klant/site")
-    log.info("3. Bezoek DAN /all-users voor volledig overzicht")
-    log.info("4. Gebruik /users voor ALLE Main-site gebruikers")
+    log.info("1. Bezoek /debug voor technische details")
+    log.info("2. Bezoek DAN /users voor ALLE Main-site gebruikers")
+    log.info("3. Gebruik de curl command in /debug voor API testen")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
