@@ -29,7 +29,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - OMZEILT HALO BUGS
+# Custom Integration Core - WERKT MET JOUW SPECIFIEKE NAAMFORMATEN
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -53,19 +53,19 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten op (geen include nodig)"""
+    """Haal ALLE klanten op met verbeterde foutafhandeling"""
     token = get_halo_token()
     clients = []
     page = 1
     
     while True:
-        response = requests.get(
-            f"{HALO_API_BASE}/Client",
-            params={"page": page, "pageSize": 100},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
         try:
+            response = requests.get(
+                f"{HALO_API_BASE}/Client",
+                params={"page": page, "pageSize": 100},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30
+            )
             response.raise_for_status()
             data = response.json()
             clients_page = data.get("clients", [])
@@ -88,19 +88,19 @@ def fetch_all_clients():
     return clients
 
 def fetch_all_sites():
-    """Haal ALLE locaties op (geen include nodig)"""
+    """Haal ALLE locaties op met verbeterde foutafhandeling"""
     token = get_halo_token()
     sites = []
     page = 1
     
     while True:
-        response = requests.get(
-            f"{HALO_API_BASE}/Site",
-            params={"page": page, "pageSize": 100},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
         try:
+            response = requests.get(
+                f"{HALO_API_BASE}/Site",
+                params={"page": page, "pageSize": 100},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30
+            )
             response.raise_for_status()
             data = response.json()
             sites_page = data.get("sites", [])
@@ -123,19 +123,19 @@ def fetch_all_sites():
     return sites
 
 def fetch_all_users():
-    """Haal ALLE gebruikers op (geen include nodig)"""
+    """Haal ALLE gebruikers op met verbeterde foutafhandeling"""
     token = get_halo_token()
     users = []
     page = 1
     
     while True:
-        response = requests.get(
-            f"{HALO_API_BASE}/User",
-            params={"page": page, "pageSize": 100},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
         try:
+            response = requests.get(
+                f"{HALO_API_BASE}/User",
+                params={"page": page, "pageSize": 100},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30
+            )
             response.raise_for_status()
             data = response.json()
             users_page = data.get("users", [])
@@ -158,49 +158,72 @@ def fetch_all_users():
     return users
 
 def get_main_users():
-    """Combineer alle data en filter Main-site gebruikers"""
+    """Combineer alle data met FLEXIBELE ZOEKOPDRACHTEN voor jouw specifieke Halo"""
     # Stap 1: Haal alle benodigde data op
+    log.info("🔍 Start met ophalen van klanten, locaties en gebruikers...")
     clients = fetch_all_clients()
     sites = fetch_all_sites()
     users = fetch_all_users()
     
-    # Stap 2: Vind de juiste Client ID voor "Bossers & Cnossen"
+    # Stap 2: Vind de juiste Client ID voor "Bossers & Cnossen" (FLEXIBEL)
+    log.info("🔍 Zoek klant 'Bossers & Cnossen' met flexibele matching...")
     bossers_client = None
+    bossers_keywords = ["bossers", "cnossen", "b&c"]
+    
     for c in clients:
-        client_name = str(c.get("name", "")).strip().lower()
-        if client_name == "bossers & cnossen":
+        client_name = str(c.get("name", "")).lower().strip()
+        # Verwijder ongewenste tekens voor matching
+        clean_name = client_name.replace("&", "en").replace("amp;", "").replace(".", "").replace("-", " ")
+        
+        # Controleer of alle sleutelwoorden aanwezig zijn
+        if all(keyword in clean_name for keyword in ["bossers", "cnossen"]):
             bossers_client = c
+            log.info(f"✅ GEVONDEN: Klant '{client_name}' gematcht als Bossers & Cnossen (ID: {c['id']})")
             break
     
     if not bossers_client:
         log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
-        log.info("🔍 Mogelijke klantnamen in Halo:")
-        for c in clients[:5]:  # Toon eerste 5 voor debug
-            log.info(f" - '{c.get('name', 'Onbekend')}'")
+        # Toon mogelijke matches voor debugging
+        log.info("🔍 Mogelijke klantnamen in Halo (bevat 'bossers' of 'cnossen'):")
+        for c in clients:
+            client_name = str(c.get("name", "")).lower().strip()
+            if "bossers" in clientdelayed_name or "cnossen" in client_name or "b&c" in client_name:
+                log.info(f" - '{c.get('name', 'Onbekend')}' (ID: {c.get('id')})")
         return []
     
     client_id = int(bossers_client["id"])
     log.info(f"✅ Gebruik klant-ID: {client_id} (Bossers & Cnossen)")
 
-    # Stap 3: Vind de juiste Site ID voor "Main"
+    # Stap 3: Vind de juiste Site ID voor "Main" (FLEXIBEL)
+    log.info("🔍 Zoek locatie 'Main' met flexibele matching...")
     main_site = None
+    main_keywords = ["main", "hoofd", "head"]
+    
     for s in sites:
-        site_name = str(s.get("name", "")).strip().lower()
-        if site_name == "main":
+        site_name = str(s.get("name", "")).lower().strip()
+        # Verwijder ongewenste tekens voor matching
+        clean_name = site_name.replace("&", "en").replace("amp;", "").replace(".", "").replace("-", " ")
+        
+        if any(keyword in clean_name for keyword in main_keywords):
             main_site = s
+            log.info(f"✅ GEVONDEN: Locatie '{site_name}' gematcht als Main (ID: {s['id']})")
             break
     
     if not main_site:
         log.error("❌ Locatie 'Main' NIET GEVONDEN in Halo")
-        log.info("🔍 Mogelijke locatienamen in Halo:")
-        for s in sites[:5]:  # Toon eerste 5 voor debug
-            log.info(f" - '{s.get('name', 'Onbekend')}'")
+        # Toon mogelijke matches voor debugging
+        log.info("🔍 Mogelijke locatienamen in Halo (bevat 'main'):")
+        for s in sites:
+            site_name = str(s.get("name", "")).lower().strip()
+            if "main" in site_name:
+                log.info(f" - '{s.get('name', 'Onbekend')}' (ID: {s.get('id')})")
         return []
     
     site_id = int(main_site["id"])
     log.info(f"✅ Gebruik locatie-ID: {site_id} (Main)")
 
     # Stap 4: Filter gebruikers die aan Main-site gekoppeld zijn
+    log.info("🔍 Filter Main-site gebruikers...")
     main_users = []
     for user in users:
         try:
@@ -219,7 +242,11 @@ def get_main_users():
                 "name": user["name"],
                 "email": user.get("emailaddress") or user.get("email") or "Geen email",
                 "client_name": bossers_client["name"],
-                "site_name": main_site["name"]
+                "site_name": main_site["name"],
+                "debug": {
+                    "raw_client_id": user.get("client_id"),
+                    "raw_site_id": user.get("site_id")
+                }
             })
         except (TypeError, ValueError, KeyError) as e:
             log.debug(f"⚠️ Gebruiker overslaan: {str(e)}")
@@ -246,37 +273,44 @@ def health_check():
 
 @app.route("/users", methods=["GET"])
 def get_users():
-    """Eindpunt voor jouw applicatie"""
+    """Eindpunt voor jouw applicatie - MET UITGEBREIDE DEBUGGING"""
     try:
+        log.info("🔄 /users endpoint aangeroepen - start verwerking")
         main_users = get_main_users()
         
         if not main_users:
+            log.error("❌ Geen Main-site gebruikers gevonden")
             return jsonify({
                 "error": "Geen Main-site gebruikers gevonden",
                 "solution": [
-                    "1. Controleer of klantnaam EXACT 'Bossers & Cnossen' is (geen typo's)",
-                    "2. Controleer of locatienaam EXACT 'Main' is",
+                    "1. Controleer of de klantnaam 'Bossers & Cnossen' correct is gespeld in Halo",
+                    "2. Controleer of de locatienaam 'Main' bestaat in Halo",
                     "3. Bezoek /debug voor technische details"
                 ],
-                "debug_hint": "Soms zit er een spatie aan het einde van de naam in Halo"
+                "debug_hint": "Soms zit er een verborgen '&' in de naam (B.V. vs B&V)"
             }), 500
         
+        log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
         return jsonify({
-            "client_id": int(main_users[0]["client_name"].split()[-1]) if main_users else 0,
-            "client_name": "Bossers & Cnossen",
-            "site_id": int(main_users[0]["site_name"].split()[-1]) if main_users else 0,
-            "site_name": "Main",
+            "client_id": client_id,
+            "client_name": bossers_client["name"],
+            "site_id": site_id,
+            "site_name": main_site["name"],
             "total_users": len(main_users),
             "users": main_users
         })
     except Exception as e:
         log.error(f"🔥 Fout in /users: {str(e)}")
-        return jsonify({"error": str(e), "hint": "Controleer /debug voor details"}), 500
+        return jsonify({
+            "error": str(e),
+            "hint": "Controleer eerst /debug endpoint voor basisvalidatie"
+        }), 500
 
 @app.route("/debug", methods=["GET"])
 def debug_info():
-    """Technische debug informatie - CRUCIAAL VOOR VALIDATIE"""
+    """Technische debug informatie - MET VERBETERDE LOGGING"""
     try:
+        log.info("🔍 /debug endpoint aangeroepen - haal klanten en locaties op")
         clients = fetch_all_clients()
         sites = fetch_all_sites()
         
@@ -284,6 +318,7 @@ def debug_info():
         sample_clients = [{"id": c["id"], "name": c["name"]} for c in clients[:3]]
         sample_sites = [{"id": s["id"], "name": s["name"]} for s in sites[:3]]
         
+        log.info("✅ /debug data verzameld - controleer op Bossers & Main")
         return jsonify({
             "status": "debug_info",
             "halo_data": {
@@ -294,13 +329,18 @@ def debug_info():
                 "note": "Controleer of 'Bossers & Cnossen' en 'Main' in deze lijsten staan"
             },
             "troubleshooting": [
-                "1. Klantnaam moet EXACT overeenkomen (gebruik /debug om de exacte spelling te zien)",
-                "2. Locatienaam moet EXACT 'Main' zijn (geen 'Main Location')",
+                "1. Klantnaam moet 'Bossers' en 'Cnossen' bevatten (geen exacte match nodig)",
+                "2. Locatienaam moet 'Main' bevatten (hoofdletterongevoelig)",
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang"
-            ]
+            ],
+            "hint": "Gebruik /debug om de exacte spelling van jouw klant- en locatienamen te zien"
         })
     except Exception as e:
-        return jsonify({"error": str(e), "critical_hint": "Controleer eerst of /debug werkt!"})
+        log.error(f"❌ Fout in /debug: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "critical_hint": "Controleer eerst of API-toegang correct is ingesteld in Halo"
+        }), 500
 
 # ------------------------------------------------------------------------------
 # Render.com Deployment - KLAAR VOOR DIRECTE DEPLOY
@@ -311,7 +351,7 @@ if __name__ == "__main__":
     log.info("🚀 HALO CUSTOM INTEGRATION API - VOLLEDIG ZELFSTANDIG")
     log.info("-"*70)
     log.info("✅ Werkt ZONDER 'include' parameter (omzeilt Halo UAT bugs)")
-    log.info("✅ Haalt klanten/locaties in aparte API calls op")
+    log.info("✅ Gebruikt flexibele matching voor klant- en locatienamen")
     log.info("✅ Automatische detectie van Client/Site ID's")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 3 STAPPEN:")
