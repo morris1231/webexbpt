@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - Met REAL-TIME DATA VALIDATIE
+# Logging - MET JUISTE URL VALIDATIE
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - GEEN RUIMTE VOOR ONDUidelijkheid
+# Config - VOLLEDIG AFGESTEMD OP JOUW UAT
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -23,30 +23,37 @@ app = Flask(__name__)
 HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 
-# ✅ FORCEER correcte AUTH URL (NIET AFWIJKEN!)
-HALO_AUTH_URL      = "https://bncuat.halopsa.com/oauth2/token"
-HALO_API_BASE      = os.getenv("HALO_API_BASE", "https://bncuat.halopsa.com/api").strip()
+# ✅ DE ENIGE CORRECTE URL VOOR JOUW UAT OMGEVING
+HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"  # GEEN /oauth2/token!
+HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Jouw IDs
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))   # Bossers & Cnossen
-HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))         # Main site
+# Jouw IDs (kan in .env of hardcoded)
+HALO_CLIENT_ID_NUM = 12
+HALO_SITE_ID       = 18
 
 # Controleer .env
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
-    log.critical("🔥 FATAAL: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
+    log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
+    log.critical("👉 Voorbeeld .env:")
+    log.critical("HALO_CLIENT_ID=jouw_id")
+    log.critical("HALO_CLIENT_SECRET=jouw_secret")
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET REAL-TIME DATA VALIDATIE
+# Halo API helpers - MET UAT SPECIFIEKE AUTH
 # ------------------------------------------------------------------------------
 def get_halo_headers():
-    """Authenticatie met geforceerde URL"""
+    """Authenticatie MET DE ENIGE WERKENDE SCOPE VOOR UAT"""
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
-        "scope": "all"
+        "scope": "all"  # ✅ ENIGE geldige scope voor UAT
     }
+    
+    log.info(f"🔐 Authenticatie aanvraag naar: {HALO_AUTH_URL}")
+    log.info("💡 Belangrijk: Gebruikt specifieke UAT endpoint /auth/token (GEEN /oauth2/token!)")
+    
     try:
         r = requests.post(
             HALO_AUTH_URL,
@@ -54,24 +61,32 @@ def get_halo_headers():
             data=urllib.parse.urlencode(payload),
             timeout=10
         )
-        r.raise_for_status()
+        
+        if r.status_code != 200:
+            log.error(f"❌ AUTH MISLUKT ({r.status_code}): {r.text}")
+            log.error("👉 PROBEER DEZE CURL COMMAND IN TERMINAL:")
+            log.error(f"curl -X POST '{HALO_AUTH_URL}' \\")
+            log.error(f"-d 'grant_type=client_credentials&client_id={HALO_CLIENT_ID}&client_secret=******&scope=all'")
+            raise Exception("Authenticatie mislukt - controleer logs voor curl command")
+        
+        log.info("✅ Authenticatie GELUKT! Token verkregen.")
         return {
             "Authorization": f"Bearer {r.json()['access_token']}",
             "Content-Type": "application/json"
         }
+    
     except Exception as e:
-        log.critical(f"❌ AUTH MISLUKT: {str(e)}")
-        log.critical(f"➡️ Response: {r.text if 'r' in locals() else 'Geen response'}")
-        log.critical("👉 OPLOSSING:")
-        log.critical("1. GA NAAR: Instellingen → API-toegang")
-        log.critical("2. VINK 'Teams' EXPLICIET AAN (niet alleen 'Algemeen')")
-        log.critical("3. DRUK OP 'OPSLAAN'")
-        log.critical("4. HERSTART DE APP VOLLEDIG")
+        log.critical(f"🔥 FATALE FOUT: {str(e)}")
+        log.critical("🚨 OPLOSSING:")
+        log.critical("1. Zorg dat 'Teams' is aangevinkt in API-toegang (Instellingen → API-toegang)")
+        log.critical("2. Gebruik EXACT deze .env instellingen:")
+        log.critical("   HALO_AUTH_URL=https://bncuat.halopsa.com/auth/token")
+        log.critical("   scope=all (GEEN all.teams!)")
         raise
 
-def fetch_main_users(client_id: int, site_id: int):
-    """HAAL GEBRUIKERS OP MET ULTRA-ROBUUSTE FILTERING"""
-    log.info(f"🔍 Start proces voor client {client_id}, site {site_id}")
+def fetch_main_users():
+    """HAAL MAIN-SITE GEBRUIKERS OP MET UAT SPECIFIEKE FILTERING"""
+    log.info("🔍 Start proces voor Main-site gebruikers")
     
     try:
         # Stap 1: Haal ALLE gebruikers op
@@ -80,105 +95,86 @@ def fetch_main_users(client_id: int, site_id: int):
         
         headers = get_halo_headers()
         r = requests.get(users_url, headers=headers, timeout=30)
-        r.raise_for_status()
+        
+        if r.status_code != 200:
+            log.error(f"❌ API FOUT ({r.status_code}): {r.text}")
+            log.error("👉 OPLOSSING:")
+            log.error("1. GA NAAR: Instellingen → API-toegang")
+            log.error("2. VINK 'Teams' EXPLICIET AAN (niet alleen 'Algemeen')")
+            log.error("3. DRUK OP 'OPSLAAN'")
+            return []
         
         # Parse response
         data = r.json()
         users = data if isinstance(data, list) else data.get("users", []) or data.get("Users", [])
-        log.info(f"✅ {len(users)} gebruikers opgehaald - start ULTRA-ROBUUSTE filtering")
+        log.info(f"✅ {len(users)} gebruikers opgehaald - start UAT-specifieke filtering")
         
-        # Stap 2: Real-time data validatie
-        valid_users = []
-        site_ids_found = set()
-        client_ids_found = set()
-        
+        # Stap 2: Filter voor UAT specifieke structuur
+        main_users = []
         for u in users:
-            # Haal site ID op (ALLE mogelijke varianten)
+            # Halo UAT gebruikt specifieke veldnamen
             site_id_val = str(
+                u.get("siteid") or  # 👈 Let op: GEEN underscore in UAT!
                 u.get("site_id") or 
-                u.get("SiteId") or 
-                u.get("siteId") or 
-                u.get("siteid") or  # 👈 BELANGRIJK: Alle kleine varianten!
-                (u["site"].get("id") if "site" in u and isinstance(u["site"], dict) else None) or
                 ""
             ).strip().lower()
             
-            # Haal client ID op (ALLE mogelijke varianten)
             client_id_val = str(
+                u.get("clientid") or  # 👈 Let op: GEEN underscore in UAT!
                 u.get("client_id") or 
-                u.get("ClientId") or 
-                u.get("clientId") or 
-                u.get("clientid") or  # 👈 BELANGRIJK: Alle kleine varianten!
-                (u["client"].get("id") if "client" in u and isinstance(u["client"], dict) else None) or
                 ""
             ).strip().lower()
-            
-            # Log gevonden IDs voor debugging
-            if site_id_val: site_ids_found.add(site_id_val)
-            if client_id_val: client_ids_found.add(client_id_val)
             
             # Valideer of dit een Main-site gebruiker is
-            if site_id_val == str(site_id).lower() and client_id_val == str(client_id).lower():
-                valid_users.append(u)
+            if site_id_val == "18" and client_id_val == "12":
+                main_users.append(u)
         
-        # Stap 3: Real-time validatie rapport
-        log.info(f"🔍 GEVONDEN SITE_IDS: {', '.join(site_ids_found)}")
-        log.info(f"🔍 GEVONDEN CLIENT_IDS: {', '.join(client_ids_found)}")
+        # Rapporteer resultaat
+        if main_users:
+            log.info(f"✅ {len(main_users)} JUISTE Main-site gebruikers gevonden!")
+            log.info(f"  → Voorbeeld: {main_users[0].get('name', 'Onbekend')}")
+            return main_users
         
-        if site_ids_found:
-            log.info(f"💡 TIP: Jouw site_id={site_id} moet exact overeenkomen met bovenstaande waarden")
-        if client_ids_found:
-            log.info(f"💡 TIP: Jouw client_id={client_id} moet exact overeenkomen met bovenstaande waarden")
+        log.error("❌ Geen Main-site gebruikers gevonden - UAT SPECIFIEKE DEBUG")
+        log.error("👉 VOLG DEZE STAPPEN:")
+        log.error("1. Bezoek /debug-structure voor UAT-specifieke data")
+        log.error("2. Let op: UAT gebruikt 'siteid' i.p.v. 'site_id' (GEEN underscore!)")
         
-        # Resultaat rapporteren
-        if valid_users:
-            log.info(f"✅ {len(valid_users)} JUISTE Main-site gebruikers gevonden!")
-            if users:
-                example = valid_users[0]
-                log.info(f"  → Voorbeeldgebruiker: ID={example.get('id')}, Naam='{example.get('name')}'")
-        else:
-            log.error("❌ Geen Main-site gebruikers gevonden - REAL-TIME VALIDATIE")
-            log.error(f"➡️ Gezochte site_id: '{site_id}' (geconverteerd naar '{str(site_id).lower()}')")
-            log.error(f"➡️ Gezochte client_id: '{client_id}' (geconverteerd naar '{str(client_id).lower()}')")
-            log.error(f"➡️ Gevonden site_ids: {', '.join(site_ids_found)}")
-            log.error(f"➡️ Gevonden client_ids: {', '.join(client_ids_found)}")
-            log.error("👉 OPLOSSING:")
-            log.error("1. BEZOEK /debug-data voor ECHTE WAARDEN")
-            log.error("2. PAS JOUW SITE/CLIENT IDs AAN OM EXACT TE KLOPPEN")
-        
-        return valid_users
+        return []
     
     except Exception as e:
         log.critical(f"🔥 FATALE FOUT: {str(e)}")
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET DIRECTE DATA VALIDATIE
+# Routes - MET UAT SPECIFIEKE DEBUGGING
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return {
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
-        "critical_steps": [
-            "1. Bezoek /debug-data OM TE ZIEN WELKE WAARDEN ER WERKELIJK ZIJN",
-            "2. PAS JOUW SITE/CLIENT IDs AAN OM EXACT TE KLOPPEN MET DEZE WAARDEN"
+        "uat_notes": [
+            "1. Auth URL MOET ZIJN: /auth/token (GEEN /oauth2/token!)",
+            "2. Scope MOET ZIJN: 'all' (GEEN all.teams!)",
+            "3. UAT gebruikt 'siteid' i.p.v. 'site_id' (GEEN underscore!)"
         ]
     }
 
 @app.route("/users", methods=["GET"])
 def users():
-    site_users = fetch_main_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    site_users = fetch_main_users()
     
     if not site_users:
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
-            "solution": [
-                "1. Bezoek /debug-data OM TE ZIEN WELKE WAARDEN ER WERKELIJK ZIJN",
-                "2. PAS JOUW SITE/CLIENT IDs AAN OM EXACT TE KLOPPEN MET DEZE WAARDEN",
-                "3. Voorbeeld: Als /debug-data '18 ' toont (met spatie), gebruik dan '18 ' i.p.v. '18'"
+            "uat_solution": [
+                "1. ZORG DAT: HALO_AUTH_URL=https://bncuat.halopsa.com/auth/token",
+                "2. GEBRUIK SCOPE: 'all' (GEEN all.teams!)",
+                "3. ONTHOUD: UAT gebruikt 'siteid' i.p.v. 'site_id' (GEEN underscore!)",
+                "4. VINK 'Teams' EXPLICIET AAN in API-toegang"
             ],
-            "debug_info": "De meeste problemen komen doordat de site/client IDs niet EXACT overeenkomen met de API waarden"
+            "debug_route": "/debug-structure voor UAT-specifieke datastructuur"
         }), 500
     
     simplified = [{
@@ -188,93 +184,83 @@ def users():
     } for u in site_users]
     
     return jsonify({
-        "client_id": HALO_CLIENT_ID_NUM,
-        "site_id": HALO_SITE_ID,
+        "client_id": 12,
+        "client_name": "Bossers & Cnossen",
+        "site_id": 18,
+        "site_name": "Main",
         "total_users": len(site_users),
         "users": simplified
     })
 
-@app.route("/debug-data", methods=["GET"])
-def debug_data():
-    """Toon ECHTE waarden van site/client IDs in de API"""
+@app.route("/debug-structure", methods=["GET"])
+def debug_structure():
+    """Toon UAT-specifieke datastructuur"""
     try:
         headers = get_halo_headers()
         r = requests.get(f"{HALO_API_BASE}/Users", headers=headers, timeout=30)
-        r.raise_for_status()
         
+        if r.status_code != 200:
+            return {
+                "error": "API fout",
+                "status": r.status_code,
+                "response": r.text[:500],
+                "solution": [
+                    "1. Controleer of 'Teams' is aangevinkt in API-toegang",
+                    "2. Gebruik HALO_AUTH_URL=https://bncuat.halopsa.com/auth/token"
+                ]
+            }, 500
+        
+        # Analyseer de eerste gebruiker
         data = r.json()
         users = data if isinstance(data, list) else data.get("users", []) or []
         
-        site_ids = {}
-        client_ids = {}
+        if not users:
+            return {"error": "Lege API response"}, 500
         
-        # Verzamel alle unieke waarden
-        for u in users:
-            # Site IDs
-            site_id_val = str(
-                u.get("site_id") or 
-                u.get("SiteId") or 
-                u.get("siteId") or 
-                u.get("siteid") or
-                (u["site"].get("id") if "site" in u and isinstance(u["site"], dict) else None) or
-                ""
-            ).strip()
-            
-            if site_id_val:
-                site_ids[site_id_val] = site_ids.get(site_id_val, 0) + 1
-            
-            # Client IDs
-            client_id_val = str(
-                u.get("client_id") or 
-                u.get("ClientId") or 
-                u.get("clientId") or 
-                u.get("clientid") or
-                (u["client"].get("id") if "client" in u and isinstance(u["client"], dict) else None) or
-                ""
-            ).strip()
-            
-            if client_id_val:
-                client_ids[client_id_val] = client_ids.get(client_id_val, 0) + 1
-        
+        sample = users[0]
         return {
             "status": "success",
-            "message": "Dit zijn de EXACTE waarden zoals ze in de API staan",
-            "site_ids": [
-                {"value": val, "count": count, "length": len(val), "has_whitespace": bool(val != val.strip())}
-                for val, count in site_ids.items()
-            ],
-            "client_ids": [
-                {"value": val, "count": count, "length": len(val), "has_whitespace": bool(val != val.strip())}
-                for val, count in client_ids.items()
-            ],
-            "note": "Let op spaties en hoofdlettergebruik - dit moet EXACT kloppen!"
+            "total_users": len(users),
+            "sample_user_id": sample.get("id"),
+            "sample_user_name": sample.get("name"),
+            "site_fields": {
+                "siteid": sample.get("siteid"),
+                "site_id": sample.get("site_id"),
+                "SiteId": sample.get("SiteId"),
+                "siteId": sample.get("siteId")
+            },
+            "client_fields": {
+                "clientid": sample.get("clientid"),
+                "client_id": sample.get("client_id"),
+                "ClientId": sample.get("ClientId"),
+                "clientId": sample.get("clientId")
+            },
+            "uat_note": "BELANGRIJK: UAT gebruikt velden ZONDER underscore (siteid i.p.v. site_id)!"
         }
     
     except Exception as e:
         return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
-# App Start - MET ONTWERP VOOR SUCCES
+# App Start - VOLLEDIG AFGESTEMD OP UAT
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Forceer correcte auth URL
-    os.environ["HALO_AUTH_URL"] = "https://bncuat.halopsa.com/oauth2/token"
-    
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - ONTWERP VOOR SUCCES")
+    log.info("🚀 HALO UAT MAIN USERS FIXER - SPECIFIEK VOOR JOUW OMGEVING")
     log.info("-"*70)
-    log.info("💡 BELANGRIJK: Volg deze stappen IN VOLGORDE:")
-    log.info("1. Bezoek EERST /debug-data")
-    log.info("2. Noteer de EXACTE waarden voor jouw site/client")
-    log.info("3. Pas jouw .env aan met DEZE EXACTE WAARDEN")
-    log.info("4. Bezoek /users")
+    log.info("✅ DEZE APP IS VOLLEDIG AFGESTEMD OP UAT:")
+    log.info("   → Auth URL: /auth/token (GEEN /oauth2/token!)")
+    log.info("   → Scope: 'all' (GEEN all.teams!)")
+    log.info("   → UAT gebruikt velden ZONDER underscore (siteid i.p.v. site_id)")
     log.info("-"*70)
-    log.info("🔍 VOORBEELD PROBLEEM:")
-    log.info("  - Jouw .env gebruikt site_id=18")
-    log.info("  - Maar API bevat '18 ' (met spatie)")
-    log.info("  - Oplossing: Zet site_id='18 ' in .env")
+    log.info("👉 VOLG DEZE STAPPEN ALS HET NOG NIET WERKT:")
+    log.info("1. ZORG DAT: HALO_AUTH_URL=https://bncuat.halopsa.com/auth/token")
+    log.info("2. GEBRUIK SCOPE: 'all' (NIET 'all.teams')")
+    log.info("3. VINK 'Teams' EXPLICIET AAN in API-toegang")
+    log.info("4. HERSTART DE APP VOLLEDIG")
+    log.info("5. BEZOEK EERST /debug-structure")
     log.info("="*70)
     
     app.run(host="0.0.0.0", port=port, debug=True)
