@@ -30,7 +30,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - SPECIAAL VOOR JOUW "BOSSERS & CNOSSEN"
+# Custom Integration Core - MET FIX VOOR ORGANISATIE-KLANTEN
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -54,16 +54,21 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten op met verbeterde foutafhandeling"""
+    """Haal ALLE klanten + ORGANISATIES op (cruciale fix)"""
     token = get_halo_token()
     clients = []
     page = 1
     
     while True:
         try:
+            # 🔑 BELANGRIJK: includeorganisations=true zorgt dat organisaties worden meegenomen
             response = requests.get(
                 f"{HALO_API_BASE}/Client",
-                params={"page": page, "pageSize": 100},
+                params={
+                    "page": page,
+                    "pageSize": 100,
+                    "includeorganisations": "true"  # DEZE REGEL IS HET GEHEIM
+                },
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30
             )
@@ -85,11 +90,11 @@ def fetch_all_clients():
             log.error(f"❌ Fout bij ophalen klanten: {str(e)}")
             break
     
-    log.info(f"🎉 Totaal {len(clients)} klanten opgehaald")
+    log.info(f"🎉 Totaal {len(clients)} klanten + organisaties opgehaald")
     return clients
 
 def fetch_all_sites():
-    """Haal ALLE locaties op met verbeterde foutafhandeling"""
+    """Haal ALLE locaties op (geen aanpassingen nodig)"""
     token = get_halo_token()
     sites = []
     page = 1
@@ -124,7 +129,7 @@ def fetch_all_sites():
     return sites
 
 def fetch_all_users():
-    """Haal ALLE gebruikers op met verbeterde foutafhandeling"""
+    """Haal ALLE gebruikers op (geen aanpassingen nodig)"""
     token = get_halo_token()
     users = []
     page = 1
@@ -190,7 +195,7 @@ def get_main_users():
     """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN voor jouw specifieke Halo"""
     # Stap 1: Haal alle benodigde data op
     log.info("🔍 Start met ophalen van klanten, locaties en gebruikers...")
-    clients = fetch_all_clients()
+    clients = fetch_all_clients()  # Bevat nu ook organisaties!
     sites = fetch_all_sites()
     users = fetch_all_users()
     
@@ -367,7 +372,7 @@ def debug_info():
     """Technische debug informatie - MET ULTRA-DETAILRIJKE LOGGING"""
     try:
         log.info("🔍 /debug endpoint aangeroepen - haal klanten en locaties op")
-        clients = fetch_all_clients()
+        clients = fetch_all_clients()  # Bevat nu ook organisaties!
         sites = fetch_all_sites()
         
         # Toon eerste 3 klanten en locaties voor debugging
@@ -421,9 +426,10 @@ if __name__ == "__main__":
     log.info("✅ Werkt ZONDER 'include' parameter (omzeilt Halo UAT bugs)")
     log.info("✅ Gebruikt ULTRA-FLEXIBELE matching voor klantnamen")
     log.info("✅ Normaliseert namen automatisch voor betere matching")
+    log.info("✅ Haalt ORGANISATIES op via includeorganisations=true")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
-    log.info("2. Bezoek EERST /debug om te zien welke klantnamen worden gevonden")
+    log.info("2. Bezoek EERST /debug om te zien of Bossers & Cnossen wordt gevonden")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port)
