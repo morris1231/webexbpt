@@ -30,7 +30,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - ULTRA-ROBUST VOOR JOUW SPECIFIEKE GEBRUIK
+# Custom Integration Core - MET VOLLEDIGE ORGANISATIE ONDERSTEUNING
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -54,11 +54,10 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten + ORGANISATIES op (cruciale fix)"""
+    """Haal ALLE klanten + ORGANISATIES op (met verbeterde organisatie-ondersteuning)"""
     token = get_halo_token()
     clients = []
     page = 1
-    
     while True:
         try:
             # 🔑 BELANGRIJK: includeorganisations=true zorgt dat organisaties worden meegenomen
@@ -77,20 +76,26 @@ def fetch_all_clients():
             data = response.json()
             clients_page = data.get("clients", [])
             
+            # Verwerk organisatiegegevens
+            for client in clients_page:
+                if "organisation" in client:
+                    # Zorg dat organisatie altijd een dict is
+                    if isinstance(client["organisation"], list) and len(client["organisation"]) > 0:
+                        client["organisation"] = client["organisation"][0]
+                    elif not isinstance(client["organisation"], dict):
+                        client["organisation"] = {}
+            
             if not clients_page:
                 break
                 
             clients.extend(clients_page)
             log.info(f"✅ Pagina {page} klanten: {len(clients_page)} toegevoegd (totaal: {len(clients)})")
-            
             if len(clients_page) < 100:
                 break
-                
             page += 1
         except Exception as e:
             log.error(f"❌ Fout bij ophalen klanten: {str(e)}")
             break
-    
     log.info(f"🎉 Totaal {len(clients)} klanten + organisaties opgehaald")
     return clients
 
@@ -99,7 +104,6 @@ def fetch_all_sites():
     token = get_halo_token()
     sites = []
     page = 1
-    
     while True:
         try:
             response = requests.get(
@@ -111,21 +115,16 @@ def fetch_all_sites():
             response.raise_for_status()
             data = response.json()
             sites_page = data.get("sites", [])
-            
             if not sites_page:
                 break
-                
             sites.extend(sites_page)
             log.info(f"✅ Pagina {page} locaties: {len(sites_page)} toegevoegd (totaal: {len(sites)})")
-            
             if len(sites_page) < 100:
                 break
-                
             page += 1
         except Exception as e:
             log.error(f"❌ Fout bij ophalen locaties: {str(e)}")
             break
-    
     log.info(f"🎉 Totaal {len(sites)} locaties opgehaald")
     return sites
 
@@ -134,7 +133,6 @@ def fetch_all_users():
     token = get_halo_token()
     users = []
     page = 1
-    
     while True:
         try:
             response = requests.get(
@@ -146,58 +144,66 @@ def fetch_all_users():
             response.raise_for_status()
             data = response.json()
             users_page = data.get("users", [])
-            
             if not users_page:
                 break
-                
             users.extend(users_page)
             log.info(f"✅ Pagina {page} gebruikers: {len(users_page)} toegevoegd (totaal: {len(users)})")
-            
             if len(users_page) < 100:
                 break
-                
             page += 1
         except Exception as e:
             log.error(f"❌ Fout bij ophalen gebruikers: {str(e)}")
             break
-    
     log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald")
     return users
 
-def normalize_name(name):
-    """Normaliseer namen voor betere matching (speciaal voor jouw Halo UAT)"""
+def normalize_name(name, organisation_name=None):
+    """
+    Normaliseer namen inclusief organisatiegegevens
+    Combineert client-naam en organisatie-naam voor betere matching
+    """
     if not name:
-        return ""
+        name = ""
+    
+    # Voeg organisatie toe als beschikbaar
+    full_name = name
+    if organisation_name and organisation_name != "None":
+        full_name += " " + organisation_name
     
     # Stap 1: Naar kleine letters en verwijder voor/achtervoegsel spaties
-    name = name.lower().strip()
+    full_name = full_name.lower().strip()
     
     # Stap 2: Vervang veelvoorkomende varianten
-    name = name.replace("&amp;", "en")
-    name = name.replace("&", "en")
-    name = name.replace("b.v.", "bv")
-    name = name.replace("b v", "bv")
-    name = name.replace("b.v", "bv")
-    name = name.replace("bv", "bv")
-    name = name.replace(".", "")
-    name = name.replace(",", "")
-    name = name.replace("-", " ")
-    name = name.replace("*", "")
-    name = name.replace("(", "")
-    name = name.replace(")", "")
-    name = name.replace(":", " ")
-    name = name.replace("  ", " ")
+    full_name = full_name.replace("&amp;", "en")
+    full_name = full_name.replace("&", "en")
+    full_name = full_name.replace("b.v.", "bv")
+    full_name = full_name.replace("b v", "bv")
+    full_name = full_name.replace("b.v", "bv")
+    full_name = full_name.replace("bv", "bv")
+    full_name = full_name.replace("b v", "bv")
+    full_name = full_name.replace("b.v", "bv")
+    full_name = full_name.replace("b v", "bv")
+    full_name = full_name.replace(".", "")
+    full_name = full_name.replace(",", "")
+    full_name = full_name.replace("-", " ")
+    full_name = full_name.replace("*", "")
+    full_name = full_name.replace("(", "")
+    full_name = full_name.replace(")", "")
+    full_name = full_name.replace(":", " ")
+    full_name = full_name.replace("  ", " ")
     
     # Stap 3: Verwijder alle niet-alphanumerieke tekens behalve spaties
-    name = re.sub(r'[^a-z0-9 ]', ' ', name)
+    full_name = re.sub(r'[^a-z0-9 ]', ' ', full_name)
     
     # Stap 4: Vervang meervoudige spaties door enkele spatie
-    name = re.sub(r'\s+', ' ', name).strip()
+    full_name = re.sub(r'\s+', ' ', full_name).strip()
     
-    return name
+    return full_name
 
 def get_main_users():
     """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN voor jouw specifieke Halo"""
+    global client_id, bossers_client, site_id, main_site  # Voor gebruik in /users response
+    
     # Stap 1: Haal alle benodigde data op
     log.info("🔍 Start met ophalen van klanten, locaties en gebruikers...")
     clients = fetch_all_clients()  # Bevat nu ook organisaties!
@@ -210,29 +216,39 @@ def get_main_users():
     
     # 🔑 SPECIAAL VOOR JOUW GEVAL: Meer flexibele zoektermen
     bossers_keywords = [
-        "boss", "bossers", "b os", "b.o", "b&", "b c", "b.c", "b&c", 
-        "b en", "b&n", "b n", "b c", "b.c", "b&c", "b en", "b&n", "b n"
+        "boss", "bossers", "b os", "b.o", "b&", "b c", "b.c", "b&c",
+        "b en", "b&n", "b n", "b c", "b.c", "b&c", "b en", "b&n", "b n",
+        "boss en", "bossers en", "boss &", "bossers &", "bosserscnossen",
+        "bossers cnossen", "bossersen", "bossersn", "bossers cn", "bossersc"
     ]
+    
     cnossen_keywords = [
-        "cno", "cnossen", "cnos", "c.o", "c&", "c c", "c.c", "c&c", 
-        "c en", "c&n", "c n", "c c", "c.c", "c&c", "c en", "c&n", "c n"
+        "cno", "cnossen", "cnos", "c.o", "c&", "c c", "c.c", "c&c",
+        "c en", "c&n", "c n", "c c", "c.c", "c&c", "c en", "c&n", "c n",
+        "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen",
+        "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen"
     ]
     
     # Log alle potentiële matches voor debugging
     potential_matches = []
-    
     for c in clients:
+        # Haal organisatie naam op als beschikbaar
+        organisation_name = ""
+        if "organisation" in c and isinstance(c["organisation"], dict):
+            org_name = c["organisation"].get("name", "")
+            if org_name and org_name != "None":
+                organisation_name = org_name
+        
         original_name = c.get("name", "Onbekend")
-        normalized_name = normalize_name(original_name)
+        normalized_name = normalize_name(original_name, organisation_name)
         
         # 🔑 Verbeterde matching: Controleer op afzonderlijke sleutelwoorden
         has_bossers = any(
-            keyword in normalized_name 
+            keyword in normalized_name
             for keyword in bossers_keywords
         )
-        
         has_cnossen = any(
-            keyword in normalized_name 
+            keyword in normalized_name
             for keyword in cnossen_keywords
         )
         
@@ -241,49 +257,64 @@ def get_main_users():
             match_type = []
             if has_bossers: match_type.append("✅ Bossers-match")
             if has_cnossen: match_type.append("✅ Cnossen-match")
+            log.info(f"{' '.join(match_type)}: '{original_name}' + Org: '{organisation_name}' → Normalized: '{normalized_name}'")
             
-            log.info(f"{' '.join(match_type)}: '{original_name}' → Normalized: '{normalized_name}'")
             potential_matches.append({
                 "id": c["id"],
                 "original_name": original_name,
+                "organisation_name": organisation_name,
                 "normalized_name": normalized_name,
                 "has_bossers": has_bossers,
-                "has_cnossen": has_cnossen
+                "has_cnossen": has_cnossen,
+                "full_normalized": normalized_name
             })
             
-            # Sla op als potentiële match
-            if not bossers_client and (has_bossers or has_cnossen):
+            # Sla op als potentiële match (alleen als BEIDE delen aanwezig zijn)
+            if has_bossers and has_cnossen and not bossers_client:
                 bossers_client = c
+                log.info(f"🎯 GEVONDEN: Klant '{original_name}' + Org: '{organisation_name}' gematcht als Bossers & Cnossen")
     
-    # Als we geen match vonden, gebruik dan de eerste potentiële match
+    # Als we geen perfecte match vonden, gebruik dan de beste potentiële match
     if not bossers_client and potential_matches:
-        bossers_client = next((c for c in clients if c["id"] == potential_matches[0]["id"]), None)
+        # Sorteer op meeste matches (hoogste score)
+        potential_matches.sort(key=lambda x: (x["has_bossers"] + x["has_cnossen"]), reverse=True)
+        best_match_id = potential_matches[0]["id"]
+        
+        bossers_client = next((c for c in clients if c["id"] == best_match_id), None)
         if bossers_client:
-            log.warning(f"⚠️ Gebruik POTENTIËLE MATCH voor klant: {bossers_client['name']}")
-
+            org_name = ""
+            if "organisation" in bossers_client and isinstance(bossers_client["organisation"], dict):
+                org_name = bossers_client["organisation"].get("name", "")
+                
+            log.warning(f"⚠️ Gebruik BESTE POTENTIËLE MATCH voor klant: {bossers_client['name']} + Org: {org_name}")
+    
     if not bossers_client:
         log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
         # Toon alle potentiële matches voor debugging
         if potential_matches:
             log.info("🔍 Potentiële klantnamen gevonden:")
             for match in potential_matches:
-                log.info(f" - ID {match['id']}: '{match['original_name']}' (Normalized: '{match['normalized_name']}')")
+                log.info(f" - ID {match['id']}: '{match['original_name']}' + Org: '{match['organisation_name']}' (Normalized: '{match['normalized_name']}')")
         else:
             log.info("🔍 Geen potentiële klantnamen gevonden met 'boss' of 'cno'")
         return []
     
     client_id = int(bossers_client["id"])
-    log.info(f"✅ Gebruik klant-ID: {client_id} (Naam: '{bossers_client['name']}')")
-
+    org_name = ""
+    if "organisation" in bossers_client and isinstance(bossers_client["organisation"], dict):
+        org_name = bossers_client["organisation"].get("name", "")
+    
+    log.info(f"✅ Gebruik klant-ID: {client_id} (Naam: '{bossers_client['name']}' + Org: '{org_name}')")
+    
     # Stap 3: Vind de juiste Site ID voor "Main" (FLEXIBEL)
     log.info("🔍 Zoek locatie 'Main' met flexibele matching...")
     main_site = None
-    
     for s in sites:
         site_name = str(s.get("name", "")).lower().strip()
         normalized_site = normalize_name(site_name)
         
-        if "main" in normalized_site or "hoofd" in normalized_site or "head" in normalized_site:
+        # Verbeterde matching voor "Main" locatie
+        if "main" in normalized_site or "hoofd" in normalized_site or "head" in normalized_site or "primary" in normalized_site:
             main_site = s
             log.info(f"✅ GEVONDEN: Locatie '{site_name}' gematcht als Main (ID: {s['id']})")
             break
@@ -291,16 +322,16 @@ def get_main_users():
     if not main_site:
         log.error("❌ Locatie 'Main' NIET GEVONDEN in Halo")
         # Toon mogelijke matches voor debugging
-        log.info("🔍 Mogelijke locatienamen in Halo (bevat 'main'):")
+        log.info("🔍 Mogelijke locatienamen in Halo (bevat 'main', 'hoofd' of 'head'):")
         for s in sites:
             site_name = str(s.get("name", "")).lower().strip()
-            if "main" in site_name or "hoofd" in site_name:
+            if "main" in site_name or "hoofd" in site_name or "head" in site_name:
                 log.info(f" - '{s.get('name', 'Onbekend')}' (ID: {s.get('id')})")
         return []
     
     site_id = int(main_site["id"])
     log.info(f"✅ Gebruik locatie-ID: {site_id} (Naam: '{main_site['name']}')")
-
+    
     # Stap 4: Filter gebruikers die aan Main-site gekoppeld zijn
     log.info("🔍 Filter Main-site gebruikers...")
     main_users = []
@@ -310,21 +341,27 @@ def get_main_users():
             user_client_id = int(user.get("client_id", 0))
             if user_client_id != client_id:
                 continue
-                
+            
             # Controleer site koppeling
             user_site_id = int(user.get("site_id", 0))
             if user_site_id != site_id:
                 continue
-                
+            
+            # Haal organisatie naam op voor logging
+            org_name = ""
+            if "organisation" in bossers_client and isinstance(bossers_client["organisation"], dict):
+                org_name = bossers_client["organisation"].get("name", "")
+            
             main_users.append({
                 "id": user["id"],
                 "name": user["name"],
                 "email": user.get("emailaddress") or user.get("email") or "Geen email",
-                "client_name": bossers_client["name"],
+                "client_name": f"{bossers_client['name']} {org_name}".strip(),
                 "site_name": main_site["name"],
                 "debug": {
                     "raw_client_id": user.get("client_id"),
-                    "raw_site_id": user.get("site_id")
+                    "raw_site_id": user.get("site_id"),
+                    "organisation": org_name
                 }
             })
         except (TypeError, ValueError, KeyError) as e:
@@ -356,7 +393,6 @@ def get_users():
     try:
         log.info("🔄 /users endpoint aangeroepen - start verwerking")
         main_users = get_main_users()
-        
         if not main_users:
             log.error("❌ Geen Main-site gebruikers gevonden")
             return jsonify({
@@ -366,15 +402,24 @@ def get_users():
                     "2. Zorg dat de klant 'Bossers & Cnossen' bestaat in Halo UAT",
                     "3. Controleer de Render logs voor match-details"
                 ],
-                "debug_hint": "Deze integratie probeert automatisch alle varianten van 'Bossers & Cnossen' te matchen"
+                "debug_hint": "Deze integratie probeert automatisch alle varianten van 'Bossers & Cnossen' te matchen inclusief organisatienaam"
             }), 500
+        
+        # Haal client en site namen op voor de response
+        client_name = bossers_client["name"]
+        org_name = ""
+        if "organisation" in bossers_client and isinstance(bossers_client["organisation"], dict):
+            org_name = bossers_client["organisation"].get("name", "")
+        full_client_name = f"{client_name} {org_name}".strip()
+        
+        site_name = main_site["name"]
         
         log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
         return jsonify({
             "client_id": client_id,
-            "client_name": bossers_client["name"],
+            "client_name": full_client_name,
             "site_id": site_id,
-            "site_name": main_site["name"],
+            "site_name": site_name,
             "total_users": len(main_users),
             "users": main_users
         })
@@ -399,25 +444,46 @@ def debug_info():
         
         # Zoek naar potentiële Bossers & Cnossen varianten
         bossers_variants = []
+        all_candidates = []
+        
         for c in clients:
-            normalized = normalize_name(c.get("name", ""))
-            # 🔑 Meer flexibele matching voor jouw specifieke geval
+            # Haal organisatie naam op
+            organisation_name = ""
+            if "organisation" in c and isinstance(c["organisation"], dict):
+                org_name = c["organisation"].get("name", "")
+                if org_name and org_name != "None":
+                    organisation_name = org_name
+            
+            original_name = c.get("name", "Onbekend")
+            normalized_name = normalize_name(original_name, organisation_name)
+            
+            # Check voor Bossers & Cnossen
             has_bossers = any(
-                keyword in normalized 
-                for keyword in ["boss", "b os", "b.o", "b&", "b c", "b.c", "b&c"]
+                keyword in normalized_name
+                for keyword in ["boss", "b os", "b.o", "b&", "b c", "b.c", "b&c", "bossers"]
             )
             has_cnossen = any(
-                keyword in normalized 
-                for keyword in ["cno", "c.o", "c&", "c c", "c.c", "c&c"]
+                keyword in normalized_name
+                for keyword in ["cno", "c.o", "c&", "c c", "c.c", "c&c", "cnossen"]
             )
             
             if has_bossers or has_cnossen:
                 bossers_variants.append({
                     "id": c["id"],
-                    "original_name": c["name"],
-                    "normalized_name": normalized,
+                    "original_name": original_name,
+                    "organisation_name": organisation_name,
+                    "normalized_name": normalized_name,
                     "has_bossers": has_bossers,
                     "has_cnossen": has_cnossen
+                })
+            
+            # Check voor alle kandidaten met 'bos' of 'cno'
+            if "bos" in normalized_name or "cno" in normalized_name:
+                all_candidates.append({
+                    "id": c["id"],
+                    "client_name": original_name,
+                    "organisation_name": organisation_name,
+                    "full_normalized": normalized_name
                 })
         
         log.info("✅ /debug data verzameld - controleer op Bossers & Main")
@@ -431,12 +497,15 @@ def debug_info():
                 "note": "Controleer of 'Bossers & Cnossen' en 'Main' in deze lijsten staan"
             },
             "bossers_variants_found": bossers_variants,
+            "all_possible_candidates": all_candidates,
             "troubleshooting": [
                 "1. Klantnaam kan variëren: 'Bossers & Cnossen', 'B&C', 'Bossers en Cnossen'",
-                "2. Gebruik de /debug output om de EXACTE spelling te zien",
-                "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang"
+                "2. Organisatie naam is KRIKEND belangrijk - check 'organisation_name' in response",
+                "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang",
+                "4. Gebruik 'all_possible_candidates' om de exacte spelling te vinden",
+                "5. De integratie combineert nu client-naam en organisatie-naam voor matching"
             ],
-            "hint": "Deze integratie gebruikt ULTRA-FLEXIBELE matching voor klantnamen"
+            "hint": "Deze integratie gebruikt ULTRA-FLEXIBELE matching voor klantnamen inclusief organisaties"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -458,6 +527,7 @@ if __name__ == "__main__":
     log.info("✅ Normaliseert namen automatisch voor betere matching")
     log.info("✅ Haalt ORGANISATIES op via includeorganisations=true")
     log.info("✅ Filtert alleen ACTIEVE klanten")
+    log.info("✅ COMBINEERT NU CLIENT-NAAM EN ORGANISATIE-NAAM VOOR MATCHING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
