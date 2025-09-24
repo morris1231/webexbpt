@@ -30,7 +30,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - MET FIX VOOR ORGANISATIE-KLANTEN
+# Custom Integration Core - ULTRA-ROBUST VOOR JOUW SPECIFIEKE GEBRUIK
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -67,7 +67,8 @@ def fetch_all_clients():
                 params={
                     "page": page,
                     "pageSize": 100,
-                    "includeorganisations": "true"  # DEZE REGEL IS HET GEHEIM
+                    "includeorganisations": "true",  # DEZE REGEL IS HET GEHEIM
+                    "active": "true"                # Alleen actieve klanten
                 },
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30
@@ -176,12 +177,16 @@ def normalize_name(name):
     name = name.replace("&", "en")
     name = name.replace("b.v.", "bv")
     name = name.replace("b v", "bv")
+    name = name.replace("b.v", "bv")
+    name = name.replace("bv", "bv")
     name = name.replace(".", "")
     name = name.replace(",", "")
     name = name.replace("-", " ")
     name = name.replace("*", "")
     name = name.replace("(", "")
     name = name.replace(")", "")
+    name = name.replace(":", " ")
+    name = name.replace("  ", " ")
     
     # Stap 3: Verwijder alle niet-alphanumerieke tekens behalve spaties
     name = re.sub(r'[^a-z0-9 ]', ' ', name)
@@ -202,7 +207,16 @@ def get_main_users():
     # Stap 2: Vind de juiste Client ID voor "Bossers & Cnossen" (ULTRA-FLEXIBEL)
     log.info("🔍 Zoek klant 'Bossers & Cnossen' met geavanceerde matching...")
     bossers_client = None
-    bossers_keywords = ["bossers", "cnossen", "b", "c"]
+    
+    # 🔑 SPECIAAL VOOR JOUW GEVAL: Meer flexibele zoektermen
+    bossers_keywords = [
+        "boss", "bossers", "b os", "b.o", "b&", "b c", "b.c", "b&c", 
+        "b en", "b&n", "b n", "b c", "b.c", "b&c", "b en", "b&n", "b n"
+    ]
+    cnossen_keywords = [
+        "cno", "cnossen", "cnos", "c.o", "c&", "c c", "c.c", "c&c", 
+        "c en", "c&n", "c n", "c c", "c.c", "c&c", "c en", "c&n", "c n"
+    ]
     
     # Log alle potentiële matches voor debugging
     potential_matches = []
@@ -211,37 +225,41 @@ def get_main_users():
         original_name = c.get("name", "Onbekend")
         normalized_name = normalize_name(original_name)
         
-        # Controleer of alle sleutelwoorden aanwezig zijn
-        has_all_keywords = all(
+        # 🔑 Verbeterde matching: Controleer op afzonderlijke sleutelwoorden
+        has_bossers = any(
             keyword in normalized_name 
-            for keyword in ["bossers", "cnossen"]
+            for keyword in bossers_keywords
         )
         
-        # Controleer of minimaal 2 sleutelwoorden aanwezig zijn (fallback)
-        keyword_count = sum(
-            1 for keyword in bossers_keywords 
-            if keyword in normalized_name
+        has_cnossen = any(
+            keyword in normalized_name 
+            for keyword in cnossen_keywords
         )
         
         # Log alle matches voor debugging
-        if has_all_keywords or keyword_count >= 2:
-            match_type = "✅ Exact match" if has_all_keywords else "⚠️ Partial match"
-            log.info(f"{match_type}: '{original_name}' → Normalized: '{normalized_name}'")
+        if has_bossers or has_cnossen:
+            match_type = []
+            if has_bossers: match_type.append("✅ Bossers-match")
+            if has_cnossen: match_type.append("✅ Cnossen-match")
+            
+            log.info(f"{' '.join(match_type)}: '{original_name}' → Normalized: '{normalized_name}'")
             potential_matches.append({
                 "id": c["id"],
                 "original_name": original_name,
                 "normalized_name": normalized_name,
-                "match_type": "exact" if has_all_keywords else "partial"
+                "has_bossers": has_bossers,
+                "has_cnossen": has_cnossen
             })
             
-            if not bossers_client and has_all_keywords:
+            # Sla op als potentiële match
+            if not bossers_client and (has_bossers or has_cnossen):
                 bossers_client = c
     
-    # Als we geen exacte match vonden, gebruik dan de beste partial match
+    # Als we geen match vonden, gebruik dan de eerste potentiële match
     if not bossers_client and potential_matches:
         bossers_client = next((c for c in clients if c["id"] == potential_matches[0]["id"]), None)
         if bossers_client:
-            log.warning(f"⚠️ Gebruik PARTIËLE MATCH voor klant: {bossers_client['name']}")
+            log.warning(f"⚠️ Gebruik POTENTIËLE MATCH voor klant: {bossers_client['name']}")
 
     if not bossers_client:
         log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
@@ -251,7 +269,7 @@ def get_main_users():
             for match in potential_matches:
                 log.info(f" - ID {match['id']}: '{match['original_name']}' (Normalized: '{match['normalized_name']}')")
         else:
-            log.info("🔍 Geen potentiële klantnamen gevonden met 'bossers' of 'cnossen'")
+            log.info("🔍 Geen potentiële klantnamen gevonden met 'boss' of 'cno'")
         return []
     
     client_id = int(bossers_client["id"])
@@ -265,7 +283,7 @@ def get_main_users():
         site_name = str(s.get("name", "")).lower().strip()
         normalized_site = normalize_name(site_name)
         
-        if "main" in normalized_site or "hoofd" in normalized_site:
+        if "main" in normalized_site or "hoofd" in normalized_site or "head" in normalized_site:
             main_site = s
             log.info(f"✅ GEVONDEN: Locatie '{site_name}' gematcht als Main (ID: {s['id']})")
             break
@@ -383,11 +401,23 @@ def debug_info():
         bossers_variants = []
         for c in clients:
             normalized = normalize_name(c.get("name", ""))
-            if "bossers" in normalized or "cnossen" in normalized or "b" in normalized or "c" in normalized:
+            # 🔑 Meer flexibele matching voor jouw specifieke geval
+            has_bossers = any(
+                keyword in normalized 
+                for keyword in ["boss", "b os", "b.o", "b&", "b c", "b.c", "b&c"]
+            )
+            has_cnossen = any(
+                keyword in normalized 
+                for keyword in ["cno", "c.o", "c&", "c c", "c.c", "c&c"]
+            )
+            
+            if has_bossers or has_cnossen:
                 bossers_variants.append({
                     "id": c["id"],
                     "original_name": c["name"],
-                    "normalized_name": normalized
+                    "normalized_name": normalized,
+                    "has_bossers": has_bossers,
+                    "has_cnossen": has_cnossen
                 })
         
         log.info("✅ /debug data verzameld - controleer op Bossers & Main")
@@ -406,7 +436,7 @@ def debug_info():
                 "2. Gebruik de /debug output om de EXACTE spelling te zien",
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang"
             ],
-            "hint": "Deze integratie normaliseert namen automatisch voor betere matching"
+            "hint": "Deze integratie gebruikt ULTRA-FLEXIBELE matching voor klantnamen"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -427,6 +457,7 @@ if __name__ == "__main__":
     log.info("✅ Gebruikt ULTRA-FLEXIBELE matching voor klantnamen")
     log.info("✅ Normaliseert namen automatisch voor betere matching")
     log.info("✅ Haalt ORGANISATIES op via includeorganisations=true")
+    log.info("✅ Filtert alleen ACTIEVE klanten")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
