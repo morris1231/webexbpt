@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import requests
 
 # ------------------------------------------------------------------------------
-# Logging - MET ENKEL TEAMS RECHTEN
+# Logging - MET TYPEVEILIGE FILTERING
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +14,7 @@ logging.basicConfig(
 log = logging.getLogger("halo-app")
 
 # ------------------------------------------------------------------------------
-# Config - ALLEEN TEAMS RECHTEN NODIG
+# Config - VOLLEDIG TYPEVEILIG
 # ------------------------------------------------------------------------------
 load_dotenv()
 app = Flask(__name__)
@@ -27,7 +27,7 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE      = "https://bncuat.halopsa.com/api"
 
-# Jouw IDs (pas aan op basis van /id-mapper)
+# Jouw IDs (als NUMBERS, niet strings)
 HALO_CLIENT_ID_NUM = 1706  # Bossers & Cnossen (API ID)
 HALO_SITE_ID       = 1714  # Main (API ID)
 
@@ -37,7 +37,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Halo API helpers - MET ENKEL TEAMS RECHTEN
+# Halo API helpers - MET TYPEVEILIGE FILTERING
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Authenticatie met alleen 'Teams' rechten"""
@@ -66,11 +66,11 @@ def get_halo_headers():
         raise
 
 def fetch_main_users():
-    """HAAL MAIN-SITE GEBRUIKERS OP MET ENKEL TEAMS RECHTEN"""
+    """HAAL MAIN-SITE GEBRUIKERS OP MET TYPEVEILIGE FILTERING"""
     log.info(f"🔍 Start proces voor client {HALO_CLIENT_ID_NUM}, site {HALO_SITE_ID}")
     
     try:
-        # Haal ALLE gebruikers op (geen externe endpoints nodig)
+        # Haal ALLE gebruikers op
         users_url = f"{HALO_API_BASE}/Users"
         log.info(f"➡️ API-aanvraag: {users_url}")
         
@@ -81,26 +81,36 @@ def fetch_main_users():
         # Parse response
         data = r.json()
         users = data if isinstance(data, list) else data.get("users", []) or data.get("Users", [])
-        log.info(f"✅ {len(users)} gebruikers opgehaald - start filtering")
+        log.info(f"✅ {len(users)} gebruikers opgehaald - start TYPEVEILIGE filtering")
         
-        # Filter met DE ECHTE IDs (1706 en 1714)
+        # Filter met TYPECONVERSIE (GEEN STRING VERGELIJKING!)
         main_users = []
         for u in users:
-            # Haal IDs op (alle varianten)
-            site_id_val = str(
-                u.get("siteid") or 
-                u.get("site_id") or 
-                ""
-            ).strip()
+            # Haal site ID op (alle varianten) + converteer naar float
+            site_id_val = None
+            for key in ["siteid", "site_id", "SiteId", "siteId"]:
+                if key in u and u[key] is not None:
+                    try:
+                        site_id_val = float(u[key])
+                        break
+                    except (TypeError, ValueError):
+                        pass
             
-            client_id_val = str(
-                u.get("clientid") or 
-                u.get("client_id") or 
-                ""
-            ).strip()
+            # Haal client ID op (alle varianten) + converteer naar float
+            client_id_val = None
+            for key in ["clientid", "client_id", "ClientId", "clientId"]:
+                if key in u and u[key] is not None:
+                    try:
+                        client_id_val = float(u[key])
+                        break
+                    except (TypeError, ValueError):
+                        pass
             
-            # Valideer met DE ECHTE IDs
-            if site_id_val == str(HALO_SITE_ID) and client_id_val == str(HALO_CLIENT_ID_NUM):
+            # TYPEVEILIGE VALIDATIE (geen string vergelijking!)
+            is_site_match = site_id_val is not None and abs(site_id_val - HALO_SITE_ID) < 0.1
+            is_client_match = client_id_val is not None and abs(client_id_val - HALO_CLIENT_ID_NUM) < 0.1
+            
+            if is_site_match and is_client_match:
                 main_users.append(u)
         
         # Rapporteer resultaat
@@ -112,6 +122,9 @@ def fetch_main_users():
             return main_users
         
         log.error(f"❌ Geen Main-site gebruikers gevonden met client_id={HALO_CLIENT_ID_NUM} en site_id={HALO_SITE_ID}")
+        log.error("👉 Mogelijke oorzaken:")
+        log.error("1. Verkeerde ID types (API gebruikt floats/ints, geen strings)")
+        log.error("2. Onjuiste ID waarden (gebruik /id-helper voor correcte waarden)")
         return []
     
     except Exception as e:
@@ -119,7 +132,7 @@ def fetch_main_users():
         return []
 
 # ------------------------------------------------------------------------------
-# Routes - MET ENKEL TEAMS RECHTEN
+# Routes - MET TYPEVEILIGE ID MAPPING
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
@@ -127,9 +140,9 @@ def health():
         "status": "ok",
         "message": "Halo Main users app draait! Bezoek /users voor data",
         "critical_notes": [
-            "1. Werkt MET ENKEL 'Teams' rechten (geen Clients/Sites nodig)",
-            "2. Gebruikt API IDs (1706/1714) i.p.v. URL IDs (12/18)",
-            "3. Bezoek /id-helper voor hulp bij ID mapping"
+            "1. Werkt MET TYPEVEILIGE filtering (geen string vergelijking!)",
+            "2. Gebruikt numerieke vergelijking voor IDs (1714.0 == 1714)",
+            "3. Bezoek /id-helper voor correcte ID waarden"
         ]
     }
 
@@ -141,11 +154,11 @@ def users():
         return jsonify({
             "error": "Geen Main-site gebruikers gevonden",
             "solution": [
-                f"1. Gebruik DE ECHTE IDs: client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID}",
-                "2. Bezoek /id-helper om jouw juiste IDs te vinden",
-                "3. Zorg dat 'Teams' is aangevinkt in API-toegang"
+                "1. Bezoek /id-helper om de EXACTE ID waarden te zien",
+                "2. Let op: IDs kunnen floats zijn (1714.0 i.p.v. 1714)",
+                "3. Gebruik NUMERIEKE vergelijking, niet string"
             ],
-            "debug_info": "Deze app gebruikt alleen de /Users endpoint (geen Clients/Sites nodig)"
+            "debug_info": "Deze app gebruikt TYPEVEILIGE filtering voor IDs"
         }), 500
     
     simplified = [{
@@ -165,7 +178,7 @@ def users():
 
 @app.route("/id-helper", methods=["GET"])
 def id_helper():
-    """HULP BIJ ID MAPPING MET ALLEEN /Users ENDPOINT"""
+    """HULP BIJ ID MAPPING MET TYPEINFORMATIE"""
     try:
         headers = get_halo_headers()
         r = requests.get(f"{HALO_API_BASE}/Users", headers=headers, timeout=30)
@@ -178,43 +191,52 @@ def id_helper():
         if not users:
             return {"error": "Geen gebruikers gevonden in API response"}, 500
         
-        # Verzamel unieke client/site IDs
+        # Verzamel unieke client/site IDs MET TYPE
         client_ids = {}
         site_ids = {}
         
         for u in users:
             # Client IDs
-            client_id_val = str(
-                u.get("clientid") or 
-                u.get("client_id") or 
-                ""
-            ).strip()
-            if client_id_val:
-                client_ids[client_id_val] = client_ids.get(client_id_val, 0) + 1
+            for key in ["clientid", "client_id", "ClientId", "clientId"]:
+                if key in u and u[key] is not None:
+                    val = u[key]
+                    try:
+                        num_val = float(val)
+                        client_ids[num_val] = client_ids.get(num_val, 0) + 1
+                    except (TypeError, ValueError):
+                        pass
             
             # Site IDs
-            site_id_val = str(
-                u.get("siteid") or 
-                u.get("site_id") or 
-                ""
-            ).strip()
-            if site_id_val:
-                site_ids[site_id_val] = site_ids.get(site_id_val, 0) + 1
+            for key in ["siteid", "site_id", "SiteId", "siteId"]:
+                if key in u and u[key] is not None:
+                    val = u[key]
+                    try:
+                        num_val = float(val)
+                        site_ids[num_val] = site_ids.get(num_val, 0) + 1
+                    except (TypeError, ValueError):
+                        pass
+        
+        # Sorteer op count (meeste gebruikers eerst)
+        sorted_client_ids = sorted(
+            [{"api_id": cid, "count": count} for cid, count in client_ids.items()],
+            key=lambda x: x["count"],
+            reverse=True
+        )
+        
+        sorted_site_ids = sorted(
+            [{"api_id": sid, "count": count} for sid, count in site_ids.items()],
+            key=lambda x: x["count"],
+            reverse=True
+        )
         
         return {
             "status": "success",
-            "client_ids": [
-                {"api_id": cid, "count": count}
-                for cid, count in client_ids.items()
-            ],
-            "site_ids": [
-                {"api_id": sid, "count": count}
-                for sid, count in site_ids.items()
-            ],
-            "note": "Gebruik deze IDs in je code (NIET de URL IDs!)",
+            "client_ids": sorted_client_ids,
+            "site_ids": sorted_site_ids,
+            "note": "Gebruik DEZE NUMMERS in je code (niet als strings!)",
             "example": {
-                "url_example": "https://bncuat.halopsa.com/customer?clientid=12&siteid=18",
-                "api_example": "Gebruik client_id=1706, site_id=1714 in je code"
+                "api_value": 1714.0,
+                "correct_usage": "HALO_SITE_ID = 1714  # Gebruik integer, geen string"
             }
         }
     
@@ -222,20 +244,20 @@ def id_helper():
         return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
-# App Start - MET ENKEL TEAMS RECHTEN
+# App Start - MET TYPEVEILIGE FILTERING
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     
     log.info("="*70)
-    log.info("🚀 HALO MAIN USERS - MET ENKEL 'Teams' RECHTEN")
+    log.info("🚀 HALO MAIN USERS - MET TYPEVEILIGE FILTERING")
     log.info("-"*70)
-    log.info("✅ Werkt MET ENKEL 'Teams' aangevinkt (geen Clients/Sites nodig!)")
-    log.info("✅ Gebruikt API IDs (1706/1714) i.p.v. URL IDs (12/18)")
+    log.info("✅ Werkt MET TYPECONVERSIE (1714.0 == 1714)")
+    log.info("✅ Gebruikt numerieke vergelijking voor IDs")
     log.info("-"*70)
     log.info("👉 VOLG DEZE STAPPEN:")
     log.info("1. Bezoek EERST /id-helper")
-    log.info("2. Noteer de API IDs voor jouw klant/site")
+    log.info("2. Noteer de NUMMERIEKE waarden (geen strings!)")
     log.info("3. Pas HALO_CLIENT_ID_NUM en HALO_SITE_ID aan in de code")
     log.info("4. Bezoek DAN /users")
     log.info("="*70)
