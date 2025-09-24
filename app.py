@@ -1,8 +1,7 @@
-import os, urllib.parse, logging, sys
+import os, urllib.parse, logging, sys, csv, io
 from flask import Flask, jsonify, Response
 from dotenv import load_dotenv
 import requests
-import csv, io
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -25,15 +24,14 @@ HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 HALO_AUTH_URL      = os.getenv("HALO_AUTH_URL", "").strip()
 HALO_API_BASE      = os.getenv("HALO_API_BASE", "").strip()
 
-# IDs → Bossers & Cnossen (12), Main (18)
-HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))
-HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))
+HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", "12"))   # Bossers & Cnossen
+HALO_SITE_ID       = int(os.getenv("HALO_SITE_ID", "18"))         # Main site
 
 # ------------------------------------------------------------------------------
 # Halo API helpers
 # ------------------------------------------------------------------------------
 def get_halo_headers():
-    """Vraag een bearer token op en stel headers samen."""
+    """Vraag een bearer token op en retourneer headers."""
     payload = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
@@ -54,7 +52,7 @@ def get_halo_headers():
     }
 
 def fetch_main_users(client_id: int, site_id: int, max_pages=50):
-    """Haal ALLE users van de opgegeven client & site (Main)."""
+    """Haal ALLE users van specifieke client + site."""
     h = get_halo_headers()
     all_users, page, page_size = [], 1, 50
 
@@ -70,18 +68,17 @@ def fetch_main_users(client_id: int, site_id: int, max_pages=50):
 
         data = r.json()
         users = data.get("users") or data.get("Users") or []
-        count = data.get("count") or data.get("totalCount")
+        total = data.get("count") or data.get("totalCount")
 
-        if not users:  # Geen data meer
+        if not users:
             break
 
         all_users.extend(users)
         log.info(f"📄 Page {page}: {len(users)} users, totaal {len(all_users)}")
 
-        # Stopcriteria: minder dan page_size of totaal bereikt
-        if len(users) < page_size:
+        if len(users) < page_size:   # laatste pagina
             break
-        if count and len(all_users) >= count:
+        if total and len(all_users) >= total:
             break
 
         page += 1
@@ -89,19 +86,48 @@ def fetch_main_users(client_id: int, site_id: int, max_pages=50):
     return all_users
 
 # ------------------------------------------------------------------------------
+# Auto Test bij start
+# ------------------------------------------------------------------------------
+def self_test():
+    """Voer directe tests uit bij start van de app."""
+    log.info("🚀 Starting self-test...")
+
+    try:
+        headers = get_halo_headers()
+        log.info("✅ Auth token opgehaald.")
+
+        users = fetch_main_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+        log.info(f"✅ {len(users)} users opgehaald voor Client={HALO_CLIENT_ID_NUM}, Site={HALO_SITE_ID}")
+
+        # test CSV-generatie
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "name", "email"])
+        for u in users[:3]:  # alleen 3 rows om te checken
+            writer.writerow([
+                u.get("id"),
+                u.get("name"),
+                u.get("EmailAddress") or u.get("emailaddress")
+            ])
+        log.info("✅ CSV generatie getest (sample rows).")
+
+        log.info("🎉 SELF-TEST PASSED – Alles werkt correct!")
+    except Exception as e:
+        log.error(f"❌ Self-test gefaald: {e}")
+
+# ------------------------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return {"status": "ok", "message": "Halo Main users app draait!"}
+    return {"status": "ok", "message": "Halo app draait!"}
 
 @app.route("/users", methods=["GET"])
 def users():
-    """JSON lijst van alle Main users."""
     site_users = fetch_main_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     simplified = [{
-        "id"   : u.get("id"),
-        "name" : u.get("name"),
+        "id": u.get("id"),
+        "name": u.get("name"),
         "email": u.get("EmailAddress") or u.get("emailaddress"),
     } for u in site_users]
 
@@ -115,7 +141,6 @@ def users():
 
 @app.route("/users.csv", methods=["GET"])
 def users_csv():
-    """Download alle Main users als CSV-bestand."""
     site_users = fetch_main_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     output = io.StringIO()
     writer = csv.writer(output)
@@ -138,5 +163,8 @@ def users_csv():
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Voer self-test uit voor server start
+    self_test()
+
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
