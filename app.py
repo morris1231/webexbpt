@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("halo-custom-integration")
 app = Flask(__name__)
-load_dotenz()  # Corrected typo here
+load_dotenv()  # CORRECTE SPELLING - GEEN TYPO
 
 # Halo API credentials (UIT .env)
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
@@ -50,7 +50,8 @@ def get_halo_token():
         return response.json()["access_token"]
     except Exception as e:
         log.critical(f"❌ AUTH MISLUKT: {str(e)}")
-        log.critical(f"➡️ Response: {response.text if 'response' in locals() else 'Geen response'}")
+        if 'response' in locals():
+            log.critical(f"➡️ Response: {response.text}")
         raise
 
 def fetch_all_clients():
@@ -170,7 +171,7 @@ def normalize_name(name, organisation_name=None):
     """
     # Combineer client en organisatie namen
     full_name = (name or "").strip()
-    if organisation_name and organisation_name != "None":
+    if organisation_name and str(organisation_name).strip() != "None":
         full_name += " " + str(organisation_name).strip()
     
     # Stap 1: Basis schoonmaak
@@ -186,7 +187,7 @@ def normalize_name(name, organisation_name=None):
         ("b v", "bv"),
         ("b.v", "bv"),
         ("b v", "bv"),
-        ("en", "en"),  # Behoud 'en' maar zorg dat het geen problemen geeft
+        ("en", "en"),
         (".", " "),
         (",", " "),
         ("-", " "),
@@ -195,7 +196,7 @@ def normalize_name(name, organisation_name=None):
         (")", " "),
         (":", " "),
         ("'", " "),
-        ("\"", " "),
+        ('"', " "),
         ("  ", " ")
     ]
     
@@ -208,7 +209,7 @@ def normalize_name(name, organisation_name=None):
     # Stap 4: Schoonmaak spaties
     full_name = re.sub(r'\s+', ' ', full_name).strip()
     
-    return full_name
+    return full__name
 
 def get_main_users():
     """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN"""
@@ -274,7 +275,7 @@ def get_main_users():
                 "id": c["id"],
                 "client_name": client_name,
                 "organisation_name": organisation_name,
-                "normalized_name": normalized__name,
+                "normalized_name": normalized_name,
                 "has_bossers": has_bossers,
                 "has_cnossen": has_cnossen
             })
