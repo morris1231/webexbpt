@@ -1,4 +1,5 @@
 import os, logging, sys
+import re
 from flask import Flask, jsonify
 from dotenv import load_dotenv
 import requests
@@ -29,7 +30,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - WERKT MET JOUW SPECIFIEKE NAAMFORMATEN
+# Custom Integration Core - SPECIAAL VOOR JOUW "BOSSERS & CNOSSEN"
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -157,54 +158,109 @@ def fetch_all_users():
     log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald")
     return users
 
+def normalize_name(name):
+    """Normaliseer namen voor betere matching (speciaal voor jouw Halo UAT)"""
+    if not name:
+        return ""
+    
+    # Stap 1: Naar kleine letters en verwijder voor/achtervoegsel spaties
+    name = name.lower().strip()
+    
+    # Stap 2: Vervang veelvoorkomende varianten
+    name = name.replace("&amp;", "en")
+    name = name.replace("&", "en")
+    name = name.replace("b.v.", "bv")
+    name = name.replace("b v", "bv")
+    name = name.replace(".", "")
+    name = name.replace(",", "")
+    name = name.replace("-", " ")
+    name = name.replace("*", "")
+    name = name.replace("(", "")
+    name = name.replace(")", "")
+    
+    # Stap 3: Verwijder alle niet-alphanumerieke tekens behalve spaties
+    name = re.sub(r'[^a-z0-9 ]', ' ', name)
+    
+    # Stap 4: Vervang meervoudige spaties door enkele spatie
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    return name
+
 def get_main_users():
-    """Combineer alle data met FLEXIBELE ZOEKOPDRACHTEN voor jouw specifieke Halo"""
+    """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN voor jouw specifieke Halo"""
     # Stap 1: Haal alle benodigde data op
     log.info("🔍 Start met ophalen van klanten, locaties en gebruikers...")
     clients = fetch_all_clients()
     sites = fetch_all_sites()
     users = fetch_all_users()
     
-    # Stap 2: Vind de juiste Client ID voor "Bossers & Cnossen" (FLEXIBEL)
-    log.info("🔍 Zoek klant 'Bossers & Cnossen' met flexibele matching...")
+    # Stap 2: Vind de juiste Client ID voor "Bossers & Cnossen" (ULTRA-FLEXIBEL)
+    log.info("🔍 Zoek klant 'Bossers & Cnossen' met geavanceerde matching...")
     bossers_client = None
-    bossers_keywords = ["bossers", "cnossen", "b&c"]
+    bossers_keywords = ["bossers", "cnossen", "b", "c"]
+    
+    # Log alle potentiële matches voor debugging
+    potential_matches = []
     
     for c in clients:
-        client_name = str(c.get("name", "")).lower().strip()
-        # Verwijder ongewenste tekens voor matching
-        clean_name = client_name.replace("&", "en").replace("amp;", "").replace(".", "").replace("-", " ")
+        original_name = c.get("name", "Onbekend")
+        normalized_name = normalize_name(original_name)
         
         # Controleer of alle sleutelwoorden aanwezig zijn
-        if all(keyword in clean_name for keyword in ["bossers", "cnossen"]):
-            bossers_client = c
-            log.info(f"✅ GEVONDEN: Klant '{client_name}' gematcht als Bossers & Cnossen (ID: {c['id']})")
-            break
+        has_all_keywords = all(
+            keyword in normalized_name 
+            for keyword in ["bossers", "cnossen"]
+        )
+        
+        # Controleer of minimaal 2 sleutelwoorden aanwezig zijn (fallback)
+        keyword_count = sum(
+            1 for keyword in bossers_keywords 
+            if keyword in normalized_name
+        )
+        
+        # Log alle matches voor debugging
+        if has_all_keywords or keyword_count >= 2:
+            match_type = "✅ Exact match" if has_all_keywords else "⚠️ Partial match"
+            log.info(f"{match_type}: '{original_name}' → Normalized: '{normalized_name}'")
+            potential_matches.append({
+                "id": c["id"],
+                "original_name": original_name,
+                "normalized_name": normalized_name,
+                "match_type": "exact" if has_all_keywords else "partial"
+            })
+            
+            if not bossers_client and has_all_keywords:
+                bossers_client = c
     
+    # Als we geen exacte match vonden, gebruik dan de beste partial match
+    if not bossers_client and potential_matches:
+        bossers_client = next((c for c in clients if c["id"] == potential_matches[0]["id"]), None)
+        if bossers_client:
+            log.warning(f"⚠️ Gebruik PARTIËLE MATCH voor klant: {bossers_client['name']}")
+
     if not bossers_client:
         log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
-        # Toon mogelijke matches voor debugging
-        log.info("🔍 Mogelijke klantnamen in Halo (bevat 'bossers' of 'cnossen'):")
-        for c in clients:
-            client_name = str(c.get("name", "")).lower().strip()
-            if "bossers" in clientdelayed_name or "cnossen" in client_name or "b&c" in client_name:
-                log.info(f" - '{c.get('name', 'Onbekend')}' (ID: {c.get('id')})")
+        # Toon alle potentiële matches voor debugging
+        if potential_matches:
+            log.info("🔍 Potentiële klantnamen gevonden:")
+            for match in potential_matches:
+                log.info(f" - ID {match['id']}: '{match['original_name']}' (Normalized: '{match['normalized_name']}')")
+        else:
+            log.info("🔍 Geen potentiële klantnamen gevonden met 'bossers' of 'cnossen'")
         return []
     
     client_id = int(bossers_client["id"])
-    log.info(f"✅ Gebruik klant-ID: {client_id} (Bossers & Cnossen)")
+    log.info(f"✅ Gebruik klant-ID: {client_id} (Naam: '{bossers_client['name']}')")
 
     # Stap 3: Vind de juiste Site ID voor "Main" (FLEXIBEL)
     log.info("🔍 Zoek locatie 'Main' met flexibele matching...")
     main_site = None
-    main_keywords = ["main", "hoofd", "head"]
     
     for s in sites:
         site_name = str(s.get("name", "")).lower().strip()
-        # Verwijder ongewenste tekens voor matching
-        clean_name = site_name.replace("&", "en").replace("amp;", "").replace(".", "").replace("-", " ")
+        normalized_site = normalize_name(site_name)
         
-        if any(keyword in clean_name for keyword in main_keywords):
+        if "main" in normalized_site or "hoofd" in normalized_site:
             main_site = s
             log.info(f"✅ GEVONDEN: Locatie '{site_name}' gematcht als Main (ID: {s['id']})")
             break
@@ -215,12 +271,12 @@ def get_main_users():
         log.info("🔍 Mogelijke locatienamen in Halo (bevat 'main'):")
         for s in sites:
             site_name = str(s.get("name", "")).lower().strip()
-            if "main" in site_name:
+            if "main" in site_name or "hoofd" in site_name:
                 log.info(f" - '{s.get('name', 'Onbekend')}' (ID: {s.get('id')})")
         return []
     
     site_id = int(main_site["id"])
-    log.info(f"✅ Gebruik locatie-ID: {site_id} (Main)")
+    log.info(f"✅ Gebruik locatie-ID: {site_id} (Naam: '{main_site['name']}')")
 
     # Stap 4: Filter gebruikers die aan Main-site gekoppeld zijn
     log.info("🔍 Filter Main-site gebruikers...")
@@ -273,7 +329,7 @@ def health_check():
 
 @app.route("/users", methods=["GET"])
 def get_users():
-    """Eindpunt voor jouw applicatie - MET UITGEBREIDE DEBUGGING"""
+    """Eindpunt voor jouw applicatie - MET ULTRA-DETAILRIJKE DEBUGGING"""
     try:
         log.info("🔄 /users endpoint aangeroepen - start verwerking")
         main_users = get_main_users()
@@ -283,11 +339,11 @@ def get_users():
             return jsonify({
                 "error": "Geen Main-site gebruikers gevonden",
                 "solution": [
-                    "1. Controleer of de klantnaam 'Bossers & Cnossen' correct is gespeld in Halo",
-                    "2. Controleer of de locatienaam 'Main' bestaat in Halo",
-                    "3. Bezoek /debug voor technische details"
+                    "1. Controleer de /debug output voor mogelijke klantnamen",
+                    "2. Zorg dat de klant 'Bossers & Cnossen' bestaat in Halo UAT",
+                    "3. Controleer de Render logs voor match-details"
                 ],
-                "debug_hint": "Soms zit er een verborgen '&' in de naam (B.V. vs B&V)"
+                "debug_hint": "Deze integratie probeert automatisch alle varianten van 'Bossers & Cnossen' te matchen"
             }), 500
         
         log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
@@ -308,7 +364,7 @@ def get_users():
 
 @app.route("/debug", methods=["GET"])
 def debug_info():
-    """Technische debug informatie - MET VERBETERDE LOGGING"""
+    """Technische debug informatie - MET ULTRA-DETAILRIJKE LOGGING"""
     try:
         log.info("🔍 /debug endpoint aangeroepen - haal klanten en locaties op")
         clients = fetch_all_clients()
@@ -317,6 +373,17 @@ def debug_info():
         # Toon eerste 3 klanten en locaties voor debugging
         sample_clients = [{"id": c["id"], "name": c["name"]} for c in clients[:3]]
         sample_sites = [{"id": s["id"], "name": s["name"]} for s in sites[:3]]
+        
+        # Zoek naar potentiële Bossers & Cnossen varianten
+        bossers_variants = []
+        for c in clients:
+            normalized = normalize_name(c.get("name", ""))
+            if "bossers" in normalized or "cnossen" in normalized or "b" in normalized or "c" in normalized:
+                bossers_variants.append({
+                    "id": c["id"],
+                    "original_name": c["name"],
+                    "normalized_name": normalized
+                })
         
         log.info("✅ /debug data verzameld - controleer op Bossers & Main")
         return jsonify({
@@ -328,12 +395,13 @@ def debug_info():
                 "example_sites": sample_sites,
                 "note": "Controleer of 'Bossers & Cnossen' en 'Main' in deze lijsten staan"
             },
+            "bossers_variants_found": bossers_variants,
             "troubleshooting": [
-                "1. Klantnaam moet 'Bossers' en 'Cnossen' bevatten (geen exacte match nodig)",
-                "2. Locatienaam moet 'Main' bevatten (hoofdletterongevoelig)",
+                "1. Klantnaam kan variëren: 'Bossers & Cnossen', 'B&C', 'Bossers en Cnossen'",
+                "2. Gebruik de /debug output om de EXACTE spelling te zien",
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang"
             ],
-            "hint": "Gebruik /debug om de exacte spelling van jouw klant- en locatienamen te zien"
+            "hint": "Deze integratie normaliseert namen automatisch voor betere matching"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -351,12 +419,11 @@ if __name__ == "__main__":
     log.info("🚀 HALO CUSTOM INTEGRATION API - VOLLEDIG ZELFSTANDIG")
     log.info("-"*70)
     log.info("✅ Werkt ZONDER 'include' parameter (omzeilt Halo UAT bugs)")
-    log.info("✅ Gebruikt flexibele matching voor klant- en locatienamen")
-    log.info("✅ Automatische detectie van Client/Site ID's")
+    log.info("✅ Gebruikt ULTRA-FLEXIBELE matching voor klantnamen")
+    log.info("✅ Normaliseert namen automatisch voor betere matching")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE 3 STAPPEN:")
-    log.info("1. Zorg dat .env correct is ingesteld (HALO_CLIENT_ID/HALO_CLIENT_SECRET)")
-    log.info("2. Deploy naar Render.com met gunicorn")
-    log.info("3. Bezoek EERST /debug om te valideren")
+    log.info("👉 VOLG DEZE 2 STAPPEN:")
+    log.info("1. Herdeploy deze code naar Render")
+    log.info("2. Bezoek EERST /debug om te zien welke klantnamen worden gevonden")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port)
