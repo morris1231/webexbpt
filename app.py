@@ -233,7 +233,6 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     }
     
     # ✅ GEBRUIKER KOPPELEN MET USERID
-    if requester主席
     if requester_id:
         body["UserID"] = int(requester_id)
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
