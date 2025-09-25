@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("halo-custom-integration")
 app = Flask(__name__)
-load_dotenv()  # CORRECTE SPELLING - GEEN TYPO
+load_dotenv()  # CORRECTE SPELLING
 
 # Halo API credentials (UIT .env)
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
@@ -209,7 +209,7 @@ def normalize_name(name, organisation_name=None):
     # Stap 4: Schoonmaak spaties
     full_name = re.sub(r'\s+', ' ', full_name).strip()
     
-    return full__name
+    return full_name  # 🔑 GECORRIGEERD: full_name in plaats van full__name
 
 def get_main_users():
     """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN"""
