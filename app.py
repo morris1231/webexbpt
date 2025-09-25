@@ -142,10 +142,28 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
                 break
             data = r.json()
             log.debug(f"⬅️ API response ontvangen: {len(data.get('users', []))} gebruikers gevonden")
-            users = data.get("users", [])
+            
+            # ✅ CRUCIALE FIX: Handel meerdere response structuren af
+            users = []
+            if 'users' in data:
+                users = data['users']
+            elif isinstance(data, list):
+                users = data
+            elif 'Items' in data:
+                users = data['Items']
+            else:
+                users = data
+            
             if not users:
                 log.info(f"✅ Geen gebruikers gevonden op pagina {page} - einde bereikt")
                 break
+            
+            # ✅ CRUCIALE FIX: Log de werkelijke waarden voor debugging
+            for user in users:
+                client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
+                site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
+                log.debug(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {user.get('EmailAddress', 'N/A')}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+            
             all_users.extend(users)
             log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
             if len(users) < page_size:
@@ -172,15 +190,36 @@ def get_main_users():
     users = fetch_all_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     duration = time.time() - start_time
     log.info(f"⏱️  Gebruikers opgehaald in {duration:.2f} seconden")
-    # Filter op juiste klant en locatie
+    
+    # ✅ CRUCIALE FIX: Verbeterde validatie van gebruikers
     valid_users = []
     client_id_norm = normalize_id(HALO_CLIENT_ID_NUM)
     site_id_norm = normalize_id(HALO_SITE_ID)
+    
     for user in users:
-        user_client_id = normalize_id(user.get("client_id"))
-        user_site_id = normalize_id(user.get("site_id"))
+        # ✅ Verbeterde ID ophaling met meerdere mogelijke veldnamen
+        user_client_id = normalize_id(
+            user.get("client_id") or 
+            user.get("ClientID") or 
+            user.get("clientid") or 
+            user.get("Client_id")
+        )
+        
+        user_site_id = normalize_id(
+            user.get("site_id") or 
+            user.get("SiteID") or 
+            user.get("siteid") or 
+            user.get("Site_id")
+        )
+        
+        # ✅ Verbeterde logging voor debugging
+        log.debug(f"🔍 Valideren gebruiker: ID={user.get('id', 'N/A')}, Email={user.get('EmailAddress', 'N/A')}, ClientID={user_client_id}, SiteID={user_site_id}")
+        
         if user_client_id == client_id_norm and user_site_id == site_id_norm:
             valid_users.append(user)
+        else:
+            log.debug(f"❌ Gebruiker niet gevalideerd - ClientID: {user_client_id} (verwacht: {client_id_norm}), SiteID: {user_site_id} (verwacht: {site_id_norm})")
+    
     USER_CACHE["users"] = valid_users
     USER_CACHE["timestamp"] = time.time()
     log.info(f"✅ {len(valid_users)} GEVALIDEERDE Main users gecached (van {len(users)} API-responses)")
@@ -193,19 +232,25 @@ def get_halo_user_id(email: str):
     email = email.strip().lower()
     log.debug(f"🔍 Zoeken naar gebruiker met email: {email}")
     main_users = get_main_users()
+    
     for u in main_users:
+        # ✅ Verbeterde email matching met meerdere mogelijke veldnamen
         email_fields = [
-            str(u.get("EmailAddress") or "").lower(),
-            str(u.get("emailaddress") or "").lower(),
-            str(u.get("PrimaryEmail") or "").lower(),
-            str(u.get("username") or "").lower(),
-            str(u.get("LoginName") or "").lower(),
-            str(u.get("networklogin") or "").lower(),
-            str(u.get("adobject") or "").lower()
+            str(u.get("EmailAddress") or u.get("emailaddress") or "").lower(),
+            str(u.get("PrimaryEmail") or u.get("primaryemail") or "").lower(),
+            str(u.get("username") or u.get("Username") or "").lower(),
+            str(u.get("LoginName") or u.get("loginname") or "").lower(),
+            str(u.get("networklogin") or u.get("NetworkLogin") or "").lower(),
+            str(u.get("adobject") or u.get("ADObject") or "").lower()
         ]
+        
+        # ✅ Verbeterde logging
+        log.debug(f"📧 Controleren gebruiker: ID={u.get('id', 'N/A')}, Email={email_fields}, Zoekterm={email}")
+        
         if email in [e for e in email_fields if e]:
             log.info(f"✅ Email match gevonden: {email} → Gebruiker ID={u.get('id')}")
             return u.get("id")
+    
     log.warning(f"⚠️ Geen gebruiker gevonden voor email: {email}")
     return None
 log.info("✅ Gebruikers cache functies geregistreerd")
@@ -240,13 +285,12 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         log.warning("⚠️ Geen gebruiker gevonden in Halo voor het opgegeven e-mailadres")
     
     try:
-        # ✅ CRUCIALE FIX: Wrap ticket in array voor Halo API
-        request_body = [body]
-        log.debug(f"➡️ Halo API aanroep voor basis ticket: {request_body}")
+        # ✅ CRUCIALE FIX: Geen array wrap meer - Halo accepteert gewoon een object
+        log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")
         r = requests.post(
             f"{HALO_API_BASE}/Tickets",
             headers=h,
-            json=request_body,
+            json=body,
             timeout=15
         )
         
@@ -258,19 +302,14 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             
         log.info("✅ Basis ticket succesvol aangemaakt")
         
-        # ✅ FIX: Verwerk array response
-        response_data = r.json()
-        if isinstance(response_data, list) and len(response_data) > 0:
-            ticket = response_data[0]  # Eerste ticket uit de array
-            ticket_id = ticket.get("ID") or ticket.get("id")
-            if ticket_id:
-                log.info(f"🎫 Ticket ID: {ticket_id}")
-            else:
-                log.error("❌ Ticket ID niet gevonden in antwoord")
-                return None
-        else:
-            log.error("❌ Ongeldig antwoord van Halo API - geen ticket ontvangen")
+        # ✅ FIX: Direct object response verwerken
+        ticket = r.json()
+        ticket_id = ticket.get("ID") or ticket.get("id")
+        if not ticket_id:
+            log.error("❌ Ticket ID niet gevonden in antwoord")
             return None
+            
+        log.info(f"🎫 Ticket ID: {ticket_id}")
         
         # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
         log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
