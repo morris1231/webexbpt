@@ -27,7 +27,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
     sys.exit(1)
 # ------------------------------------------------------------------------------
-# Custom Integration Core - ULTRA-ROBUST VOOR JOUW HALO CONFIG
+# Custom Integration Core - PRECIEZE FILTERING VOOR JOUW HALO
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -82,14 +82,14 @@ def get_site_by_id(site_id):
         return None
 
 def fetch_all_users():
-    """Haal ALLE gebruikers op met ULTRA-ROBUSTE STRUCTUUR INSPECTIE"""
+    """Haal ALLE gebruikers op met VOLLEDIGE STRUCTUUR INSPECTIE"""
     token = get_halo_token()
     users = []
     page = 1
     
     while True:
         try:
-            # 🔑 BELANGRIJK: Haal ALLE gebruikers op zonder filters (Halo heeft rare API)
+            # 🔑 BELANGRIJK: Haal ALLE gebruikers op zonder filters
             response = requests.get(
                 f"{HALO_API_BASE}/Users",
                 params={
@@ -118,8 +118,6 @@ def fetch_all_users():
                 log.info(f" - Site ID: {first_user.get('site_id', 'Onbekend')}")
                 log.info(f" - Client Object: {first_user.get('client', 'Onbekend')}")
                 log.info(f" - Site Object: {first_user.get('site', 'Onbekend')}")
-                log.info(f" - Is Agent: {first_user.get('is_agent', 'Onbekend')}")
-                log.info(f" - User Type: {first_user.get('user_type', 'Onbekend')}")
             
             # Filter op unieke gebruikers
             new_users = []
@@ -133,6 +131,11 @@ def fetch_all_users():
             
             users.extend(new_users)
             log.info(f"✅ Pagina {page} gebruikers: {len(new_users)} toegevoegd (totaal: {len(users)})")
+            
+            # Stop paginering als we 50 gebruikers hebben en geen nieuwe worden gevonden
+            if len(new_users) < 50:
+                break
+                
             page += 1
             
         except Exception as e:
@@ -150,6 +153,12 @@ def get_users_by_site_id(site_id, client_id):
     
     # Stap 2: ULTRA-ROBUSTE FILTERING OP SITE EN KLANT
     site_users = []
+    mismatch_reasons = {
+        "no_client": 0,
+        "client_mismatch": 0,
+        "no_site": 0,
+        "site_mismatch": 0
+    }
     
     for user in all_users:
         try:
@@ -165,7 +174,7 @@ def get_users_by_site_id(site_id, client_id):
                     if int(float(user_site_id)) == int(float(site_id)):
                         site_match = True
                 except (TypeError, ValueError):
-                    pass
+                    mismatch_reasons["site_mismatch"] += 1
             
             # Mogelijkheid 2: Site object
             elif "site" in user and isinstance(user["site"], dict):
@@ -173,14 +182,12 @@ def get_users_by_site_id(site_id, client_id):
                     site_id_from_object = user["site"].get("id")
                     if site_id_from_object and int(float(site_id_from_object)) == int(float(site_id)):
                         site_match = True
+                        user_sitein
                         user_site_id = site_id_from_object
                 except (TypeError, ValueError):
-                    pass
-            
-            # Mogelijkheid 3: Site name (als laatste redmiddel)
-            elif "site_name" in user and "main" in str(user["site_name"]).lower():
-                site_match = True
-                user_site_id = "via site_name"
+                    mismatch_reasons["site_mismatch"] += 1
+            else:
+                mismatch_reasons["no_site"] += 1
             
             # === ULTRA-ROBUSTE KLANT ID CONTROLE ===
             client_match = False
@@ -194,7 +201,7 @@ def get_users_by_site_id(site_id, client_id):
                     if int(float(user_client_id)) == int(float(client_id)):
                         client_match = True
                 except (TypeError, ValueError):
-                    pass
+                    mismatch_reasons["client_mismatch"] += 1
             
             # Mogelijkheid 2: Client object
             elif "client" in user and isinstance(user["client"], dict):
@@ -204,12 +211,9 @@ def get_users_by_site_id(site_id, client_id):
                         client_match = True
                         user_client_id = client_id_from_object
                 except (TypeError, ValueError):
-                    pass
-            
-            # Mogelijkheid 3: Client name (als laatste redmiddel)
-            elif "client_name" in user and "bossers" in str(user["client_name"]).lower():
-                client_match = True
-                user_client_id = "via client_name"
+                    mismatch_reasons["client_mismatch"] += 1
+            else:
+                mismatch_reasons["no_client"] += 1
             
             # === BEPAAL OF DE GEBRUIKER MOET WORDEN TOEGEVOEGD ===
             if site_match and client_match:
@@ -227,21 +231,31 @@ def get_users_by_site_id(site_id, client_id):
                 })
                 log.debug(f"✅ Gebruiker '{user['name']}' toegevoegd (Site: {user_site_id}, Klant: {user_client_id})")
             else:
-                log.debug(f"❌ Gebruiker '{user.get('name', 'Onbekend')}' overgeslagen")
+                reason = []
                 if not site_match:
-                    log.debug(f"  ⚠️ Site koppeling ontbreekt (gezocht: {site_id})")
+                    reason.append("site mismatch")
                 if not client_match:
-                    log.debug(f"  ⚠️ Klant koppeling ontbreekt (gezocht: {client_id})")
+                    reason.append("client mismatch")
+                log.debug(f"❌ Gebruiker '{user.get('name', 'Onbekend')}' overgeslagen - Reden: {', '.join(reason)}")
         
         except (TypeError, ValueError, KeyError) as e:
             log.debug(f"⚠️ Gebruiker overslaan bij filtering: {str(e)}")
             continue
     
+    # Log mismatch statistieken
+    log.info("📊 Mismatch statistieken:")
+    log.info(f"  • Geen client koppeling: {mismatch_reasons['no_client']}")
+    log.info(f"  • Client mismatch: {mismatch_reasons['client_mismatch']}")
+    log.info(f"  • Geen site koppeling: {mismatch_reasons['no_site']}")
+    log.info(f"  • Site mismatch: {mismatch_reasons['site_mismatch']}")
+    
     log.info(f"✅ {len(site_users)}/{len(all_users)} gebruikers gevonden voor locatie {site_id}")
+    
     # Extra debug log als we geen gebruikers vinden
     if not site_users:
         log.error("❌ Geen gebruikers gevonden voor de locatie")
         log.info("🔍 Controleer koppelingen tussen gebruikers en locaties...")
+        
         # Toon voorbeeldgebruikers voor debugging
         for i, user in enumerate(all_users[:5]):
             site_id_debug = user.get("site_id", "Onbekend")
@@ -418,7 +432,7 @@ if __name__ == "__main__":
     log.info("✅ HAALT SITE EN KLANT GEGEVENS MEE VIA 'include=site,client'")
     log.info("✅ ULTRA-ROBUSTE FILTERING VOOR SITE_ID EN KLANT_ID")
     log.info("✅ CONVERTEERT ALLE ID'S NAAR INTEGER VOOR VEILIGE VERGELIJKING")
-    log.info("✅ LOGT VOLLEDIGE GEBRUIKERSTRUCTUUR VOOR DEBUGGING")
+    log.info("✅ LOGT VOLLEDIGE GEBRUIKERSTRUCTUUR EN MISMATCH STATISTIEKEN")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
