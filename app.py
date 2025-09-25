@@ -238,21 +238,21 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
     
-    # ✅ CORRECTE STRUCTUUR VOOR UAT - GEBRUIK GENESTE OBJECTEN
+    # ✅ CORRECTE STRUCTUUR VOOR UAT - DIRECTE INTEGER WAARDEN
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
-        "TypeID": {"ID": int(HALO_TICKET_TYPE_ID)},  # ✅ Genest object
-        "Client": {"ID": int(HALO_CLIENT_ID_NUM)},   # ✅ Genest object
-        "Site": {"ID": int(HALO_SITE_ID)},          # ✅ Genest object
-        "Team": {"ID": int(HALO_TEAM_ID)},          # ✅ Genest object
-        "Impact": {"ID": int(impact_id)},           # ✅ Genest object
-        "Urgency": {"ID": int(urgency_id)}         # ✅ Genest object
+        "TypeID": int(HALO_TICKET_TYPE_ID),  # ✅ Directe integer
+        "ClientID": int(HALO_CLIENT_ID_NUM),  # ✅ Directe integer
+        "SiteID": int(HALO_SITE_ID),         # ✅ Directe integer
+        "TeamID": int(HALO_TEAM_ID),         # ✅ Directe integer
+        "ImpactID": int(impact_id),          # ✅ Directe integer
+        "UrgencyID": int(urgency_id)         # ✅ Directe integer
     }
     
-    # ✅ CORRECTE GEBRUIKER KOPPELING VOOR UAT
+    # ✅ GEBRUIKER KOPPELEN MET USERID (GEEN REQUESTER OBJECT)
     if requester_id:
-        body["UserID"] = int(requester_id)  # Dit werkt WEL in UAT
+        body["UserID"] = int(requester_id)
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
     else:
         log.warning("⚠️ Geen gebruiker gevonden - ticket zonder UserID")
@@ -536,7 +536,7 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ FIX VOOR UAT: GEBRUIK GENESTE OBJECTEN IN API AANROEP")
+    log.info("✅ FIX VOOR UAT: GEBRUIK DIRECTE INTEGER WAARDEN VOOR ALLE ID'S")
     log.info("✅ PROBLEEMOMSCHRIJVING ALLEEN IN DETAILS, REST IN PUBLIC NOTE")
     log.info("-"*70)
     
