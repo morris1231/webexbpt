@@ -162,17 +162,17 @@ def fetch_all_users():
     return users
 
 def get_users_by_site_id(site_id):
-    """Haal gebruikers op voor specifieke locatie met ULTRA-ROBUSTE EXTRACTIE"""
+    """Haal gebruikers op voor specifieke locatie met FLOATING POINT FIX"""
     log.info(f"🔍 Haal ALLE gebruikers op om te filteren op locatie {site_id}")
     
     # Stap 1: Haal alle gebruikers op
     all_users = fetch_all_users()
     
-    # Stap 2: Filter op de juiste locatie met ULTRA-ROBUSTE EXTRACTIE
+    # Stap 2: Filter op de juiste locatie met FLOATING POINT FIX
     site_users = []
     for user in all_users:
         try:
-            # Controleer site koppeling met ULTRA-ROBUSTE extractie
+            # Controleer site koppeling met FLOATING POINT FIX
             user_site_id = None
             
             # Mogelijkheid 1: Directe site_id
@@ -195,19 +195,28 @@ def get_users_by_site_id(site_id):
                 # Gebruiker is gekoppeld aan klant, niet direct aan locatie
                 pass
             
-            # ULTRA-VEILIGE vergelijking (zowel string als int)
+            # 🔑 CRUCIALE FIX: Converteer naar integer om floating point problemen op te lossen
             if user_site_id is not None:
-                if str(user_site_id).strip() == str(site_id).strip():
-                    site_users.append({
-                        "id": user["id"],
-                        "name": user["name"],
-                        "email": user.get("emailaddress") or user.get("email") or "Geen email",
-                        "debug": {
-                            "raw_site_id": user_site_id,
-                            "expected_site_id": site_id,
-                            "source": "site_id" if "site_id" in user else "site_object"
-                        }
-                    })
+                try:
+                    # Converteer naar float en dan naar int om .0 te verwijderen
+                    user_site_id_int = int(float(user_site_id))
+                    expected_site_id_int = int(float(site_id))
+                    
+                    if user_site_id_int == expected_site_id_int:
+                        site_users.append({
+                            "id": user["id"],
+                            "name": user["name"],
+                            "email": user.get("emailaddress") or user.get("email") or "Geen email",
+                            "debug": {
+                                "raw_site_id": user_site_id,
+                                "expected_site_id": site_id,
+                                "converted_site_id": user_site_id_int,
+                                "source": "site_id" if "site_id" in user else "site_object"
+                            }
+                        })
+                except (ValueError, TypeError) as e:
+                    log.debug(f"⚠️ Kan site_id niet converteren: {str(e)}")
+                    continue
         except (TypeError, ValueError, KeyError) as e:
             log.debug(f"⚠️ Gebruiker overslaan bij filtering: {str(e)}")
             continue
@@ -226,9 +235,15 @@ def get_users_by_site_id(site_id):
             
             site_id_extracted = None
             if "site_id" in user:
-                site_id_extracted = user["site_id"]
+                try:
+                    site_id_extracted = int(float(user["site_id"]))
+                except (ValueError, TypeError):
+                    site_id_extracted = "Niet-converteerbaar"
             elif "site" in user and isinstance(user["site"], dict):
-                site_id_extracted = user["site"].get("id")
+                try:
+                    site_id_extracted = int(float(user["site"].get("id", "Onbekend")))
+                except (ValueError, TypeError):
+                    site_id_extracted = "Niet-converteerbaar"
             
             log.info(f" - Voorbeeldgebruiker {i+1}: '{user.get('name', 'Onbekend')}'")
             log.info(f"   • Site ID (direct): {site_id_debug}")
@@ -329,7 +344,7 @@ def get_users():
 
 @app.route("/debug", methods=["GET"])
 def debug_info():
-    """Technische debug informatie - MET VOLLEDIGE USER STRUCTUUR INSPECTIE"""
+    """Technische debug informatie - MET FLOATING POINT FIX"""
     try:
         log.info("🔍 /debug endpoint aangeroepen - valideer hardcoded ID's")
         
@@ -372,7 +387,7 @@ def debug_info():
                 "5. Gebruikers moeten zowel aan de klant ALS aan de locatie zijn gekoppeld",
                 "6. BELANGRIJK: Controleer de Render logs voor 'STRUCTUUR VAN EERSTE GEBRUIKER'"
             ],
-            "hint": "Deze integratie logt nu de VOLLEDIGE STRUCTUUR van de eerste gebruiker - controleer de Render logs"
+            "hint": "Deze integratie gebruikt een FLOATING POINT FIX voor site_id vergelijking - controleer de Render logs"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -392,8 +407,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt HARDCODED KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt HARDCODED SITE ID: {MAIN_SITE_ID} (Main)")
     log.info("✅ HAALT SITE GEGEVENS MEE VIA 'include=site'")
-    log.info("✅ INSPECEERT VOLLEDIGE GEBRUIKER STRUCTUUR VOOR DEBUGGING")
-    log.info("✅ CONTROLEERT OP ZOWEL DIRECTE SITE_ID ALS SITE OBJECT")
+    log.info("✅ FIX VOOR FLOATING POINT SITE_ID WAARDEN (bijv. 992.0)")
+    log.info("✅ CONVERTEERT SITE_ID WAARDEN NAAR INTEGER VOOR VERGELIJKING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
