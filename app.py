@@ -162,7 +162,8 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
             for user in users:
                 client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
                 site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
-                log.debug(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {user.get('EmailAddress', 'N/A')}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+                email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
+                log.debug(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
             
             all_users.extend(users)
             log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
@@ -218,7 +219,7 @@ def get_main_users():
         if user_client_id == client_id_norm and user_site_id == site_id_norm:
             valid_users.append(user)
         else:
-            log.debug(f"❌ Gebruiker niet gevalideerd - ClientID: {user_client_id} (verwacht: {client_id_norm}), SiteID: {user_site_id} (verwacht: {site_id_norm})")
+            log.warning(f"❌ Gebruiker niet gevalideerd - ClientID: {user_client_id} (verwacht: {client_id_norm}), SiteID: {user_site_id} (verwacht: {site_id_norm})")
     
     USER_CACHE["users"] = valid_users
     USER_CACHE["timestamp"] = time.time()
@@ -285,12 +286,13 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         log.warning("⚠️ Geen gebruiker gevonden in Halo voor het opgegeven e-mailadres")
     
     try:
-        # ✅ CRUCIALE FIX: Geen array wrap meer - Halo accepteert gewoon een object
-        log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")
+        # ✅ CRUCIALE FIX: Wrap ticket in array voor Halo API
+        request_body = [body]
+        log.debug(f"➡️ Halo API aanroep voor basis ticket: {request_body}")
         r = requests.post(
             f"{HALO_API_BASE}/Tickets",
             headers=h,
-            json=body,
+            json=request_body,
             timeout=15
         )
         
@@ -302,14 +304,19 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             
         log.info("✅ Basis ticket succesvol aangemaakt")
         
-        # ✅ FIX: Direct object response verwerken
-        ticket = r.json()
-        ticket_id = ticket.get("ID") or ticket.get("id")
-        if not ticket_id:
-            log.error("❌ Ticket ID niet gevonden in antwoord")
+        # ✅ FIX: Verwerk array response
+        response_data = r.json()
+        if isinstance(response_data, list) and len(response_data) > 0:
+            ticket = response_data[0]  # Eerste ticket uit de array
+            ticket_id = ticket.get("ID") or ticket.get("id")
+            if ticket_id:
+                log.info(f"🎫 Ticket ID: {ticket_id}")
+            else:
+                log.error("❌ Ticket ID niet gevonden in antwoord")
+                return None
+        else:
+            log.error("❌ Ongeldig antwoord van Halo API - geen ticket ontvangen")
             return None
-            
-        log.info(f"🎫 Ticket ID: {ticket_id}")
         
         # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
         log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
