@@ -234,8 +234,6 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     
     # ✅ GEBRUIKER KOPPELEN MET CONTACTID (NIET USERID)
     if contact_id:
-        body["ContactID"] = int(contact主席
-    if contact_id:
         body["ContactID"] = int(contact_id)
         log.info(f"👤 Ticket gekoppeld aan contact ID: {contact_id}")
     else:
