@@ -30,7 +30,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - ULTRA-ROBUST VOOR JOUW SPECIFIEKE UAT
+# Custom Integration Core - VOLLEDIG GEFIXT VOOR JOUW UAT
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -55,17 +55,20 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten op met ULTRA-ROBUSTE organisatie-extractie"""
+    """Haal ALLE klanten op met VOLLEDIGE PAGINERING en ORGANISATIE-EXTRACTIE"""
     token = get_halo_token()
     clients = []
     page = 1
+    total_fetched = 0
+    
     while True:
         try:
+            # 🔑 BELANGRIJK: Gebruik pageSize=50 (niet 100) want UAT geeft max 50 terug
             response = requests.get(
                 f"{HALO_API_BASE}/Client",
                 params={
                     "page": page,
-                    "pageSize": 100,
+                    "pageSize": 50,  # CORRECTIE: UAT ondersteunt max 50 per pagina
                     "includeorganisations": "true",
                     "active": "true"
                 },
@@ -74,116 +77,142 @@ def fetch_all_clients():
             )
             response.raise_for_status()
             data = response.json()
+            
+            # Log de RAW API response voor debugging
+            log.debug(f"🔍 RAW API response voor pagina {page}: {data.keys()}")
+            
             clients_page = data.get("clients", [])
             
-            # 🔑 ULTRA-ROBUSTE extractie van organisatiegegevens
-            for client in clients_page:
-                # Mogelijke velden waar organisatiegegevens kunnen zitten
-                possible_org_fields = [
-                    "organisations", "organisation", 
-                    "Organisations", "Organisation",
-                    "organisation_name", "organization_name",
-                    "OrgName", "org_name"
-                ]
+            if not clients_page:
+                log.info(f"⏹️ Geen klanten meer gevonden op pagina {page}")
+                break
                 
+            # 🔑 ULTRA-ROBUSTE extractie van organisatiegegevens specifiek voor jouw UAT
+            for client in clients_page:
+                # In jouw specifieke UAT zit de organisatie in een array onder "Organisations"
+                # en de naam zit in een veld "Name" (met hoofdletter)
                 organisation_name = ""
                 
-                # Probeer alle mogelijke velden
-                for field in possible_org_fields:
-                    if field in client:
-                        org_data = client[field]
-                        
-                        # Als het een string is, gebruik direct
-                        if isinstance(org_data, str) and org_data.strip() != "None":
-                            organisation_name = org_data
-                            break
-                            
-                        # Als het een array is, neem de eerste entry
-                        elif isinstance(org_data, list) and len(org_data) > 0:
-                            first_entry = org_data[0]
-                            if isinstance(first_entry, dict) and "name" in first_entry:
-                                organisation_name = first_entry["name"]
-                            elif isinstance(first_entry, str):
-                                organisation_name = first_entry
-                            break
-                            
-                        # Als het een dict is
-                        elif isinstance(org_data, dict) and "name" in org_data:
-                            organisation_name = org_data["name"]
-                            break
+                # Specifiek voor jouw UAT: Check op "Organisations" (met hoofdletter) en "Name"
+                if "Organisations" in client and isinstance(client["Organisations"], list) and len(client["Organisations"]) > 0:
+                    first_org = client["Organisations"][0]
+                    if isinstance(first_org, dict) and "Name" in first_org:
+                        organisation_name = first_org["Name"]
                 
                 # Sla de organisatie naam op voor later gebruik
                 client["organisation_name"] = organisation_name
+                
+                # Log de specifieke client data voor debugging
+                log.debug(f"🔍 Client gevonden: ID={client.get('id', 'Onbekend')} | Naam='{client.get('name', 'Onbekend')}' | Org='{organisation_name}'")
             
-            if not clients_page:
+            clients.extend(clients_page)
+            total_fetched += len(clients_page)
+            
+            log.info(f"✅ Pagina {page} klanten: {len(clients_page)} toegevoegd (totaal: {total_fetched})")
+            
+            # 🔑 BELANGRIJK: Blijf pagineren totdat er geen resultaten meer zijn
+            # (niet afhankelijk van pageSize omdat UAT max 50 teruggeeft)
+            if len(clients_page) < 50:
                 break
                 
-            clients.extend(clients_page)
-            log.info(f"✅ Pagina {page} klanten: {len(clients_page)} toegevoegd (totaal: {len(clients)})")
-            if len(clients_page) < 100:
-                break
             page += 1
+            # Beveiliging tegen oneindige loops
+            if page > 100:
+                log.warning("⚠️ Te veel paginas - stoppen met pagineren")
+                break
+                
         except Exception as e:
             log.error(f"❌ Fout bij ophalen klanten: {str(e)}")
             break
+            
     log.info(f"🎉 Totaal {len(clients)} klanten opgehaald (inclusief organisatiegegevens)")
     return clients
 
 def fetch_all_sites():
-    """Haal ALLE locaties op"""
+    """Haal ALLE locaties op met VOLLEDIGE PAGINERING"""
     token = get_halo_token()
     sites = []
     page = 1
+    total_fetched = 0
+    
     while True:
         try:
             response = requests.get(
                 f"{HALO_API_BASE}/Site",
-                params={"page": page, "pageSize": 100},
+                params={
+                    "page": page,
+                    "pageSize": 50,  # CORRECTIE: UAT ondersteunt max 50 per pagina
+                    "active": "true"
+                },
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30
             )
             response.raise_for_status()
             data = response.json()
             sites_page = data.get("sites", [])
+            
             if not sites_page:
                 break
+                
             sites.extend(sites_page)
-            log.info(f"✅ Pagina {page} locaties: {len(sites_page)} toegevoegd (totaal: {len(sites)})")
-            if len(sites_page) < 100:
+            total_fetched += len(sites_page)
+            
+            log.info(f"✅ Pagina {page} locaties: {len(sites_page)} toegevoegd (totaal: {total_fetched})")
+            
+            if len(sites_page) < 50:
                 break
+                
             page += 1
+            if page > 100:
+                break
         except Exception as e:
             log.error(f"❌ Fout bij ophalen locaties: {str(e)}")
             break
+            
     log.info(f"🎉 Totaal {len(sites)} locaties opgehaald")
     return sites
 
 def fetch_all_users():
-    """Haal ALLE gebruikers op"""
+    """Haal ALLE gebruikers op met VOLLEDIGE PAGINERING"""
     token = get_halo_token()
     users = []
     page = 1
+    total_fetched = 0
+    
     while True:
         try:
             response = requests.get(
                 f"{HALO_API_BASE}/User",
-                params={"page": page, "pageSize": 100},
+                params={
+                    "page": page,
+                    "pageSize": 50,  # CORRECTIE: UAT ondersteunt max 50 per pagina
+                    "active": "true"
+                },
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30
             )
             response.raise_for_status()
             data = response.json()
             users_page = data.get("users", [])
+            
             if not users_page:
                 break
+                
             users.extend(users_page)
-            log.info(f"✅ Pagina {page} gebruikers: {len(users_page)} toegevoegd (totaal: {len(users)})")
-            if len(users_page) < 100:
+            total_fetched += len(users_page)
+            
+            log.info(f"✅ Pagina {page} gebruikers: {len(users_page)} toegevoegd (totaal: {total_fetched})")
+            
+            if len(users_page) < 50:
                 break
+                
             page += 1
+            if page > 100:
+                break
         except Exception as e:
             log.error(f"❌ Fout bij ophalen gebruikers: {str(e)}")
             break
+            
     log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald")
     return users
 
@@ -197,7 +226,7 @@ def normalize_name(name, organisation_name=None):
     # Voeg organisatie toe als beschikbaar
     if organisation_name and str(organisation_name).strip() and str(organisation_name).strip() != "None":
         # Voeg alleen toe als het niet al in de client naam zit
-        if organisation_name not in name:
+        if organisation_name.lower() not in name.lower():
             full_name += " " + str(organisation_name).strip()
     
     # Stap 1: Basis schoonmaak
@@ -259,7 +288,8 @@ def get_main_users():
         "boss en", "bossers en", "boss &", "bossers &", "bosserscnossen",
         "bossers cnossen", "bossersen", "bossersn", "bossers cn", "bossersc",
         "bosserscno", "bossers cnos", "bosers", "bossen", "bosers cnossen",
-        "bosc", "bossr", "boc", "bocers", "boser", "bocers", "bossr", "bossa"
+        "bosc", "bossr", "boc", "bocers", "boser", "bocers", "bossr", "bossa",
+        "bosserscnossen", "bossers&cnossen", "bossers en cnossen", "bosserscnossen"
     ]
     
     cnossen_keywords = [
@@ -268,7 +298,8 @@ def get_main_users():
         "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen",
         "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen",
         "cnoosen", "cnosen", "cnossn", "cnosn", "cnosn", "cnoss", "cnos",
-        "cnosen", "cnosn", "cnossn", "cnossn", "cnosn", "cnosen", "cnoos", "cnoosn"
+        "cnosen", "cnosn", "cnossn", "cnossn", "cnosn", "cnosen", "cnoos", "cnoosn",
+        "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen"
     ]
     
     potential_matches = []
@@ -325,7 +356,7 @@ def get_main_users():
         log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
         # Toon ALLE klanten voor debugging
         log.info("🔍 Alle klanten in Halo (voor debugging):")
-        for c in clients[:20]:  # Meer voor overzicht
+        for c in clients[:50]:  # Meer voor overzicht
             org_name = c.get("organisation_name", "")
             log.info(f" - Client: '{c.get('name', 'Onbekend')}' + Org: '{org_name}'")
         
@@ -464,9 +495,9 @@ def debug_info():
         clients = fetch_all_clients()
         sites = fetch_all_sites()
         
-        # Toon eerste 3 klanten en locaties voor debugging
-        sample_clients = [{"id": c["id"], "name": c["name"]} for c in clients[:3]]
-        sample_sites = [{"id": s["id"], "name": s["name"]} for s in sites[:3]]
+        # Toon eerste 5 klanten en locaties voor debugging
+        sample_clients = [{"id": c["id"], "name": c["name"], "organisation": c.get("organisation_name", "")} for c in clients[:5]]
+        sample_sites = [{"id": s["id"], "name": s["name"]} for s in sites[:5]]
         
         # Zoek naar potentiële Bossers & Cnossen varianten
         bossers_variants = []
@@ -526,7 +557,7 @@ def debug_info():
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang",
                 "4. Gebruik 'all_possible_candidates' om de exacte spelling te vinden",
                 "5. De integratie combineert nu client-naam en organisatie-naam voor matching",
-                "6. API gebruikt mogelijk andere velden voor organisatiegegevens"
+                "6. API gebruikt 'Organisations' (met hoofdletter) en 'Name' (met hoofdletter) in jouw UAT"
             ],
             "hint": "Deze integratie gebruikt ULTRA-FLEXIBELE matching voor klantnamen inclusief organisaties"
         })
@@ -550,7 +581,8 @@ if __name__ == "__main__":
     log.info("✅ Normaliseert namen automatisch voor betere matching")
     log.info("✅ Haalt ORGANISATIES op via includeorganisations=true")
     log.info("✅ Filtert alleen ACTIEVE klanten")
-    log.info("✅ ULTRA-ROBUSTE extractie van organisatiegegevens")
+    log.info("✅ VOLLEDIGE PAGINERING (UAT geeft max 50 per pagina)")
+    log.info("✅ CORRECTE ORGANISATIE-EXTRACTIE VOOR JOUW SPECIFIEKE UAT")
     log.info("✅ ULTRA-DEBUGGABLE MET VOLLEDIGE RAW DATA LOGGING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
