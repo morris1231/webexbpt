@@ -33,7 +33,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - ULTRA-SIMPEL EN ROBUST
+# Custom Integration Core - CORRECTE GEBRUIKERSOPHAAL
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -87,53 +87,75 @@ def get_site_by_id(site_id):
         log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
         return None
 
-def get_users_by_client_and_site(client_id, site_id):
-    """Haal gebruikers op voor specifieke klant en locatie"""
+def get_users_by_site_id(site_id):
+    """Haal gebruikers op voor specifieke locatie via DE JUISTE METHODE"""
     try:
         token = get_halo_token()
-        all_users = []
-        page = 1
         
-        while True:
+        # 🔑 BELANGRIJK: Gebruik de locatie endpoint met includeusers=true
+        response = requests.get(
+            f"{HALO_API_BASE}/Site/{site_id}",
+            params={
+                "includeusers": "true"  # Dit is de JUISTE parameter voor gebruikers
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        site_data = response.json()
+        
+        # Haal de gebruikers uit de locatie data
+        users = []
+        if "users" in site_data and site_data["users"]:
+            for user in site_data["users"]:
+                try:
+                    users.append({
+                        "id": user["id"],
+                        "name": user["name"],
+                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                    })
+                except (TypeError, ValueError, KeyError) as e:
+                    log.debug(f"⚠️ Gebruiker overslaan bij verwerking: {str(e)}")
+                    continue
+        
+        log.info(f"✅ {len(users)} gebruikers gevonden voor locatie {site_id}")
+        return users
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen gebruikers via locatie: {str(e)}")
+        
+        # Fallback: probeer via de klant endpoint als de locatie methode faalt
+        try:
+            log.info("⚠️ Probeer fallback: haal gebruikers op via klant endpoint...")
+            token = get_halo_token()
             response = requests.get(
-                f"{HALO_API_BASE}/User",
+                f"{HALO_API_BASE}/Client/{BOSSERS_CLIENT_ID}",
                 params={
-                    "page": page,
-                    "pageSize": 50
+                    "includeusers": "true"
                 },
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30
             )
             response.raise_for_status()
-            data = response.json()
-            users_page = data.get("users", [])
+            client_data = response.json()
             
-            if not users_page:
-                break
-                
-            # Filter gebruikers voor de specifieke klant en locatie
-            for user in users_page:
-                try:
-                    if int(user.get("client_id", 0)) == client_id and int(user.get("site_id", 0)) == site_id:
-                        all_users.append({
-                            "id": user["id"],
-                            "name": user["name"],
-                            "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                        })
-                except (TypeError, ValueError, KeyError):
-                    continue
+            users = []
+            if "users" in client_data and client_data["users"]:
+                for user in client_data["users"]:
+                    try:
+                        if int(user.get("site_id", 0)) == site_id:
+                            users.append({
+                                "id": user["id"],
+                                "name": user["name"],
+                                "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                            })
+                    except (TypeError, ValueError, KeyError):
+                        continue
             
-            if len(users_page) < 50:
-                break
-                
-            page += 1
-            if page > 20:
-                break
-                
-        return all_users
-    except Exception as e:
-        log.error(f"❌ Fout bij ophalen gebruikers: {str(e)}")
-        return []
+            log.info(f"✅ Fallback succesvol: {len(users)} gebruikers gevonden voor locatie {site_id}")
+            return users
+        except Exception as fallback_error:
+            log.error(f"❌ Fallback mislukt: {str(fallback_error)}")
+            return []
 
 def get_main_users():
     """Haal Main-site gebruikers op voor Bossers & Cnossen met HARDCODED ID's"""
@@ -161,12 +183,50 @@ def get_main_users():
     site_id = MAIN_SITE_ID
     log.info(f"✅ Gebruik locatie-ID: {site_id} (Naam: '{main_site.get('name', 'Onbekend')}')")
     
-    # Stap 3: Haal de gebruikers op
-    log.info("🔍 Filter Main-site gebruikers...")
-    main_users = get_users_by_client_and_site(client_id, site_id)
+    # Stap 3: Haal de gebruikers op VIA DE LOCATIE ENDPOINT (de JUISTE methode)
+    log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de locatie endpoint...")
+    main_users = get_users_by_site_id(MAIN_SITE_ID)
+    
+    if not main_users:
+        log.warning("⚠️ Geen gebruikers gevonden via de locatie endpoint, probeer klant endpoint...")
+        main_users = get_users_by_client_and_site(BOSSERS_CLIENT_ID, MAIN_SITE_ID)
     
     log.info(f"✅ {len(main_users)} Main-site gebruikers gevonden")
     return main_users
+
+# Helper functie voor compatibiliteit
+def get_users_by_client_and_site(client_id, site_id):
+    """Haal gebruikers op voor specifieke klant en locatie (fallback methode)"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Client/{client_id}",
+            params={
+                "includeusers": "true"
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        client_data = response.json()
+        
+        users = []
+        if "users" in client_data and client_data["users"]:
+            for user in client_data["users"]:
+                try:
+                    if int(user.get("site_id", 0)) == site_id:
+                        users.append({
+                            "id": user["id"],
+                            "name": user["name"],
+                            "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                        })
+                except (TypeError, ValueError, KeyError):
+                    continue
+        
+        return users
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen gebruikers via klant: {str(e)}")
+        return []
 
 # ------------------------------------------------------------------------------
 # API Endpoints - ULTRA-ROBUST EN SNEL
@@ -198,9 +258,10 @@ def get_users():
                 "solution": [
                     f"1. Controleer of klant met ID {BOSSERS_CLIENT_ID} bestaat",
                     f"2. Controleer of locatie met ID {MAIN_SITE_ID} bestaat",
-                    "3. Zorg dat gebruikers correct zijn gekoppeld aan deze klant en locatie"
+                    "3. Zorg dat gebruikers correct zijn gekoppeld aan deze locatie",
+                    "4. Controleer in Halo of de locatie gebruikers bevat"
                 ],
-                "debug_hint": "Deze integratie gebruikt HARDCODED ID's voor snelle en betrouwbare werking"
+                "debug_hint": "Deze integratie haalt gebruikers nu via de locatie endpoint"
             }), 500
         
         log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
@@ -233,30 +294,37 @@ def debug_info():
         main_site = get_site_by_id(MAIN_SITE_ID)
         site_valid = main_site is not None
         
-        # Haal voorbeeldgebruikers op
-        sample_users = []
-        if client_valid and site_valid:
-            sample_users = get_users_by_client_and_site(BOSSERS_CLIENT_ID, MAIN_SITE_ID)[:3]
+        # Haal gebruikers op via de locatie endpoint
+        log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de locatie endpoint...")
+        site_users = get_users_by_site_id(MAIN_SITE_ID)
+        
+        # Haal gebruikers op via de klant endpoint (voor vergelijking)
+        client_users = get_users_by_client_and_site(BOSSERS_CLIENT_ID, MAIN_SITE_ID)
         
         log.info("✅ /debug data verzameld - controleer hardcoded ID's")
         return jsonify({
             "status": "debug_info",
             "hardcoded_ids": {
                 "bossers_client_id": BOSSERS_CLIENT_ID,
-                "main_site_id": MAIN_SITE_ID,
-                "client_valid": client_valid,
-                "site_valid": site_valid,
                 "client_name": bossers_client.get("name", "Niet gevonden") if client_valid else "Niet gevonden",
-                "site_name": main_site.get("name", "Niet gevonden") if site_valid else "Niet gevonden"
+                "client_valid": client_valid,
+                "main_site_id": MAIN_SITE_ID,
+                "site_name": main_site.get("name", "Niet gevonden") if site_valid else "Niet gevonden",
+                "site_valid": site_valid
             },
-            "sample_users": sample_users,
+            "user_data": {
+                "users_via_site_endpoint": len(site_users),
+                "users_via_client_endpoint": len(client_users),
+                "sample_users": site_users[:3] if site_users else client_users[:3]
+            },
             "troubleshooting": [
                 f"1. Controleer of klant met ID {BOSSERS_CLIENT_ID} bestaat in Halo",
                 f"2. Controleer of locatie met ID {MAIN_SITE_ID} bestaat in Halo",
-                "3. Zorg dat gebruikers correct zijn gekoppeld aan deze klant en locatie",
-                "4. Controleer de Render logs voor 'Haal klant op' en 'Haal locatie op' berichten"
+                "3. Zorg dat gebruikers correct zijn gekoppeld aan deze locatie (NIET alleen aan de klant)",
+                "4. In Halo: Ga naar de locatie > Gebruikers om te controleren welke gebruikers gekoppeld zijn",
+                "5. Gebruikers moeten zowel aan de klant ALS aan de locatie zijn gekoppeld"
             ],
-            "hint": "Deze integratie gebruikt HARDCODED ID'S voor maximale betrouwbaarheid"
+            "hint": "Deze integratie haalt gebruikers nu EERST via de locatie endpoint (de meest betrouwbare methode)"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -275,12 +343,12 @@ if __name__ == "__main__":
     log.info("-"*70)
     log.info(f"✅ Gebruikt HARDCODED KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt HARDCODED SITE ID: {MAIN_SITE_ID} (Main)")
-    log.info("✅ GEEN COMPLEXE MATCHING MEER NODIG")
-    log.info("✅ MAXIMALE BETROUWBAARHEID EN SNELHEID")
-    log.info("✅ GEEN PROBLEMEN MEER MET ORGANISATIE-KOPPELINGEN")
+    log.info("✅ HAALT GEBRUIKERS NU EERST VIA LOCATIE ENDPOINT (DE JUISTE METHODE)")
+    log.info("✅ INCLUSIEF FALLBACK NAAR KLANT ENDPOINT ALS NODIG")
+    log.info("✅ ULTRA-DEBUGGABLE MET VERSCHILLENDE USER DATA SOURCES")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
-    log.info("2. Bezoek EERST /debug om te controleren of de ID's correct zijn")
+    log.info("2. Bezoek EERST /debug om te zien of gebruikers worden gevonden")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port)
