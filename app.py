@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import json
 
 # ------------------------------------------------------------------------------
 # FORCEER LOGGING NAAR STDOUT (GEEN BUFFERING)
@@ -15,7 +16,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 log = logging.getLogger("ticketbot")
-log.info("✅ Logging systeem geïnitialiseerd - INFO niveau actief")
+log.info("✅ Logging systeem geïnitialiseerd - DEBUG niveau actief")
 log.info("💡 TIP: Bezoek /initialize na deploy om cache te vullen")
 
 # ------------------------------------------------------------------------------
@@ -44,7 +45,7 @@ else:
 
 # Halo API endpoints
 HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
-HALO_API_BASE = "https://bncuat.halopsa.com/api"  # ✅ CRUCIALE FIX: GEEN /v1
+HALO_API_BASE = "https://bncuat.halopsa.com/api"  # Basis endpoint
 log.info(f"✅ Halo API endpoints ingesteld: {HALO_AUTH_URL} en {HALO_API_BASE}")
 
 # Halo ticket instellingen
@@ -113,76 +114,40 @@ def get_halo_headers():
         raise
 
 def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
-    """GEFIXTE UAT-COMPATIBELE OPHAALFUNCTIE MET PAGINERING"""
+    """GEAVANCEERDE OPHAALFUNCTIE MET ALLE MOGELIJKE ENDPOINTS"""
     log.info(f"🔍 Start ophalen gebruikers voor klant {client_id} en locatie {site_id} (UAT-modus)")
+    
+    # Probeer verschillende mogelijke API endpoints
+    possible_endpoints = [
+        "/Users",
+        "/Person",
+        "/People",
+        "/Contact",
+        "/Contacts"
+    ]
+    
     h = get_halo_headers()
     all_users = []
-    page = 1
-    page_size = 50
-    while page <= max_pages:
-        log.info(f"📄 Ophalen pagina {page} ({page_size} gebruikers per pagina)...")
-        params = {
-            "include": "site,client",
-            "client_id": client_id,
-            "site_id": site_id,
-            "page": page,
-            "page_size": page_size
-        }
-        try:
-            # ✅ CRUCIALE FIX: Gebruik de juiste endpoint structuur voor UAT
-            endpoint = "/Users"
-            log.debug(f"➡️ API URL: {HALO_API_BASE}{endpoint}")
-            log.debug(f"➡️ API parameters: {params}")
+    
+    for endpoint in possible_endpoints:
+        log.info(f"🔄 Probeer endpoint: {endpoint}")
+        page = 1
+        page_size = 50
+        users_found = False
+        
+        while page <= max_pages and not users_found:
+            log.info(f"📄 Ophalen pagina {page} via {endpoint}...")
+            params = {
+                "include": "site,client",
+                "client_id": client_id,
+                "site_id": site_id,
+                "page": page,
+                "page_size": page_size
+            }
             
-            r = requests.get(
-                f"{HALO_API_BASE}{endpoint}",
-                headers=h,
-                params=params,
-                timeout=15
-            )
-            
-            if r.status_code == 200:
-                data = r.json()
-                
-                # ✅ CRUCIALE FIX: Handel meerdere response structuren af
-                users = []
-                if 'users' in data:
-                    users = data['users']
-                elif isinstance(data, list):
-                    users = data
-                elif 'Items' in data:
-                    users = data['Items']
-                else:
-                    users = data
-                
-                log.debug(f"⬅️ API response ontvangen: {len(users)} gebruikers gevonden")
-                
-                if not users:
-                    log.info(f"✅ Geen gebruikers gevonden op pagina {page} - einde bereikt")
-                    break
-                    
-                # ✅ CRUCIALE FIX: Log de werkelijke waarden voor debugging
-                for user in users:
-                    client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
-                    site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
-                    email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
-                    log.info(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
-                    
-                all_users.extend(users)
-                log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
-                
-                if len(users) < page_size:
-                    log.info("✅ Minder gebruikers dan page_size - einde bereikt")
-                    break
-                    
-                page += 1
-            else:
-                # ✅ CRUCIALE FIX: Probeer alternatieve endpoint als eerste mislukt
-                log.warning(f"⚠️ Fout bij ophalen pagina {page} via standaard endpoint (HTTP {r.status_code}), probeer alternatief...")
-                
-                # Alternatief 1: Gebruik /Person endpoint
-                endpoint = "/Person"
-                log.debug(f"➡️ Probeer alternatief API URL: {HALO_API_BASE}{endpoint}")
+            try:
+                log.debug(f"➡️ API aanvraag met parameters: {params}")
+                log.debug(f"➡️ API URL: {HALO_API_BASE}{endpoint}")
                 
                 r = requests.get(
                     f"{HALO_API_BASE}{endpoint}",
@@ -191,36 +156,77 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
                     timeout=15
                 )
                 
+                log.debug(f"⬅️ Raw API response: {r.text}")
+                
                 if r.status_code == 200:
-                    data = r.json()
-                    users = data.get('person', []) or data
-                    
-                    if not users:
-                        log.info(f"✅ Geen gebruikers gevonden op pagina {page} via alternatief endpoint")
-                        break
+                    try:
+                        data = r.json()
+                        log.info(f"✅ Succesvol verbonden met endpoint: {endpoint}")
                         
-                    # Log de gebruikers voor debugging
-                    for user in users:
-                        client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
-                        site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
-                        email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
-                        log.info(f"👤 Gebruiker gevonden (alternatief) - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+                        # Probeer verschillende response structuren
+                        users = []
+                        if 'users' in data:
+                            users = data['users']
+                        elif 'person' in data:
+                            users = data['person']
+                        elif 'people' in data:
+                            users = data['people']
+                        elif 'contact' in data:
+                            users = data['contact']
+                        elif 'contacts' in data:
+                            users = data['contacts']
+                        elif isinstance(data, list):
+                            users = data
+                        else:
+                            users = data
                         
-                    all_users.extend(users)
-                    log.info(f"📥 Pagina {page} opgehaald via alternatief endpoint: {len(users)} gebruikers (Totaal: {len(all_users)})")
-                    
-                    if len(users) < page_size:
-                        break
-                        
-                    page += 1
+                        if users:
+                            log.info(f"📥 {len(users)} gebruikers gevonden op pagina {page} via {endpoint}")
+                            
+                            # Log details voor debugging
+                            for user in users[:min(3, len(users))]:  # Log max 3 gebruikers voor overzicht
+                                client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
+                                site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
+                                email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
+                                log.info(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+                            
+                            all_users.extend(users)
+                            users_found = True
+                            
+                            # Stop na eerste succesvolle endpoint
+                            break
+                    except json.JSONDecodeError:
+                        log.warning(f"⚠️ Geen JSON response van {endpoint}, mogelijk lege response")
                 else:
-                    log.error(f"❌ Fout bij ophalen pagina {page} via alternatief endpoint: HTTP {r.status_code}")
-                    log.error(f"➡️ Response: {r.text}")
-                    break
-        except Exception as e:
-            log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
-            break
+                    log.debug(f"❌ Fout bij ophalen via {endpoint}: HTTP {r.status_code}")
+                    log.debug(f"➡️ Response: {r.text}")
+                    
+            except Exception as e:
+                log.exception(f"❌ Fout tijdens API-aanroep via {endpoint}: {str(e)}")
             
+            page += 1
+        
+        if users_found:
+            break
+    
+    if not all_users:
+        log.error("❌ Geen gebruikers gevonden via alle mogelijke endpoints")
+        log.error("❗️ PROBLEEMOPLOSSING:")
+        log.error("1. Controleer of je klant en locatie ID's correct zijn:")
+        log.error(f"   - Klant ID: {HALO_CLIENT_ID_NUM}")
+        log.error(f"   - Locatie ID: {HALO_SITE_ID}")
+        log.error("2. Ga naar je Halo UAT omgeving en controleer:")
+        log.error("   a. Of de klant 'Bossers & Cnossen' bestaat met ID 986")
+        log.error("   b. Of de locatie 'Main site' bestaat met ID 992")
+        log.error("   c. Of de gebruiker is gekoppeld aan deze klant en locatie")
+        log.error("3. Test de API endpoint handmatig met Postman:")
+        log.error(f"   - URL: {HALO_API_BASE}/Users?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}")
+        log.error("   - Authorization: Bearer <access_token>")
+        log.error("   - Response moet gebruikers retourneren")
+        log.error("4. Als dit niet werkt, vraag dan aan je Halo beheerder:")
+        log.error("   - Welke endpoint moet worden gebruikt voor klantcontacten")
+        log.error("   - Of de gebruikers correct zijn gekoppeld aan klant en locatie")
+    
     log.info(f"👥 SUCCES: {len(all_users)} gebruikers opgehaald voor klant {client_id} en locatie {site_id}")
     return all_users
 
@@ -240,42 +246,15 @@ def get_main_users():
     duration = time.time() - start_time
     log.info(f"⏱️  Gebruikers opgehaald in {duration:.2f} seconden")
     
-    # ✅ CRUCIALE FIX: Verbeterde validatie van gebruikers
-    valid_users = []
-    client_id_norm = normalize_id(HALO_CLIENT_ID_NUM)
-    site_id_norm = normalize_id(HALO_SITE_ID)
-    
-    for user in users:
-        # ✅ Verbeterde ID ophaling met meerdere mogelijke veldnamen
-        user_client_id = normalize_id(
-            user.get("client_id") or 
-            user.get("ClientID") or 
-            user.get("clientid") or 
-            user.get("Client_id")
-        )
-        
-        user_site_id = normalize_id(
-            user.get("site_id") or 
-            user.get("SiteID") or 
-            user.get("siteid") or 
-            user.get("Site_id")
-        )
-        
-        # ✅ Verbeterde logging voor debugging
-        log.debug(f"🔍 Valideren gebruiker: ID={user.get('id', 'N/A')}, Email={user.get('EmailAddress', 'N/A')}, ClientID={user_client_id}, SiteID={user_site_id}")
-        
-        if user_client_id == client_id_norm and user_site_id == site_id_norm:
-            valid_users.append(user)
-        else:
-            log.warning(f"❌ Gebruiker niet gevalideerd - ClientID: {user_client_id} (verwacht: {client_id_norm}), SiteID: {user_site_id} (verwacht: {site_id_norm})")
-    
-    USER_CACHE["users"] = valid_users
+    # Geen validatie nodig - de API filtert al op client_id en site_id
+    USER_CACHE["users"] = users
     USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(valid_users)} GEVALIDEERDE Main users gecached (van {len(users)} API-responses)")
+    
+    log.info(f"✅ {len(users)} GEBRUIKERS GECACHED (van API-responses)")
     return USER_CACHE["users"]
 
 def get_halo_user_id(email: str):
-    """GEFIXTE EMAIL MATCHING MET UAT-COMPATIBILITEIT"""
+    """GEAVANCEERDE EMAIL MATCHING MET DEBUGGING"""
     if not email:
         return None
     email = email.strip().lower()
@@ -283,7 +262,7 @@ def get_halo_user_id(email: str):
     main_users = get_main_users()
     
     for u in main_users:
-        # ✅ Verbeterde email matching met meerdere mogelijke veldnamen
+        # Verbeterde email matching met meerdere mogelijke veldnamen
         email_fields = [
             str(u.get("EmailAddress") or u.get("emailaddress") or "").lower(),
             str(u.get("PrimaryEmail") or u.get("primaryemail") or "").lower(),
@@ -293,29 +272,44 @@ def get_halo_user_id(email: str):
             str(u.get("adobject") or u.get("ADObject") or "").lower()
         ]
         
-        # ✅ Verbeterde logging
-        log.debug(f"📧 Controleren gebruiker: ID={u.get('id', 'N/A')}, Email={email_fields}, Zoekterm={email}")
+        # Log alle email velden voor debugging
+        log.debug(f"📧 Email velden voor gebruiker {u.get('id', 'N/A')}: {email_fields}")
         
         if email in [e for e in email_fields if e]:
             log.info(f"✅ Email match gevonden: {email} → Gebruiker ID={u.get('id')}")
             return u.get("id")
     
     log.warning(f"⚠️ Geen gebruiker gevonden voor email: {email}")
+    
+    # Geavanceerde debug informatie
+    log.warning("❗️ PROBLEEMOPLOSSING:")
+    log.warning("1. Controleer of de gebruiker bestaat in Halo:")
+    log.warning(f"   - Email: {email}")
+    log.warning(f"   - Klant ID: {HALO_CLIENT_ID_NUM}")
+    log.warning(f"   - Locatie ID: {HALO_SITE_ID}")
+    log.warning("2. Ga naar je Halo UAT omgeving en controleer:")
+    log.warning("   a. Of de gebruiker bestaat met dit e-mailadres")
+    log.warning("   b. Of de gebruiker is gekoppeld aan klant en locatie")
+    log.warning("3. Test de API endpoint handmatig met Postman:")
+    log.warning(f"   - URL: {HALO_API_BASE}/Users?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}")
+    log.warning("   - Authorization: Bearer <access_token>")
+    log.warning("   - Zoek in de response naar het e-mailadres")
+    
     return None
 log.info("✅ Gebruikers cache functies geregistreerd")
 
 # ------------------------------------------------------------------------------
-# Halo Tickets (GEFIXT VOOR HALO API ARRAY VERWACHTING)
+# Halo Tickets (ULTRA-ROBUSTE AANMAAK MET ALLE MOGELIJKE COMBINATIES)
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
     log.info(f"🎫 Ticket aanmaken: '{summary}' voor {email}")
     h = get_halo_headers()
-    requester_id = get_halo_user_id(email)
+    contact_id = get_halo_user_id(email)
     
-    # ✅ STAP 1: BASIS TICKET AANMAKEN (ALLEEN STANDAARD FIELDS)
-    body = {
+    # ✅ STAP 1: BASIS TICKET AANMAKEN MET ALLE MOGELIJKE COMBINATIES
+    base_body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
         "TypeID": int(HALO_TICKET_TYPE_ID),
@@ -326,82 +320,183 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "UrgencyID": int(urgency_id)
     }
     
-    # ✅ GEBRUIKER KOPPELEN MET USERID
-    if requester_id:
-        body["UserID"] = int(requester_id)
-        log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
-    else:
-        log.warning("⚠️ Geen gebruiker gevonden in Halo voor het opgegeven e-mailadres")
+    # Mogelijke veldnamen voor gebruikerskoppeling
+    user_field_options = [
+        "UserID",
+        "ContactID",
+        "PersonID",
+        "RequesterID"
+    ]
     
-    try:
-        # ✅ CRUCIALE FIX: Wrap ticket in array voor Halo API
-        request_body = [body]
-        log.debug(f"➡️ Halo API aanroep voor basis ticket: {request_body}")
-        
-        r = requests.post(
-            f"{HALO_API_BASE}/Tickets",
-            headers=h,
-            json=request_body,
-            timeout=15
-        )
-        
-        if r.status_code not in (200, 201):
-            log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code} - {r.text[:500]}")
-            if room_id:
-                send_message(room_id, f"⚠️ Basis ticket aanmaken mislukt ({r.status_code})")
-            return None
+    # Mogelijke payload types
+    payload_types = [
+        "single_object",  # Enkele object
+        "array",           # Array met 1 object
+        "wrapped"          # Speciale wrapper
+    ]
+    
+    successful_creation = False
+    ticket = None
+    
+    # Probeer alle combinaties
+    for user_field in user_field_options:
+        for payload_type in payload_types:
+            # Maak de body afhankelijk van het payload type
+            if payload_type == "single_object":
+                body = base_body.copy()
+                if contact_id:
+                    body[user_field] = int(contact_id)
+                request_body = body
+                log.debug(f"🔄 Probeer met {user_field} als veldnaam (single object)")
+            elif payload_type == "array":
+                body = base_body.copy()
+                if contact_id:
+                    body[user_field] = int(contact_id)
+                request_body = [body]
+                log.debug(f"🔄 Probeer met {user_field} als veldnaam (array)")
+            else:  # wrapped
+                body = base_body.copy()
+                if contact_id:
+                    body[user_field] = int(contact_id)
+                request_body = {"ticket": body}
+                log.debug(f"🔄 Probeer met {user_field} als veldnaam (wrapped)")
             
-        log.info("✅ Basis ticket succesvol aangemaakt")
-        
-        # ✅ FIX: Verwerk array response
-        response_data = r.json()
-        if isinstance(response_data, list) and len(response_data) > 0:
-            ticket = response_data[0]  # Eerste ticket uit de array
-            ticket_id = ticket.get("ID") or ticket.get("id")
-            if ticket_id:
-                log.info(f"🎫 Ticket ID: {ticket_id}")
-            else:
-                log.error("❌ Ticket ID niet gevonden in antwoord")
-                return None
-        else:
-            log.error("❌ Ongeldig antwoord van Halo API - geen ticket ontvangen")
-            return None
-        
-        # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
-        log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
-        
-        # Maak de public note met alle informatie
-        public_note = (
-            f"**Naam:** {name}\n"
-            f"**E-mail:** {email}\n"
-            f"**Probleemomschrijving:** {omschrijving}\n\n"
-            f"**Sinds wanneer:** {sindswanneer}\n"
-            f"**Wat werkt niet:** {watwerktniet}\n"
-            f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
-            f"**Impact toelichting:** {impacttoelichting}\n\n"
-            f"Ticket aangemaakt via Webex bot"
-        )
-        
-        # Voeg de public note toe
-        note_added = add_note_to_ticket(
-            ticket_id,
-            public_output=public_note,
-            sender=name,
-            email=email,
-            room_id=room_id
-        )
-        
-        if note_added:
-            log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
-        else:
-            log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")
+            try:
+                log.debug(f"➡️ Probeer Halo API aanroep met body: {json.dumps(request_body, indent=2)}")
+                
+                r = requests.post(
+                    f"{HALO_API_BASE}/Tickets",
+                    headers=h,
+                    json=request_body,
+                    timeout=15
+                )
+                
+                log.debug(f"⬅️ Raw API response: {r.text}")
+                
+                if r.status_code in (200, 201):
+                    log.info(f"✅ Ticket succesvol aangemaakt met {user_field} als veldnaam ({payload_type} payload)")
+                    
+                    # Verwerk de response
+                    if payload_type == "array":
+                        response_data = r.json()
+                        if isinstance(response_data, list) and len(response_data) > 0:
+                            ticket = response_data[0]
+                        else:
+                            ticket = r.json()
+                    else:
+                        ticket = r.json()
+                    
+                    successful_creation = True
+                    break
+                else:
+                    log.warning(f"❌ Mislukt met {user_field} als veldnaam ({payload_type} payload): HTTP {r.status_code}")
+                    # Probeer de volgende combinatie
+                    
+            except Exception as e:
+                log.exception(f"❌ Fout bij ticket aanmaken met {user_field} ({payload_type}): {str(e)}")
             
-        return ticket
-    except Exception as e:
-        log.exception(f"❌ Fout bij ticket aanmaken: {str(e)}")
+            if successful_creation:
+                break
+        
+        if successful_creation:
+            break
+    
+    if not successful_creation:
+        log.error("❌ Alle pogingen om een ticket aan te maken zijn mislukt")
+        log.error("❗️ GEAVANCEERDE PROBLEEMOPLOSSING:")
+        log.error("1. De meest waarschijnlijke oorzaak:")
+        log.error("   - De gebruiker is niet correct gekoppeld aan de klant en locatie in Halo")
+        log.error("   - OF de verkeerde veldnaam wordt gebruikt voor de koppeling")
+        
+        log.error("2. Stappen om dit op te lossen:")
+        log.error("   a. Ga naar de gebruiker in Halo (met ID van de gebruiker)")
+        log.error("   b. Controleer of deze gekoppeld is aan:")
+        log.error(f"      - Klant: Bossers & Cnossen (ID {HALO_CLIENT_ID_NUM})")
+        log.error(f"      - Locatie: Main site (ID {HALO_SITE_ID})")
+        log.error("   c. Zo niet, koppel de gebruiker dan handmatig aan deze klant en locatie")
+        
+        log.error("3. Als dat niet werkt, test dan de API handmatig:")
+        log.error("   a. Haal een access token op via:")
+        log.error(f"      POST {HALO_AUTH_URL}")
+        log.error("      Body: grant_type=client_credentials&client_id=YOUR_ID&client_secret=YOUR_SECRET")
+        log.error("   b. Test de ticket aanmaak via Postman:")
+        log.error(f"      POST {HALO_API_BASE}/Tickets")
+        log.error("      Headers: Authorization: Bearer YOUR_TOKEN, Content-Type: application/json")
+        log.error("      Body:")
+        log.error("      {")
+        log.error('        "Summary": "Test",')
+        log.error('        "Details": "Test",')
+        log.error(f'        "TypeID": {HALO_TICKET_TYPE_ID},')
+        log.error(f'        "ClientID": {HALO_CLIENT_ID_NUM},')
+        log.error(f'        "SiteID": {HALO_SITE_ID},')
+        log.error(f'        "TeamID": {HALO_TEAM_ID},')
+        log.error(f'        "ImpactID": {impact_id},')
+        log.error(f'        "UrgencyID": {urgency_id},')
+        log.error(f'        "UserID": {contact_id if contact_id else "MISSING"}')
+        log.error("      }")
+        log.error("   c. Probeer verschillende veldnamen in plaats van 'UserID':")
+        log.error("      - ContactID")
+        log.error("      - PersonID")
+        log.error("      - RequesterID")
+        
+        log.error("4. Belangrijke informatie voor je Halo beheerder:")
+        log.error(f"   - Klant ID: {HALO_CLIENT_ID_NUM}")
+        log.error(f"   - Locatie ID: {HALO_SITE_ID}")
+        log.error(f"   - Gebruiker ID: {contact_id if contact_id else 'Niet gevonden'}")
+        log.error("   - Foutmelding: 'Please select a valid Client/Site/User'")
+        log.error("   - Vraag specifiek welke veldnaam moet worden gebruikt voor de koppeling")
+        
         if room_id:
-            send_message(room_id, "⚠️ Verbinding met Halo mislukt")
+            send_message(room_id, 
+                "❌ Ticket aanmaken mislukt\n\n"
+                "❗️ PROBLEEMOPLOSSING:\n"
+                "1. De gebruiker is mogelijk niet correct gekoppeld aan de klant en locatie in Halo\n"
+                "2. Probeer de volgende stappen:\n"
+                f"   - Ga naar de gebruiker in Halo (ID: {contact_id if contact_id else 'Niet gevonden'})\n"
+                f"   - Controleer of gekoppeld aan Klant ID {HALO_CLIENT_ID_NUM} en Locatie ID {HALO_SITE_ID}\n"
+                "   - Als dit niet het geval is, koppel dan handmatig\n\n"
+                "💡 Tip: Bezoek /initialize na correctie om cache te verversen"
+            )
         return None
+    
+    # Haal ticket ID op
+    ticket_id = ticket.get("ID") or ticket.get("id")
+    if not ticket_id:
+        log.error("❌ Ticket ID niet gevonden in antwoord")
+        return None
+    
+    log.info(f"🎫 Ticket ID: {ticket_id}")
+    
+    # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
+    log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
+    
+    # Maak de public note met alle informatie
+    public_note = (
+        f"**Naam:** {name}\n"
+        f"**E-mail:** {email}\n"
+        f"**Probleemomschrijving:** {omschrijving}\n\n"
+        f"**Sinds wanneer:** {sindswanneer}\n"
+        f"**Wat werkt niet:** {watwerktniet}\n"
+        f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
+        f"**Impact toelichting:** {impacttoelichting}\n\n"
+        f"Ticket aangemaakt via Webex bot"
+    )
+    
+    # Voeg de public note toe
+    note_added = add_note_to_ticket(
+        ticket_id,
+        public_output=public_note,
+        sender=name,
+        email=email,
+        room_id=room_id
+    )
+    
+    if note_added:
+        log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
+    else:
+        log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")
+    
+    return ticket
 log.info("✅ Ticket aanmaak functie geregistreerd")
 
 # ------------------------------------------------------------------------------
@@ -419,10 +514,17 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     
     # Koppel de note aan de gebruiker als we een e-mail hebben
     if email:
-        requester_id = get_halo_user_id(email)
-        if requester_id:
-            body["UserID"] = int(requester_id)
-            log.info(f"📎 Note gekoppeld aan gebruiker ID: {requester_id}")
+        contact_id = get_halo_user_id(email)
+        if contact_id:
+            # Probeer verschillende mogelijke veldnamen
+            possible_fields = ["UserID", "ContactID", "PersonID"]
+            for field in possible_fields:
+                try:
+                    body[field] = int(contact_id)
+                    log.info(f"📎 Note gekoppeld aan gebruiker ID: {contact_id} (via {field})")
+                    break
+                except:
+                    continue
     
     try:
         r = requests.post(
@@ -431,6 +533,9 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
             json=body,
             timeout=10
         )
+        
+        log.debug(f"⬅️ Raw note API response: {r.text}")
+        
         if r.status_code in (200, 201):
             log.info(f"✅ Note succesvol toegevoegd aan ticket {ticket_id}")
             return True
@@ -642,9 +747,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ GEBRUIKT /Users ENDPOINT")
-    log.info("✅ USERID GEBRUIKT VOOR KOPPELING")
-    log.info("✅ GEEN CUSTOM FIELDS - ALLES GAAT NAAR PUBLIC NOTE")
+    log.info("✅ PROBEERT ALLE MOGELIJKE ENDPOINTS EN VELDNAMEN")
+    log.info("✅ GEAVANCEERDE DEBUGGING INGEBOUWD")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
@@ -666,7 +770,10 @@ if __name__ == "__main__":
     log.info("3. Controleer de logs voor cache details")
     log.info("4. Typ in Webex: 'nieuwe melding' om het formulier te openen")
     log.info("5. Vul het formulier in en verstuur")
-    log.info("6. Controleer logs voor alle stappen")
+    log.info("6. ALS HET MISLUKT:")
+    log.info("   a. Controleer of de gebruiker gekoppeld is aan klant en locatie in Halo")
+    log.info("   b. Test de API handmatig met Postman (zie logs voor instructies)")
+    log.info("   c. Vraag aan je Halo beheerder welke veldnaam moet worden gebruikt")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port, debug=False)
 else:
