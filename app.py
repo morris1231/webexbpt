@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("halo-custom-integration")
 app = Flask(__name__)
-load_dotenv()  # CORRECTE SPELLING
+load_dotenv()
 
 # Halo API credentials (UIT .env)
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
@@ -30,7 +30,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - ULTRA-ROBUST VOOR ORGANISATIES
+# Custom Integration Core - ULTRA-ROBUST VOOR JOUW SPECIFIEKE UAT
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -55,7 +55,7 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten + ORGANISATIES op met FIX VOOR API STRUCTUUR"""
+    """Haal ALLE klanten op met ULTRA-ROBUSTE organisatie-extractie"""
     token = get_halo_token()
     clients = []
     page = 1
@@ -76,22 +76,44 @@ def fetch_all_clients():
             data = response.json()
             clients_page = data.get("clients", [])
             
-            # 🔑 CRUCIALE FIX: Verwerk organisaties correct (meervoud en array)
+            # 🔑 ULTRA-ROBUSTE extractie van organisatiegegevens
             for client in clients_page:
-                # Check voor meervoud (organisations) en enkelvoud (organisation)
-                org_data = client.get("organisations") or client.get("organisation")
+                # Mogelijke velden waar organisatiegegevens kunnen zitten
+                possible_org_fields = [
+                    "organisations", "organisation", 
+                    "Organisations", "Organisation",
+                    "organisation_name", "organization_name",
+                    "OrgName", "org_name"
+                ]
                 
-                if org_data:
-                    # Als het een array is, neem de eerste organisatie
-                    if isinstance(org_data, list) and len(org_data) > 0:
-                        client["organisation"] = org_data[0]
-                    # Als het een dict is, gebruik direct
-                    elif isinstance(org_data, dict):
-                        client["organisation"] = org_data
-                    else:
-                        client["organisation"] = {}
-                else:
-                    client["organisation"] = {}
+                organisation_name = ""
+                
+                # Probeer alle mogelijke velden
+                for field in possible_org_fields:
+                    if field in client:
+                        org_data = client[field]
+                        
+                        # Als het een string is, gebruik direct
+                        if isinstance(org_data, str) and org_data.strip() != "None":
+                            organisation_name = org_data
+                            break
+                            
+                        # Als het een array is, neem de eerste entry
+                        elif isinstance(org_data, list) and len(org_data) > 0:
+                            first_entry = org_data[0]
+                            if isinstance(first_entry, dict) and "name" in first_entry:
+                                organisation_name = first_entry["name"]
+                            elif isinstance(first_entry, str):
+                                organisation_name = first_entry
+                            break
+                            
+                        # Als het een dict is
+                        elif isinstance(org_data, dict) and "name" in org_data:
+                            organisation_name = org_data["name"]
+                            break
+                
+                # Sla de organisatie naam op voor later gebruik
+                client["organisation_name"] = organisation_name
             
             if not clients_page:
                 break
@@ -104,7 +126,7 @@ def fetch_all_clients():
         except Exception as e:
             log.error(f"❌ Fout bij ophalen klanten: {str(e)}")
             break
-    log.info(f"🎉 Totaal {len(clients)} klanten + organisaties opgehaald")
+    log.info(f"🎉 Totaal {len(clients)} klanten opgehaald (inclusief organisatiegegevens)")
     return clients
 
 def fetch_all_sites():
@@ -167,12 +189,16 @@ def fetch_all_users():
 
 def normalize_name(name, organisation_name=None):
     """
-    Normaliseer namen met ULTRA-ROBUSTE afhandeling van Halo UAT data
+    Normaliseer namen met ULTRA-ROBUSTE afhandeling specifiek voor jouw UAT
     """
     # Combineer client en organisatie namen
     full_name = (name or "").strip()
-    if organisation_name and str(organisation_name).strip() != "None":
-        full_name += " " + str(organisation_name).strip()
+    
+    # Voeg organisatie toe als beschikbaar
+    if organisation_name and str(organisation_name).strip() and str(organisation_name).strip() != "None":
+        # Voeg alleen toe als het niet al in de client naam zit
+        if organisation_name not in name:
+            full_name += " " + str(organisation_name).strip()
     
     # Stap 1: Basis schoonmaak
     full_name = full_name.lower()
@@ -197,6 +223,7 @@ def normalize_name(name, organisation_name=None):
         (":", " "),
         ("'", " "),
         ('"', " "),
+        ("  ", " "),
         ("  ", " ")
     ]
     
@@ -209,10 +236,10 @@ def normalize_name(name, organisation_name=None):
     # Stap 4: Schoonmaak spaties
     full_name = re.sub(r'\s+', ' ', full_name).strip()
     
-    return full_name  # 🔑 GECORRIGEERD: full_name in plaats van full__name
+    return full_name
 
 def get_main_users():
-    """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN"""
+    """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN specifiek voor jouw UAT"""
     global client_id, bossers_client, site_id, main_site
     
     # Stap 1: Haal alle benodigde data op
@@ -221,17 +248,18 @@ def get_main_users():
     sites = fetch_all_sites()
     users = fetch_all_users()
     
-    # Stap 2: Verbeterde klantzoekfunctie met ORGANISATIE SUPPORT
+    # Stap 2: Verbeterde klantzoekfunctie met ULTRA-ROBUSTE matching
     log.info("🔍 Zoek klant 'Bossers & Cnossen' met ULTRA-FLEXIBELE matching...")
     bossers_client = None
     
-    # 🔑 ULTRA-ROBUSTE zoektermen specifiek voor jouw geval
+    # 🔑 ULTRA-ROBUSTE zoektermen specifiek voor jouw UAT omgeving
     bossers_keywords = [
         "boss", "bossers", "b os", "b.o", "b&", "b c", "b.c", "b&c",
         "b en", "b&n", "b n", "b c", "b.c", "b&c", "b en", "b&n", "b n",
         "boss en", "bossers en", "boss &", "bossers &", "bosserscnossen",
         "bossers cnossen", "bossersen", "bossersn", "bossers cn", "bossersc",
-        "bosserscno", "bossers cnos", "bosers", "bossen", "bosers cnossen"
+        "bosserscno", "bossers cnos", "bosers", "bossen", "bosers cnossen",
+        "bosc", "bossr", "boc", "bocers", "boser", "bocers", "bossr", "bossa"
     ]
     
     cnossen_keywords = [
@@ -239,19 +267,14 @@ def get_main_users():
         "c en", "c&n", "c n", "c c", "c.c", "c&c", "c en", "c&n", "c n",
         "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen",
         "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen",
-        "cnoosen", "cnosen", "cnossn", "cnosn", "cnosn", "cnoss", "cnos"
+        "cnoosen", "cnosen", "cnossn", "cnosn", "cnosn", "cnoss", "cnos",
+        "cnosen", "cnosn", "cnossn", "cnossn", "cnosn", "cnosen", "cnoos", "cnoosn"
     ]
     
     potential_matches = []
     for c in clients:
         # Haal organisatie naam op met ULTRA-VEILIGE afhandeling
-        organisation_name = ""
-        if "organisation" in c:
-            org = c["organisation"]
-            if isinstance(org, dict) and "name" in org:
-                organisation_name = org["name"]
-            elif isinstance(org, str):
-                organisation_name = org
+        organisation_name = c.get("organisation_name", "")
         
         # Log de RAW data voor debugging
         client_name = c.get("name", "Onbekend")
@@ -294,13 +317,7 @@ def get_main_users():
         
         bossers_client = next((c for c in clients if c["id"] == best_match_id), None)
         if bossers_client:
-            org_name = ""
-            if "organisation" in bossers_client:
-                org = bossers_client["organisation"]
-                if isinstance(org, dict) and "name" in org:
-                    org_name = org["name"]
-                elif isinstance(org, str):
-                    org_name = org
+            org_name = bossers_client.get("organisation_name", "")
             
             log.warning(f"⚠️ Gebruik BESTE POTENTIËLE MATCH voor klant: {bossers_client['name']} + Org: {org_name}")
     
@@ -308,26 +325,14 @@ def get_main_users():
         log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
         # Toon ALLE klanten voor debugging
         log.info("🔍 Alle klanten in Halo (voor debugging):")
-        for c in clients[:10]:  # Eerste 10 voor overzicht
-            org_name = ""
-            if "organisation" in c:
-                org = c["organisation"]
-                if isinstance(org, dict) and "name" in org:
-                    org_name = org["name"]
-                elif isinstance(org, str):
-                    org_name = org
+        for c in clients[:20]:  # Meer voor overzicht
+            org_name = c.get("organisation_name", "")
             log.info(f" - Client: '{c.get('name', 'Onbekend')}' + Org: '{org_name}'")
         
         return []
     
     client_id = int(bossers_client["id"])
-    org_name = ""
-    if "organisation" in bossers_client:
-        org = bossers_client["organisation"]
-        if isinstance(org, dict) and "name" in org:
-            org_name = org["name"]
-        elif isinstance(org, str):
-            org_name = org
+    org_name = bossers_client.get("organisation_name", "")
     
     log.info(f"✅ Gebruik klant-ID: {client_id} (Naam: '{bossers_client['name']}' + Org: '{org_name}')")
     
@@ -373,13 +378,7 @@ def get_main_users():
                 continue
             
             # Haal organisatie naam op voor logging
-            org_name = ""
-            if "organisation" in bossers_client:
-                org = bossers_client["organisation"]
-                if isinstance(org, dict) and "name" in org:
-                    org_name = org["name"]
-                elif isinstance(org, str):
-                    org_name = org
+            org_name = bossers_client.get("organisation_name", "")
             
             main_users.append({
                 "id": user["id"],
@@ -436,13 +435,7 @@ def get_users():
         
         # Haal client en site namen op voor de response
         client_name = bossers_client["name"]
-        org_name = ""
-        if "organisation" in bossers_client:
-            org = bossers_client["organisation"]
-            if isinstance(org, dict) and "name" in org:
-                org_name = org["name"]
-            elif isinstance(org, str):
-                org_name = org
+        org_name = bossers_client.get("organisation_name", "")
         
         full_client_name = f"{client_name} {org_name}".strip()
         site_name = main_site["name"]
@@ -480,14 +473,8 @@ def debug_info():
         all_candidates = []
         
         for c in clients:
-            # Haal organisatie naam op met ULTRA-VEILIGE afhandeling
-            organisation_name = ""
-            if "organisation" in c:
-                org = c["organisation"]
-                if isinstance(org, dict) and "name" in org:
-                    organisation_name = org["name"]
-                elif isinstance(org, str):
-                    organisation_name = org
+            # Haal organisatie naam op
+            organisation_name = c.get("organisation_name", "")
             
             original_name = c.get("name", "Onbekend")
             normalized_name = normalize_name(original_name, organisation_name)
@@ -539,7 +526,7 @@ def debug_info():
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang",
                 "4. Gebruik 'all_possible_candidates' om de exacte spelling te vinden",
                 "5. De integratie combineert nu client-naam en organisatie-naam voor matching",
-                "6. API gebruikt waarschijnlijk 'organisations' (meervoud) in plaats van 'organisation'"
+                "6. API gebruikt mogelijk andere velden voor organisatiegegevens"
             ],
             "hint": "Deze integratie gebruikt ULTRA-FLEXIBELE matching voor klantnamen inclusief organisaties"
         })
@@ -563,7 +550,7 @@ if __name__ == "__main__":
     log.info("✅ Normaliseert namen automatisch voor betere matching")
     log.info("✅ Haalt ORGANISATIES op via includeorganisations=true")
     log.info("✅ Filtert alleen ACTIEVE klanten")
-    log.info("✅ FIX VOOR API STRUCTUUR (meervoud 'organisations' en arrays)")
+    log.info("✅ ULTRA-ROBUSTE extractie van organisatiegegevens")
     log.info("✅ ULTRA-DEBUGGABLE MET VOLLEDIGE RAW DATA LOGGING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
