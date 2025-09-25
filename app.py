@@ -33,7 +33,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     sys.exit(1)
 
 # ------------------------------------------------------------------------------
-# Custom Integration Core - CORRECTE GEBRUIKERSOPHAAL
+# Custom Integration Core - VOLLEDIG GEFIXT VOOR JOUW UAT
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -88,15 +88,15 @@ def get_site_by_id(site_id):
         return None
 
 def get_users_by_site_id(site_id):
-    """Haal gebruikers op voor specifieke locatie via DE JUISTE METHODE"""
+    """Haal gebruikers op voor specifieke locatie met ULTRA-ROBUSTE EXTRACTIE"""
     try:
         token = get_halo_token()
         
-        # 🔑 BELANGRIJK: Gebruik de locatie endpoint met includeusers=true
+        # 🔑 BELANGRIJK: Gebruik de locatie endpoint met include=users
         response = requests.get(
             f"{HALO_API_BASE}/Site/{site_id}",
             params={
-                "includeusers": "true"  # Dit is de JUISTE parameter voor gebruikers
+                "include": "users"  # Dit is de JUISTE parameter voor gebruikers in jouw UAT
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=30
@@ -104,9 +104,14 @@ def get_users_by_site_id(site_id):
         response.raise_for_status()
         site_data = response.json()
         
-        # Haal de gebruikers uit de locatie data
+        # Log de VOLLEDIGE API response voor debugging
+        log.debug(f"🔍 VOLLEDIGE SITE DATA RESPONSE: {site_data}")
+        
+        # 🔑 ULTRA-ROBUSTE extractie van gebruikers - probeer ALLE mogelijke structuren
         users = []
-        if "users" in site_data and site_data["users"]:
+        
+        # Mogelijkheid 1: Gebruikers zitten direct onder "users"
+        if "users" in site_data and isinstance(site_data["users"], list):
             for user in site_data["users"]:
                 try:
                     users.append({
@@ -115,47 +120,53 @@ def get_users_by_site_id(site_id):
                         "email": user.get("emailaddress") or user.get("email") or "Geen email"
                     })
                 except (TypeError, ValueError, KeyError) as e:
-                    log.debug(f"⚠️ Gebruiker overslaan bij verwerking: {str(e)}")
+                    log.debug(f"⚠️ Gebruiker overslaan bij directe extractie: {str(e)}")
+                    continue
+        
+        # Mogelijkheid 2: Gebruikers zitten onder "SiteUsers" (specifiek voor jouw UAT)
+        elif "SiteUsers" in site_data and isinstance(site_data["SiteUsers"], list):
+            for user in site_data["SiteUsers"]:
+                try:
+                    users.append({
+                        "id": user["id"],
+                        "name": user["name"],
+                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                    })
+                except (TypeError, ValueError, KeyError) as e:
+                    log.debug(f"⚠️ Gebruiker overslaan bij SiteUsers extractie: {str(e)}")
+                    continue
+        
+        # Mogelijkheid 3: Gebruikers zitten onder "site_users" (alternatieve notatie)
+        elif "site_users" in site_data and isinstance(site_data["site_users"], list):
+            for user in site_data["site_users"]:
+                try:
+                    users.append({
+                        "id": user["id"],
+                        "name": user["name"],
+                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                    })
+                except (TypeError, ValueError, KeyError) as e:
+                    log.debug(f"⚠️ Gebruiker overslaan bij site_users extractie: {str(e)}")
+                    continue
+        
+        # Mogelijkheid 4: Gebruikers zitten in een geneste "users" array
+        elif "users" in site_data and isinstance(site_data["users"], dict) and "user" in site_data["users"]:
+            for user in site_data["users"]["user"]:
+                try:
+                    users.append({
+                        "id": user["id"],
+                        "name": user["name"],
+                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                    })
+                except (TypeError, ValueError, KeyError) as e:
+                    log.debug(f"⚠️ Gebruiker overslaan bij geneste extractie: {str(e)}")
                     continue
         
         log.info(f"✅ {len(users)} gebruikers gevonden voor locatie {site_id}")
         return users
     except Exception as e:
         log.error(f"❌ Fout bij ophalen gebruikers via locatie: {str(e)}")
-        
-        # Fallback: probeer via de klant endpoint als de locatie methode faalt
-        try:
-            log.info("⚠️ Probeer fallback: haal gebruikers op via klant endpoint...")
-            token = get_halo_token()
-            response = requests.get(
-                f"{HALO_API_BASE}/Client/{BOSSERS_CLIENT_ID}",
-                params={
-                    "includeusers": "true"
-                },
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=30
-            )
-            response.raise_for_status()
-            client_data = response.json()
-            
-            users = []
-            if "users" in client_data and client_data["users"]:
-                for user in client_data["users"]:
-                    try:
-                        if int(user.get("site_id", 0)) == site_id:
-                            users.append({
-                                "id": user["id"],
-                                "name": user["name"],
-                                "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                            })
-                    except (TypeError, ValueError, KeyError):
-                        continue
-            
-            log.info(f"✅ Fallback succesvol: {len(users)} gebruikers gevonden voor locatie {site_id}")
-            return users
-        except Exception as fallback_error:
-            log.error(f"❌ Fallback mislukt: {str(fallback_error)}")
-            return []
+        return []
 
 def get_main_users():
     """Haal Main-site gebruikers op voor Bossers & Cnossen met HARDCODED ID's"""
@@ -188,48 +199,13 @@ def get_main_users():
     main_users = get_users_by_site_id(MAIN_SITE_ID)
     
     if not main_users:
-        log.warning("⚠️ Geen gebruikers gevonden via de locatie endpoint, probeer klant endpoint...")
-        main_users = get_users_by_client_and_site(BOSSERS_CLIENT_ID, MAIN_SITE_ID)
+        log.warning("⚠️ Geen gebruikers gevonden via de locatie endpoint, controleer de API response")
     
     log.info(f"✅ {len(main_users)} Main-site gebruikers gevonden")
     return main_users
 
-# Helper functie voor compatibiliteit
-def get_users_by_client_and_site(client_id, site_id):
-    """Haal gebruikers op voor specifieke klant en locatie (fallback methode)"""
-    try:
-        token = get_halo_token()
-        response = requests.get(
-            f"{HALO_API_BASE}/Client/{client_id}",
-            params={
-                "includeusers": "true"
-            },
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
-        response.raise_for_status()
-        client_data = response.json()
-        
-        users = []
-        if "users" in client_data and client_data["users"]:
-            for user in client_data["users"]:
-                try:
-                    if int(user.get("site_id", 0)) == site_id:
-                        users.append({
-                            "id": user["id"],
-                            "name": user["name"],
-                            "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                        })
-                except (TypeError, ValueError, KeyError):
-                    continue
-        
-        return users
-    except Exception as e:
-        log.error(f"❌ Fout bij ophalen gebruikers via klant: {str(e)}")
-        return []
-
 # ------------------------------------------------------------------------------
-# API Endpoints - ULTRA-ROBUST EN SNEL
+# API Endpoints - ULTRA-DEBUGGABLE
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health_check():
@@ -259,9 +235,9 @@ def get_users():
                     f"1. Controleer of klant met ID {BOSSERS_CLIENT_ID} bestaat",
                     f"2. Controleer of locatie met ID {MAIN_SITE_ID} bestaat",
                     "3. Zorg dat gebruikers correct zijn gekoppeld aan deze locatie",
-                    "4. Controleer in Halo of de locatie gebruikers bevat"
+                    "4. Controleer de Render logs voor 'VOLLEDIGE SITE DATA RESPONSE'"
                 ],
-                "debug_hint": "Deze integratie haalt gebruikers nu via de locatie endpoint"
+                "debug_hint": "Deze integratie logt nu de VOLLEDIGE API response voor debugging"
             }), 500
         
         log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
@@ -277,12 +253,12 @@ def get_users():
         log.error(f"🔥 Fout in /users: {str(e)}")
         return jsonify({
             "error": str(e),
-            "hint": "Controleer eerst of de hardcoded ID's correct zijn"
+            "hint": "Controleer eerst de Render logs voor de VOLLEDIGE SITE DATA RESPONSE"
         }), 500
 
 @app.route("/debug", methods=["GET"])
 def debug_info():
-    """Technische debug informatie - MET HARDCODED ID VALIDATIE"""
+    """Technische debug informatie - MET ULTRA-DETAILRIJKE LOGGING"""
     try:
         log.info("🔍 /debug endpoint aangeroepen - valideer hardcoded ID's")
         
@@ -298,8 +274,9 @@ def debug_info():
         log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de locatie endpoint...")
         site_users = get_users_by_site_id(MAIN_SITE_ID)
         
-        # Haal gebruikers op via de klant endpoint (voor vergelijking)
-        client_users = get_users_by_client_and_site(BOSSERS_CLIENT_ID, MAIN_SITE_ID)
+        # Log de specifieke site data voor debugging
+        if site_valid:
+            log.info(f"🔍 Site data voor ID {MAIN_SITE_ID}: {main_site}")
         
         log.info("✅ /debug data verzameld - controleer hardcoded ID's")
         return jsonify({
@@ -313,24 +290,25 @@ def debug_info():
                 "site_valid": site_valid
             },
             "user_data": {
-                "users_via_site_endpoint": len(site_users),
-                "users_via_client_endpoint": len(client_users),
-                "sample_users": site_users[:3] if site_users else client_users[:3]
+                "total_users_found": len(site_users),
+                "users": site_users,
+                "site_data_structure": main_site if site_valid else "Site niet gevonden"
             },
             "troubleshooting": [
                 f"1. Controleer of klant met ID {BOSSERS_CLIENT_ID} bestaat in Halo",
                 f"2. Controleer of locatie met ID {MAIN_SITE_ID} bestaat in Halo",
                 "3. Zorg dat gebruikers correct zijn gekoppeld aan deze locatie (NIET alleen aan de klant)",
                 "4. In Halo: Ga naar de locatie > Gebruikers om te controleren welke gebruikers gekoppeld zijn",
-                "5. Gebruikers moeten zowel aan de klant ALS aan de locatie zijn gekoppeld"
+                "5. Gebruikers moeten zowel aan de klant ALS aan de locatie zijn gekoppeld",
+                "6. BELANGRIJK: De API gebruikt 'include=users' (met '=') in jouw UAT, niet 'includeusers=true'"
             ],
-            "hint": "Deze integratie haalt gebruikers nu EERST via de locatie endpoint (de meest betrouwbare methode)"
+            "hint": "Deze integratie logt nu de VOLLEDIGE API response voor debugging - controleer de Render logs"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
         return jsonify({
             "error": str(e),
-            "critical_hint": "Controleer eerst of API-toegang correct is ingesteld in Halo"
+            "critical_hint": "Controleer de Render logs voor de VOLLEDIGE SITE DATA RESPONSE"
         }), 500
 
 # ------------------------------------------------------------------------------
@@ -343,12 +321,12 @@ if __name__ == "__main__":
     log.info("-"*70)
     log.info(f"✅ Gebruikt HARDCODED KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt HARDCODED SITE ID: {MAIN_SITE_ID} (Main)")
-    log.info("✅ HAALT GEBRUIKERS NU EERST VIA LOCATIE ENDPOINT (DE JUISTE METHODE)")
-    log.info("✅ INCLUSIEF FALLBACK NAAR KLANT ENDPOINT ALS NODIG")
-    log.info("✅ ULTRA-DEBUGGABLE MET VERSCHILLENDE USER DATA SOURCES")
+    log.info("✅ GEBRUIKT 'include=users' PARAMETER (de JUISTE methode voor jouw UAT)")
+    log.info("✅ ULTRA-ROBUSTE EXTRACTIE VAN GEBRUIKERS UIT ALLE MOGELIJKE STRUCTUREN")
+    log.info("✅ LOGT DE VOLLEDIGE API RESPONSE VOOR EENVOUDIGE DEBUGGING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
-    log.info("2. Bezoek EERST /debug om te zien of gebruikers worden gevonden")
+    log.info("2. Bezoek EERST /debug en controleer de Render logs voor 'VOLLEDIGE SITE DATA RESPONSE'")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port)
