@@ -78,6 +78,36 @@ def get_halo_token():
             log.critical(f"➡️ Response: {response.text}")
         raise
 
+def get_client_by_id(client_id):
+    """Haal een specifieke klant op via ID (GEHERSTELD)"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Client/{client_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen klant met ID {client_id}: {str(e)}")
+        return None
+
+def get_site_by_id(site_id):
+    """Haal een specifieke locatie op via ID (GEHERSTELD)"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Site/{site_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
+        return None
+
 def get_users_by_site_id(site_id, client_id):
     """Haal gebruikers op voor specifieke locatie met UAT-specifieke normalisatie"""
     log.info(f"🔍 Haal gebruikers op voor locatie {site_id} (Main-site)...")
@@ -285,7 +315,7 @@ def debug_info():
         return jsonify({
             "status": "debug_info",
             "environment": "UAT",
-            "integration_version": "3.1",
+            "integration_version": "3.2",
             "hardcoded_ids": {
                 "bossers_client_id": BOSSERS_CLIENT_ID,
                 "client_name": bossers_client.get("name", "Niet gevonden") if client_valid else "Niet gevonden",
