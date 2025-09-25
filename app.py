@@ -211,7 +211,7 @@ def get_halo_user_id(email: str):
 log.info("✅ Gebruikers cache functies geregistreerd")
 
 # ------------------------------------------------------------------------------
-# Halo Tickets (FIX VOOR TICKETTYPE 65 - ZONDER CUSTOM FIELDS)
+# Halo Tickets (GEFIXT VOOR HALO API ARRAY VERWACHTING)
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
@@ -233,6 +233,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     }
     
     # ✅ GEBRUIKER KOPPELEN MET USERID
+    if requester主席
     if requester_id:
         body["UserID"] = int(requester_id)
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
@@ -240,8 +241,15 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         log.warning("⚠️ Geen gebruiker gevonden in Halo voor het opgegeven e-mailadres")
     
     try:
-        log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
+        # ✅ CRUCIALE FIX: Wrap ticket in array voor Halo API
+        request_body = [body]
+        log.debug(f"➡️ Halo API aanroep voor basis ticket: {request_body}")
+        r = requests.post(
+            f"{HALO_API_BASE}/Tickets",
+            headers=h,
+            json=request_body,  # Nu een array in plaats van object
+            timeout=15
+        )
         
         if r.status_code not in (200, 201):
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code} - {r.text[:500]}")
@@ -250,14 +258,20 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             return None
             
         log.info("✅ Basis ticket succesvol aangemaakt")
-        ticket = r.json()
-        ticket_id = ticket.get("ID") or ticket.get("id")
         
-        if not ticket_id:
-            log.error("❌ Ticket ID niet gevonden in antwoord")
+        # ✅ FIX: Verwerk array response
+        response_data = r.json()
+        if isinstance(response_data, list) and len(response_data) > 0:
+            ticket = response_data[0]  # Eerste ticket uit de array
+            ticket_id = ticket.get("ID") or ticket.get("id")
+            if ticket_id:
+                log.info(f"🎫 Ticket ID: {ticket_id}")
+            else:
+                log.error("❌ Ticket ID niet gevonden in antwoord")
+                return None
+        else:
+            log.error("❌ Ongeldig antwoord van Halo API - geen ticket ontvangen")
             return None
-            
-        log.info(f"🎫 Ticket ID: {ticket_id}")
         
         # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
         log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
@@ -536,6 +550,7 @@ if __name__ == "__main__":
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
     log.info("✅ GEEN CUSTOM FIELDS - ALLES GAAT NAAR PUBLIC NOTE")
     log.info("✅ USERID WORDT GEKOPPELD AAN DE AANMAKER")
+    log.info("✅ FIX VOOR HALO API ARRAY VERWACHTING")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
