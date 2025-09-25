@@ -54,7 +54,7 @@ def get_normalized_id(user, field_name):
     return None
 
 # ------------------------------------------------------------------------------
-# GEUPDATE INTEGRATIE LOGICA
+# GEUPDATE INTEGRATIE LOGICA MET PAGINERING
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -108,32 +108,65 @@ def get_site_by_id(site_id):
         log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
         return None
 
-def get_users_by_site_id(site_id, client_id):
-    """Haal gebruikers op voor specifieke locatie met UAT-specifieke normalisatie"""
-    log.info(f"🔍 Haal gebruikers op voor locatie {site_id} (Main-site)...")
+def get_all_users_for_site(site_id):
+    """Haal ALLE gebruikers op voor een locatie met paginering (UAT-specifiek)"""
     token = get_halo_token()
-    users = []
+    all_users = []
+    page = 1
+    page_size = 50  # Halo API retourneert standaard 50 items per pagina
     
-    try:
-        # UAT-specifieke aanvraag (geen /Site/{id}/Users endpoint)
+    log.info(f"📚 Start paginering voor locatie {site_id} (50 gebruikers per pagina)")
+    
+    while True:
+        log.info(f"🔍 Ophalen gebruikers - Pagina {page} ({page_size} per pagina)...")
+        
         response = requests.get(
             f"{HALO_API_BASE}/Users",
             params={
                 "include": "site,client",
-                "site_id": site_id
+                "site_id": site_id,
+                "page": page,
+                "page_size": page_size
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=30
         )
+        
         response.raise_for_status()
         data = response.json()
-        all_users = data.get("users", [])
+        
+        # Haal gebruikers op uit de response
+        users = data.get("users", [])
+        if not users:
+            log.info("✅ Geen verdere gebruikers gevonden - einde bereikt")
+            break
+            
+        all_users.extend(users)
+        log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal verzameld: {len(all_users)})")
+        
+        # Controleer of we klaar zijn (minder gebruikers dan page_size betekent einde)
+        if len(users) < page_size:
+            log.info("✅ Alle pagina's opgehaald - geen verdere pagina's nodig")
+            break
+            
+        page += 1
+    
+    log.info(f"🎉 SUCCES: {len(all_users)} gebruikers opgehaald voor locatie {site_id} (inclusief alle pagina's)")
+    return all_users
+
+def get_users_by_site_id(site_id, client_id):
+    """Haal gebruikers op voor specifieke locatie met UAT-specifieke normalisatie en paginering"""
+    log.info(f"🔍 Haal gebruikers op voor locatie {site_id} (Main-site)...")
+    
+    try:
+        # Haal ALLE gebruikers op met paginering
+        all_users = get_all_users_for_site(site_id)
         
         if not all_users:
-            log.error(f"❌ Geen gebruikers gevonden in de API-response voor site {site_id}")
+            log.error(f"❌ Geen gebruikers gevonden voor site {site_id}")
             return []
         
-        # Log API response structuur voor debugging
+        # Log API response structuur voor debugging (alleen voor de eerste gebruiker)
         first_user = all_users[0]
         log.info("🔍 API RESPONSE STRUCTUUR (EERSTE GEBRUIKER):")
         log.info(f" - Directe velden: {list(first_user.keys())}")
@@ -149,6 +182,7 @@ def get_users_by_site_id(site_id, client_id):
         log.info(f" - Verwachte locatie ID: {expected_site_id} (gebaseerd op {site_id})")
         
         # Filter gebruikers met UAT-specifieke normalisatie
+        users = []
         for user in all_users:
             try:
                 # Haal en normaliseer IDs
@@ -165,15 +199,15 @@ def get_users_by_site_id(site_id, client_id):
                     "site_match": user_site_id == expected_site_id
                 }
                 
-                # Log alleen als er een mismatch is voor debugging
+                # Alleen toevoegen als beide matchen
                 if debug_info["client_match"] and debug_info["site_match"]:
-                    log.debug(f"✅ Gebruiker '{user['name']}' GEVONDEN (ID: {user['id']})")
                     users.append({
                         "id": user["id"],
                         "name": user["name"],
                         "email": user.get("emailaddress") or user.get("email") or "Geen email",
                         "debug": debug_info
                     })
+                    log.debug(f"✅ Gebruiker '{user['name']}' GEVONDEN (ID: {user['id']})")
                 else:
                     mismatch_reasons = []
                     if not debug_info["client_match"]:
@@ -271,7 +305,8 @@ def get_users():
             "site_name": main_site.get("name", "Onbekend") if main_site else "Niet gevonden",
             "total_users": len(main_users),
             "users": main_users,
-            "environment": "UAT"
+            "environment": "UAT",
+            "pagination_note": "Alle pagina's zijn opgehaald - geen gebruikers gemist"
         })
     except Exception as e:
         log.error(f"🔥 Fout in /users: {str(e)}")
@@ -297,6 +332,9 @@ def debug_info():
         # Haal gebruikers op met UAT-specifieke logica
         site_users = get_users_by_site_id(MAIN_SITE_ID, BOSSERS_CLIENT_ID)
         
+        # Haal alle gebruikers op voor paginering test
+        all_site_users = get_all_users_for_site(MAIN_SITE_ID)
+        
         # Analyseer API response voor problemen
         problem_analysis = []
         if not site_valid:
@@ -304,7 +342,7 @@ def debug_info():
         if not client_valid:
             problem_analysis.append("Klant niet gevonden - Controleer of ID 986 bestaat in UAT")
         if site_users:
-            problem_analysis.append("Gebruikers gevonden - Integratie werkt correct!")
+            problem_analysis.append(f"Gebruikers gevonden - {len(site_users)} Main-site gebruikers gevalideerd")
         else:
             problem_analysis.append("GEEN gebruikers gevonden - Mogelijke oorzaken:")
             problem_analysis.append("• Gebruikers zijn alleen aan de klant gekoppeld, niet aan de locatie")
@@ -315,7 +353,7 @@ def debug_info():
         return jsonify({
             "status": "debug_info",
             "environment": "UAT",
-            "integration_version": "3.2",
+            "integration_version": "4.0",
             "hardcoded_ids": {
                 "bossers_client_id": BOSSERS_CLIENT_ID,
                 "client_name": bossers_client.get("name", "Niet gevonden") if client_valid else "Niet gevonden",
@@ -326,6 +364,7 @@ def debug_info():
             },
             "api_validation": {
                 "total_users_found": len(site_users),
+                "total_users_in_system": len(all_site_users),
                 "api_endpoint_used": f"{HALO_API_BASE}/Users",
                 "request_parameters": {
                     "include": "site,client",
@@ -333,13 +372,20 @@ def debug_info():
                 },
                 "problem_analysis": problem_analysis
             },
+            "pagination_analysis": {
+                "total_users_in_system": len(all_site_users),
+                "users_per_page": 50,
+                "total_pages": (len(all_site_users) + 49) // 50,
+                "users_matched_filters": len(site_users)
+            },
             "user_sample": site_users[:3] if site_users else [],
             "troubleshooting": [
                 "1. In Halo: Ga naar de locatie > Gebruikers (NIET de klant > Gebruikers)",
                 "2. Zorg dat gebruikers ZOWEL aan de klant ALS aan de locatie zijn gekoppeld",
                 "3. Controleer de Render logs op 'API RESPONSE STRUCTUUR' voor exacte ID-formaten",
                 "4. UAT retourneert vaak floats als strings (bijv. '992.0' i.p.v. 992)",
-                "5. Gebruik /debug om de exacte ID-waarden te zien die de API retourneert"
+                "5. Gebruik /debug om de exacte ID-waarden te zien die de API retourneert",
+                "6. De integratie haalt NU ALLE PAGINA'S op (geen gebruikers gemist)"
             ]
         })
     except Exception as e:
@@ -360,10 +406,10 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt SITE ID: {MAIN_SITE_ID} (Main)")
     log.info("✅ UAT-SPECIFIEKE NORMALISATIE INGEBOUWD VOOR ID TYPES")
-    log.info("✅ DIRECTE VERWERKING VAN API RESPONSE ZONDER TYPE-AFNHANKELIJKHEID")
+    log.info("✅ PAGINERING INGEBOUWD VOOR ALLE GEBRUIKERS (GEEN GEBRUIKERS GEMIST)")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
-    log.info("2. Bezoek EERST /debug en controleer de 'API RESPONSE STRUCTUUR' in de logs")
+    log.info("2. Bezoek EERST /debug en controleer de 'pagination_analysis' sectie")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port)
