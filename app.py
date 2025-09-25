@@ -7,9 +7,9 @@ from urllib3.util.retry import Retry
 # ------------------------------------------------------------------------------
 # FORCEER LOGGING NAAR STDOUT (GEEN BUFFERING)
 # ------------------------------------------------------------------------------
-sys.stdout.reconfigure(line_buffering=True)  # Zorgt dat logs direct verschijnen
+sys.stdout.reconfigure(line_buffering=True)
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG voor maximale informatie
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -238,7 +238,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
     
-    # ✅ CORRECTE STRUCTUUR VOOR HALO API (GEEN USERID MAAR REQUESTER)
+    # ✅ CORRECTE STRUCTUUR VOOR HALO API (GEEN REQUESTER OBJECT)
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
@@ -250,12 +250,12 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "UrgencyID": int(urgency_id)
     }
     
-    # ✅ CRUCIALE FIX: GEBRUIK REQUESTER OBJECT IN PLAATS VAN USERID
+    # ✅ CRUCIALE FIX: GEBRUIK USERID IN PLAATS VAN REQUESTER OBJECT
     if requester_id:
-        body["Requester"] = {"ID": int(requester_id)}
+        body["UserID"] = int(requester_id)  # ✅ Dit is de juiste manier voor UAT
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
     else:
-        log.warning("⚠️ Geen gebruiker gevonden - ticket zonder Requester")
+        log.warning("⚠️ Geen gebruiker gevonden - ticket zonder UserID")
     
     try:
         log.debug(f"➡️ Halo API aanroep met body: {body}")
@@ -536,7 +536,7 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ DEFINTIEVE FIX VOOR 400-ERROR (REQUESTER OBJECT)")
+    log.info("✅ FIX VOOR 400-ERROR (GEEN REQUESTER OBJECT)")
     log.info("✅ ALLE LOGS ZIJN ZICHTBAAR IN RENDER")
     log.info("-"*70)
     
