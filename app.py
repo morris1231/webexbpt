@@ -123,12 +123,15 @@ def fetch_all_users():
                 first_user = users_page[0]
                 log.info("🔍 STRUCTUUR VAN EERSTE GEBRUIKER:")
                 log.info(f" - ID: {first_user.get('id', 'Onbekend')}")
-                log.info(f" - Naam: {first pari
+                log.info(f" - Naam: {first_user.get('name', 'Onbekend')}")
                 log.info(f" - Client ID: {first_user.get('client_id', 'Onbekend')}")
                 log.info(f" - Site ID: {first_user.get('site_id', 'Onbekend')}")
                 log.info(f" - Site Object: {first_user.get('site', 'Onbekend')}")
                 log.info(f" - Site Name: {first_user.get('site_name', 'Onbekend')}")
-                log.info(f" - Site ID (via site object): {first_user.get('site', {}).get('id', 'Onbekend') if isinstance(first_user.get('site'), dict) else 'Geen dict')}")
+                site_id_debug = 'Onbekend'
+                if isinstance(first_user.get('site'), dict):
+                    site_id_debug = first_user['site'].get('id', 'Onbekend')
+                log.info(f" - Site ID (via site object): {site_id_debug}")
             
             # Filter alleen unieke gebruikers
             new_users = []
