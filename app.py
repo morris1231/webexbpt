@@ -44,7 +44,7 @@ else:
 
 # Halo API endpoints
 HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
-HALO_API_BASE = "https://bncuat.halopsa.com/api/v1"  # ✅ CRUCIALE FIX: /api/v1 IN PLAATS VAN /api
+HALO_API_BASE = "https://bncuat.halopsa.com/api"  # ✅ CRUCIALE FIX: GEEN /v1
 log.info(f"✅ Halo API endpoints ingesteld: {HALO_AUTH_URL} en {HALO_API_BASE}")
 
 # Halo ticket instellingen
@@ -129,55 +129,94 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
             "page_size": page_size
         }
         try:
-            log.debug(f"➡️ API aanvraag met parameters: {params}")
-            log.debug(f"➡️ API URL: {HALO_API_BASE}/Users")
+            # ✅ CRUCIALE FIX: Gebruik de juiste endpoint structuur voor UAT
+            endpoint = "/Users"
+            log.debug(f"➡️ API URL: {HALO_API_BASE}{endpoint}")
+            log.debug(f"➡️ API parameters: {params}")
             
             r = requests.get(
-                f"{HALO_API_BASE}/Users",
+                f"{HALO_API_BASE}{endpoint}",
                 headers=h,
                 params=params,
                 timeout=15
             )
             
-            if r.status_code != 200:
-                log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
-                log.error(f"➡️ Response: {r.text}")
-                break
+            if r.status_code == 200:
+                data = r.json()
                 
-            data = r.json()
-            
-            # ✅ CRUCIALE FIX: Handel meerdere response structuren af
-            users = []
-            if 'users' in data:
-                users = data['users']
-            elif isinstance(data, list):
-                users = data
-            elif 'Items' in data:
-                users = data['Items']
+                # ✅ CRUCIALE FIX: Handel meerdere response structuren af
+                users = []
+                if 'users' in data:
+                    users = data['users']
+                elif isinstance(data, list):
+                    users = data
+                elif 'Items' in data:
+                    users = data['Items']
+                else:
+                    users = data
+                
+                log.debug(f"⬅️ API response ontvangen: {len(users)} gebruikers gevonden")
+                
+                if not users:
+                    log.info(f"✅ Geen gebruikers gevonden op pagina {page} - einde bereikt")
+                    break
+                    
+                # ✅ CRUCIALE FIX: Log de werkelijke waarden voor debugging
+                for user in users:
+                    client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
+                    site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
+                    email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
+                    log.info(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+                    
+                all_users.extend(users)
+                log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
+                
+                if len(users) < page_size:
+                    log.info("✅ Minder gebruikers dan page_size - einde bereikt")
+                    break
+                    
+                page += 1
             else:
-                users = data
+                # ✅ CRUCIALE FIX: Probeer alternatieve endpoint als eerste mislukt
+                log.warning(f"⚠️ Fout bij ophalen pagina {page} via standaard endpoint (HTTP {r.status_code}), probeer alternatief...")
                 
-            log.debug(f"⬅️ API response ontvangen: {len(users)} gebruikers gevonden")
-            
-            if not users:
-                log.info(f"✅ Geen gebruikers gevonden op pagina {page} - einde bereikt")
-                break
+                # Alternatief 1: Gebruik /Person endpoint
+                endpoint = "/Person"
+                log.debug(f"➡️ Probeer alternatief API URL: {HALO_API_BASE}{endpoint}")
                 
-            # ✅ CRUCIALE FIX: Log de werkelijke waarden voor debugging
-            for user in users:
-                client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
-                site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
-                email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
-                log.info(f"👤 Gebruiker gevonden - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+                r = requests.get(
+                    f"{HALO_API_BASE}{endpoint}",
+                    headers=h,
+                    params=params,
+                    timeout=15
+                )
                 
-            all_users.extend(users)
-            log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
-            
-            if len(users) < page_size:
-                log.info("✅ Minder gebruikers dan page_size - einde bereikt")
-                break
-                
-            page += 1
+                if r.status_code == 200:
+                    data = r.json()
+                    users = data.get('person', []) or data
+                    
+                    if not users:
+                        log.info(f"✅ Geen gebruikers gevonden op pagina {page} via alternatief endpoint")
+                        break
+                        
+                    # Log de gebruikers voor debugging
+                    for user in users:
+                        client_id_val = user.get('client_id', user.get('ClientID', 'N/A'))
+                        site_id_val = user.get('site_id', user.get('SiteID', 'N/A'))
+                        email_val = user.get('EmailAddress', user.get('emailaddress', 'N/A'))
+                        log.info(f"👤 Gebruiker gevonden (alternatief) - ID: {user.get('id', 'N/A')}, Email: {email_val}, ClientID: {client_id_val}, SiteID: {site_id_val}")
+                        
+                    all_users.extend(users)
+                    log.info(f"📥 Pagina {page} opgehaald via alternatief endpoint: {len(users)} gebruikers (Totaal: {len(all_users)})")
+                    
+                    if len(users) < page_size:
+                        break
+                        
+                    page += 1
+                else:
+                    log.error(f"❌ Fout bij ophalen pagina {page} via alternatief endpoint: HTTP {r.status_code}")
+                    log.error(f"➡️ Response: {r.text}")
+                    break
         except Exception as e:
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
@@ -298,7 +337,6 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         # ✅ CRUCIALE FIX: Wrap ticket in array voor Halo API
         request_body = [body]
         log.debug(f"➡️ Halo API aanroep voor basis ticket: {request_body}")
-        log.debug(f"➡️ API URL: {HALO_API_BASE}/Tickets")
         
         r = requests.post(
             f"{HALO_API_BASE}/Tickets",
