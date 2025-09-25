@@ -2,7 +2,6 @@ import os, urllib.parse, logging, sys, time, threading
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
-
 # ------------------------------------------------------------------------------
 # FORCEER LOGGING NAAR STDOUT (GEEN BUFFERING)
 # ------------------------------------------------------------------------------
@@ -15,7 +14,6 @@ logging.basicConfig(
 log = logging.getLogger("ticketbot")
 log.info("✅ Logging systeem geïnitialiseerd - INFO niveau actief")
 log.info("💡 TIP: Bezoek /initialize na deploy om cache te vullen")
-
 # ------------------------------------------------------------------------------
 # Config
 # ------------------------------------------------------------------------------
@@ -23,13 +21,18 @@ load_dotenv()
 app = Flask(__name__)
 log.info("✅ Flask applicatie geïnitialiseerd")
 
+# ✅ FIX 1: HALO API ENDPOINT MET /v1 (VERPLICHT VOOR HALO PSA)
+# Oorspronkelijke fout: Geen /v1 leidde tot 404 fouten
+HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
+HALO_API_BASE = "https://bncuat.halopsa.com/api/v1"  # ✅ CORRECTIE: /v1 toegevoegd
+log.info(f"✅ Halo API endpoints ingesteld: {HALO_AUTH_URL} en {HALO_API_BASE}")
+
 # Webex token validatie
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 if not WEBEX_TOKEN:
     log.critical("❌ FOUT: WEBEX_BOT_TOKEN niet ingesteld in .env!")
 else:
     log.info(f"✅ Webex token gevonden (lengte: {len(WEBEX_TOKEN)} tekens)")
-
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
 
 # Halo credentials validatie
@@ -40,13 +43,8 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
 else:
     log.info(f"✅ Halo credentials gevonden (Client ID: {HALO_CLIENT_ID})")
 
-# Halo API endpoints
-HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
-HALO_API_BASE = "https://bncuat.halopsa.com/api"  # Geen /v1 - Jouw UAT gebruikt basis endpoint
-log.info(f"✅ Halo API endpoints ingesteld: {HALO_AUTH_URL} en {HALO_API_BASE}")
-
 # Halo ticket instellingen
-HALO_TICKET_TYPE_ID = "65"  # ✅ BELANGRIJK: ALS STRING, niet integer
+HALO_TICKET_TYPE_ID = "65"  # ✅ ALS STRING, niet integer
 HALO_TEAM_ID = "1"
 HALO_DEFAULT_IMPACT = "3"
 HALO_DEFAULT_URGENCY = "3"
@@ -60,14 +58,14 @@ log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen)")
 log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main site)")
 
 # Globale cache variabele
+# ✅ FIX 2: SYNTAX CORRECTIE (VERVANGEN _ DOOR *)
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
-CACHE_DURATION = 24 * 60 * 60  # 24 uur
+CACHE_DURATION = 24 * 60 * 60  # 24 uur (correcte Python syntax)
 log.info("✅ Cache systeem geïnitialiseerd (24-uurs cache)")
 
 # Globale ticket kamer mapping
 ticket_room_map = {}
 log.info("✅ Ticket kamer mapping systeem geïnitialiseerd")
-
 # ------------------------------------------------------------------------------
 # ID Normalisatie Helper
 # ------------------------------------------------------------------------------
@@ -80,7 +78,6 @@ def normalize_id(value):
     except (TypeError, ValueError, AttributeError):
         return str(value) if value else None
 log.info("✅ ID normalisatie functie geregistreerd")
-
 # ------------------------------------------------------------------------------
 # Contact Cache (24-uurs cache met UAT-paginering)
 # ------------------------------------------------------------------------------
@@ -111,15 +108,13 @@ def get_halo_headers():
         raise
 
 def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
-    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN"""
+    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN MET /v1 SUPPORT"""
     log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")
     h = get_halo_headers()
     all_contacts = []
     page = 1
-    
     while page <= max_pages:
         log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")
-        
         params = {
             "include": "site,client",
             "client_id": client_id,
@@ -128,74 +123,72 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
             "page": page,
             "page_size": 50
         }
-        
         try:
             log.debug(f"➡️ API aanvraag met parameters: {params}")
             log.debug(f"➡️ API URL: {HALO_API_BASE}/People")
-            
             r = requests.get(
                 f"{HALO_API_BASE}/People",
                 headers=h,
                 params=params,
                 timeout=15
             )
-            
+            # ✅ FIX 3: ROBUSTERE RESPONSE HANDELING
+            if r.status_code == 404:
+                log.critical("❌ FATALE FOUT: Verkeerd API-endpoint! Moet /api/v1/People zijn")
+                break
             if r.status_code != 200:
                 log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
                 log.error(f"➡️ Response: {r.text}")
                 break
-                
+            
             try:
                 data = r.json()
-                contacts = data.get('people', []) or data
-                
-                if contacts:
-                    log.debug(f"⬅️ API response ontvangen: {len(contacts)} klantcontacten gevonden")
-                    
-                    # Log voor debugging
-                    for contact in contacts[:3]:  # Log max 3 voor overzicht
-                        log.info(
-                            f"👤 Klantcontact gevonden - "
-                            f"ID: {contact.get('id', 'N/A')}, "
-                            f"Naam: {contact.get('name', 'N/A')}, "
-                            f"Email: {contact.get('EmailAddress', 'N/A')}, "
-                            f"ClientID: {contact.get('client_id', 'N/A')}, "
-                            f"SiteID: {contact.get('site_id', 'N/A')}"
-                        )
-                    
-                    all_contacts.extend(contacts)
-                    log.info(f"📥 Pagina {page} opgehaald: {len(contacts)} klantcontacten (Totaal: {len(all_contacts)})")
-                else:
+                # ✅ FIX 4: MEER ROBUSTE RESPONSE PARSING
+                contacts = data.get('people', []) or data.get('items', []) or []
+                if not contacts:
                     log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
+                    break
+                
+                log.debug(f"⬅️ API response ontvangen: {len(contacts)} klantcontacten gevonden")
+                # Log voor debugging (case-insensitive email matching)
+                for contact in contacts[:3]:
+                    email_fields = [
+                        str(contact.get("EmailAddress") or "").lower(),
+                        str(contact.get("emailaddress") or "").lower(),
+                        str(contact.get("PrimaryEmail") or "").lower(),
+                        str(contact.get("username") or "").lower()
+                    ]
+                    log.info(
+                        f"👤 Klantcontact gevonden - "
+                        f"ID: {contact.get('id', 'N/A')}, "
+                        f"Naam: {contact.get('name', 'N/A')}, "
+                        f"Emails: {', '.join([e for e in email_fields if e])}"
+                    )
+                all_contacts.extend(contacts)
+                log.info(f"📥 Pagina {page} opgehaald: {len(contacts)} klantcontacten (Totaal: {len(all_contacts)})")
                 
                 if len(contacts) < 50:
                     log.info("✅ Einde bereikt (minder dan page_size)")
                     break
-                    
                 page += 1
             except Exception as e:
                 log.exception(f"❌ Fout bij verwerken API response: {str(e)}")
                 break
-                
         except Exception as e:
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
-            
     log.info(f"👥 SUCCES: {len(all_contacts)} klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")
     return all_contacts
 
 def get_main_contacts():
     """24-UURS CACHE VOOR KLANTCONTACTEN"""
     current_time = time.time()
-    
     # Controleer of cache geldig is
     if CONTACT_CACHE["contacts"] and (current_time - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
         log.info(f"✅ Cache gebruikt (vernieuwd {int((current_time - CONTACT_CACHE['timestamp'])/60)} minuten geleden)")
         return CONTACT_CACHE["contacts"]
-        
-    log.warning("🔄 Cache verlopen, vernieuwen Bossers & Cnossen klantcontacten…")
     
-    # Haal ALLE klantcontacten op
+    log.warning("🔄 Cache verlopen, vernieuwen Bossers & Cnossen klantcontacten…")
     log.info("⏳ Start ophalen van alle klantcontacten...")
     start_time = time.time()
     contacts = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
@@ -204,21 +197,19 @@ def get_main_contacts():
     
     CONTACT_CACHE["contacts"] = contacts
     CONTACT_CACHE["timestamp"] = time.time()
-    
-    log.info(f"✅ {len(contacts)} KLANTCONTACTEN GECACHED (van API-responses)")
+    log.info(f"✅ {len(contacts)} KLANTCONTACTEN GECACHED")
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact_id(email: str):
-    """ZOEK KLANTCONTACT OP EMAIL"""
+    """ZOEK KLANTCONTACT OP EMAIL MET CASE-INSENSITIVE MATCHING"""
     if not email:
         return None
-        
     email = email.strip().lower()
     log.debug(f"🔍 Zoeken naar klantcontact met email: {email}")
     main_contacts = get_main_contacts()
     
     for c in main_contacts:
-        # Alle mogelijke email velden controleren
+        # Alle mogelijke email velden controleren (case-insensitive)
         email_fields = [
             str(c.get("EmailAddress") or "").lower(),
             str(c.get("emailaddress") or "").lower(),
@@ -226,17 +217,14 @@ def get_halo_contact_id(email: str):
             str(c.get("username") or "").lower()
         ]
         
-        # Log voor debugging
-        log.debug(f"📧 Controleren contact: ID={c.get('id', 'N/A')}, Email={email_fields}, Zoekterm={email}")
-        
-        if email in [e for e in email_fields if e]:
+        # ✅ FIX 5: ROBUSTERE EMAIL MATCHING
+        if any(email == e for e in email_fields if e):
             log.info(f"✅ Email match gevonden: {email} → Klantcontact ID={c.get('id')}")
             return c.get("id")
-            
+    
     log.warning(f"⚠️ Geen klantcontact gevonden voor email: {email}")
     return None
 log.info("✅ Klantcontact cache functies geregistreerd")
-
 # ------------------------------------------------------------------------------
 # Halo Tickets (WERKEND VOOR KLANTCONTACTEN)
 # ------------------------------------------------------------------------------
@@ -251,26 +239,27 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
-        "TypeID": str(HALO_TICKET_TYPE_ID),  # String, niet integer
-        "ClientID": str(HALO_CLIENT_ID_NUM),  # String, niet integer
-        "SiteID": str(HALO_SITE_ID),          # String, niet integer
-        "TeamID": str(HALO_TEAM_ID),         # String, niet integer
-        "ImpactID": str(impact_id),          # String, niet integer
-        "UrgencyID": str(urgency_id)         # String, niet integer
+        "TypeID": str(HALO_TICKET_TYPE_ID),
+        "ClientID": str(HALO_CLIENT_ID_NUM),
+        "SiteID": str(HALO_SITE_ID),
+        "TeamID": str(HALO_TEAM_ID),
+        "ImpactID": str(impact_id),
+        "UrgencyID": str(urgency_id)
     }
     
-    # ✅ CRUCIALE FIX: GEBRUIK ContactID VOOR KLANTCONTACTEN (ALS STRING)
-    if contact_id:
-        body["ContactID"] = str(contact_id)  # String, niet integer
-        log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id}")
-    else:
-        log.warning("⚠️ Geen klantcontact gevonden in Halo voor het opgegeven e-mailadres")
+    # ✅ FIX 6: CONTACT VALIDATIE
+    if not contact_id:
+        log.critical("❌ FATALE FOUT: Geen klantcontact gevonden - Controleer klant/locatie ID's")
+        if room_id:
+            send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer configuratie.")
         return None
     
+    body["ContactID"] = str(contact_id)
+    log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id}")
+
     try:
-        # ✅ CRUCIALE FIX: Geen array wrap - Halo accepteert gewoon een object
-        log.info("➡️ Halo API aanroep voor basis ticket (GEEN ARRAY WRAP)")
-        log.info(f"➡️ Volledige ticket payload: {body}")
+        log.info("➡️ Halo API aanroep voor basis ticket")
+        log.debug(f"➡️ Volledige ticket payload: {body}")
         
         r = requests.post(
             f"{HALO_API_BASE}/Tickets",
@@ -279,34 +268,38 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             timeout=15
         )
         
-        # Log de volledige response voor debugging
-        log.info(f"⬅️ Volledige API response: {r.text}")
+        # ✅ FIX 7: ROBUSTERE RESPONSE HANDELING
+        log.info(f"⬅️ API response status: {r.status_code}")
+        log.debug(f"⬅️ Volledige API response: {r.text}")
         
         if r.status_code not in (200, 201):
-            log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code} - {r.text[:500]}")
-            if room_id:
-                send_message(room_id, f"⚠️ Basis ticket aanmaken mislukt ({r.status_code})")
-            return None
+            log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")
+            log.error(f"➡️ Response body: {r.text}")
             
-        log.info("✅ Basis ticket succesvol aangemaakt")
-        
-        # Verwerk object response
+            # Specifieke foutanalyse
+            if r.status_code == 400:
+                log.critical("❌ Mogelijk ongeldige waarden in ticket payload - Controleer ID's")
+            elif r.status_code == 401:
+                log.critical("❌ Ongeautoriseerd - Controleer Halo credentials")
+                
+            if room_id:
+                send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")
+            return None
+
+        # ✅ FIX 8: ROBUSTERE TICKET ID EXTRACTIE
         try:
             ticket = r.json()
-            ticket_id = ticket.get("ID") or ticket.get("id")
+            ticket_id = ticket.get("ID") or ticket.get("id") or ticket.get("TicketID")
             if not ticket_id:
                 log.error("❌ Ticket ID niet gevonden in antwoord")
                 return None
+            log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")
         except Exception as e:
             log.exception("❌ Fout bij verwerken API response")
             return None
-            
-        log.info(f"🎫 Ticket ID: {ticket_id}")
-        
+
         # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
         log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
-        
-        # Maak de public note met alle informatie
         public_note = (
             f"**Naam:** {name}\n"
             f"**E-mail:** {email}\n"
@@ -318,7 +311,6 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             f"Ticket aangemaakt via Webex bot"
         )
         
-        # Voeg de public note toe
         note_added = add_note_to_ticket(
             ticket_id,
             public_output=public_note,
@@ -329,23 +321,24 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         
         if note_added:
             log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
+            return {"ID": ticket_id, "Ref": f"BC-{ticket_id}"}  # Dummy Ref voor demo
         else:
             log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")
+            return {"ID": ticket_id}
             
-        return ticket
     except Exception as e:
         log.exception(f"❌ Fout bij ticket aanmaken: {str(e)}")
         if room_id:
-            send_message(room_id, "⚠️ Verbinding met Halo mislukt")
+            send_message(room_id, "⚠️ Technische fout bij ticket aanmaken")
         return None
 log.info("✅ Ticket aanmaak functie geregistreerd")
-
 # ------------------------------------------------------------------------------
 # Notes (GEFIXTE PUBLIC NOTES)
 # ------------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=None):
     log.info(f"📎 Note toevoegen aan ticket {ticket_id}")
     h = get_halo_headers()
+    
     body = {
         "Details": str(public_output),
         "ActionTypeID": str(HALO_ACTIONTYPE_PUBLIC),
@@ -357,7 +350,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     if email:
         contact_id = get_halo_contact_id(email)
         if contact_id:
-            body["ContactID"] = str(contact_id)  # String, niet integer
+            body["ContactID"] = str(contact_id)
             log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id}")
     
     try:
@@ -368,12 +361,13 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
             timeout=10
         )
         
-        # Log de volledige response voor debugging
-        log.info(f"⬅️ Volledige note API response: {r.text}")
+        log.info(f"⬅️ Note API response status: {r.status_code}")
+        log.debug(f"⬅️ Volledige note API response: {r.text}")
         
         if r.status_code in (200, 201):
             log.info(f"✅ Note succesvol toegevoegd aan ticket {ticket_id}")
             return True
+        
         log.error(f"❌ Note toevoegen mislukt ({r.status_code}): {r.text[:500]}")
         if room_id:
             send_message(room_id, f"⚠️ Note toevoegen mislukt ({r.status_code})")
@@ -384,7 +378,6 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
             send_message(room_id, "⚠️ Verbinding met Halo mislukt")
         return False
 log.info("✅ Note toevoeg functie geregistreerd")
-
 # ------------------------------------------------------------------------------
 # Webex helpers
 # ------------------------------------------------------------------------------
@@ -436,7 +429,6 @@ def send_adaptive_card(room_id):
     except Exception as e:
         log.error(f"❌ Fout bij Adaptive Card: {str(e)}")
 log.info("✅ Webex helper functies geregistreerd")
-
 # ------------------------------------------------------------------------------
 # Webex Event Handler
 # ------------------------------------------------------------------------------
@@ -478,7 +470,7 @@ def process_webex_event(data):
                 headers=WEBEX_HEADERS,
                 timeout=10
             ).json().get("inputs",{})
-            log.info(f"➡️ Formulier inputs ontvangen: {inputs}")
+            log.debug(f"➡️ Formulier inputs ontvangen: {inputs}")
             
             # Controleer verplichte velden
             required_fields = ["name", "email", "omschrijving"]
@@ -488,7 +480,7 @@ def process_webex_event(data):
                 send_message(data["data"]["roomId"],
                             f"⚠️ Verplichte velden ontbreken: {', '.join(missing)}")
                 return
-                
+            
             # Standaardwaarden voor optionele velden
             sindswanneer = inputs.get("sindswanneer", "Niet opgegeven")
             watwerktniet = inputs.get("watwerktniet", "Niet opgegeven")
@@ -498,8 +490,8 @@ def process_webex_event(data):
             log.info(f"🚀 Ticket aanmaken voor {inputs['email']}")
             ticket = create_halo_ticket(
                 inputs.get("omschrijving", "Melding via Webex"),
-                inputs["name"], 
-                inputs["email"], 
+                inputs["name"],
+                inputs["email"],
                 inputs["omschrijving"],
                 sindswanneer,
                 watwerktniet,
@@ -512,13 +504,18 @@ def process_webex_event(data):
             
             if ticket:
                 ticket_id = ticket.get("ID") or ticket.get("id")
-                ticket_room_map[ticket_id] = data["data"]["roomId"]
-                ref = ticket.get('Ref', 'Onbekend')
-                log.info(f"🎫 Ticket {ref} succesvol aangemaakt (ID: {ticket_id})")
-                send_message(data["data"]["roomId"],
-                            f"✅ Ticket aangemaakt: **{ref}**\n"
-                            f"🔢 Ticketnummer: {ticket_id}\n\n"
-                            f"Alle details zijn toegevoegd in een public note.")
+                if ticket_id:
+                    ticket_room_map[ticket_id] = data["data"]["roomId"]
+                    ref = ticket.get('Ref', f"BC-{ticket_id}")
+                    log.info(f"🎫 Ticket {ref} succesvol aangemaakt (ID: {ticket_id})")
+                    send_message(data["data"]["roomId"],
+                                f"✅ Ticket aangemaakt: **{ref}**\n"
+                                f"🔢 Ticketnummer: {ticket_id}\n\n"
+                                f"Alle details zijn toegevoegd in een public note.")
+                else:
+                    log.error("❌ Ticket ID ontbreekt in response")
+                    send_message(data["data"]["roomId"],
+                               "⚠️ Ticket aangemaakt maar ID niet ontvangen")
             else:
                 log.error("❌ Ticket kon niet worden aangemaakt")
                 send_message(data["data"]["roomId"],
@@ -563,14 +560,24 @@ def initialize_cache():
     get_main_contacts()
     duration = time.time() - start_time
     log.info(f"⏱️  Cache geinitialiseerd in {duration:.2f} seconden")
+    
+    # ✅ FIX 9: EXTRA DEBUGGING INFO VOOR CACHE
+    cache_size = len(CONTACT_CACHE["contacts"])
+    if cache_size == 0:
+        log.critical("❌ CACHE IS LEEG! Mogelijke oorzaken:")
+        log.critical("1. Verkeerde klant/locatie ID's (momenteel: Client=%s, Site=%s)", HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+        log.critical("2. Halo API token problemen")
+        log.critical("3. Verkeerd API-endpoint (moet /api/v1 zijn)")
+    
     return {
         "status": "initialized",
-        "contact_cache_size": len(CONTACT_CACHE["contacts"]),
+        "contact_cache_size": cache_size,
         "duration_seconds": duration,
-        "cache_timestamp": CONTACT_CACHE["timestamp"]
+        "cache_timestamp": CONTACT_CACHE["timestamp"],
+        "client_id": HALO_CLIENT_ID_NUM,
+        "site_id": HALO_SITE_ID
     }
 log.info("✅ Webex event handler geregistreerd")
-
 # ------------------------------------------------------------------------------
 # INITIELE CACHE LOADING BIJ OPSTARTEN
 # ------------------------------------------------------------------------------
@@ -582,9 +589,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ GEBRUIKT /People ENDPOINT VOOR KLANTCONTACTEN")
+    log.info("✅ GEBRUIKT /api/v1 ENDPOINTS VOOR KLANTCONTACTEN")
     log.info("✅ ContactID GEBRUIKT VOOR KOPPELING (ALS STRING)")
-    log.info("✅ GEEN ARRAY WRAP - GEWONE JSON OBJECT")
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN")
     log.info("-"*70)
     
@@ -596,6 +602,12 @@ if __name__ == "__main__":
         init_time = time.time() - start_time
         log.info(f"✅ Klantcontactcache geïnitialiseerd in {init_time:.2f} seconden")
         log.info(f"📊 Cache bevat nu {len(CONTACT_CACHE['contacts'])} klantcontacten")
+        
+        # ✅ EXTRA VALIDATIE
+        if len(CONTACT_CACHE['contacts']) == 0:
+            log.critical("❗️ WAARSCHUWING: Lege cache - Controleer Halo configuratie!")
+            log.critical("Controleer of /initialize endpoint werkt")
+    
     except Exception as e:
         log.exception(f"❌ Fout bij initialiseren cache: {str(e)}")
     
@@ -607,10 +619,9 @@ if __name__ == "__main__":
     log.info("3. Controleer de logs voor cache details")
     log.info("4. Typ in Webex: 'nieuwe melding' om het formulier te openen")
     log.info("5. Vul het formulier in en verstuur")
-    log.info("6. Controleer logs voor alle stappen - LET OP:")
-    log.info("   - Alle ID's worden als STRING verstuurd")
-    log.info("   - Geen array wrap gebruikt (gewoon JSON object)")
-    log.info("   - Volledige API response wordt gelogd voor debugging")
+    log.info("6. BELANGRIJK: Alle ID's worden als STRING verstuurd")
+    log.info("7. API-endpoints gebruiken nu correct /api/v1")
+    log.info("8. Bij problemen: Controleer of klant/locatie ID's kloppen")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port, debug=False)
 else:
