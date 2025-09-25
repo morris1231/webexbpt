@@ -1,415 +1,409 @@
-import os, logging, sys
-from flask import Flask, jsonify
+import os, urllib.parse, logging, sys, time, threading
+from flask import Flask, request
 from dotenv import load_dotenv
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 # ------------------------------------------------------------------------------
-# Basisconfiguratie - KLAAR VOOR RENDER
+# Logging setup
 # ------------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-log = logging.getLogger("halo-custom-integration")
-app = Flask(__name__)
+log = logging.getLogger("ticketbot")
+# ------------------------------------------------------------------------------
+# Requests Session w/ Retry
+# ------------------------------------------------------------------------------
+session = requests.Session()
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET", "POST"]
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+# ------------------------------------------------------------------------------
+# Config
+# ------------------------------------------------------------------------------
 load_dotenv()
-# Halo API credentials (UIT .env)
-HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
+app = Flask(__name__)
+WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
+WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
+HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
-# HALO OMGEVING (UAT - niet aanpassen)
-HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
-HALO_API_BASE = "https://bncuat.halopsa.com/api"
-# Bekende ID's voor Bossers & Cnossen en Main-site
-BOSSERS_CLIENT_ID = 986
-MAIN_SITE_ID = 992
-
-# Controleer .env
-if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
-    log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
-    sys.exit(1)
+HALO_AUTH_URL      = "https://bncuat.halopsa.com/auth/token"  # UAT endpoint geforceerd
+HALO_API_BASE      = "https://bncuat.halopsa.com/api"         # UAT endpoint geforceerd
+HALO_TICKET_TYPE_ID   = int(os.getenv("HALO_TICKET_TYPE_ID", "55"))
+HALO_TEAM_ID          = int(os.getenv("HALO_TEAM_ID", "1"))
+HALO_DEFAULT_IMPACT   = int(os.getenv("HALO_IMPACT", "3"))
+HALO_DEFAULT_URGENCY  = int(os.getenv("HALO_URGENCY", "3"))
+HALO_ACTIONTYPE_PUBLIC= int(os.getenv("HALO_ACTIONTYPE_PUBLIC", "78"))
+HALO_CLIENT_ID_NUM = 986  # Bossers & Cnossen (geforceerd hardcoded)
+HALO_SITE_ID       = 992   # Main site (geforceerd hardcoded)
+ticket_room_map = {}
 
 # ------------------------------------------------------------------------------
-# NIEUWE HELPER FUNCTIES VOOR ID NORMALISATIE
+# ID Normalisatie Helper
 # ------------------------------------------------------------------------------
 def normalize_id(value):
-    """Converteer willekeurige ID-waarden naar integers"""
+    """Converteer willekeurige ID-waarden naar integers (UAT-proof)"""
     if value is None:
         return None
     try:
-        # Handelt zowel strings als floats af (bijv. "992.0" → 992)
         return int(float(value))
     except (TypeError, ValueError, AttributeError):
         return None
 
-def get_normalized_id(user, field_name):
-    """Haal en normaliseer een ID-veld uit de gebruikersdata"""
-    # Directe velden controleren
-    if field_name in user:
-        return normalize_id(user[field_name])
+# ------------------------------------------------------------------------------
+# User Cache (GEFIXTE PAGINERING VOOR UAT)
+# ------------------------------------------------------------------------------
+USER_CACHE = {"users": [], "timestamp": 0}
+def get_halo_headers():
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": HALO_CLIENT_ID,
+        "client_secret": HALO_CLIENT_SECRET,
+        "scope": "all"
+    }
+    try:
+        r = session.post(HALO_AUTH_URL,
+                         headers={"Content-Type": "application/x-www-form-urlencoded"},
+                         data=urllib.parse.urlencode(payload), timeout=10)
+        r.raise_for_status()
+        return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
+    except Exception as e:
+        log.critical(f"❌ AUTH MISLUKT: {str(e)}")
+        if 'r' in locals():
+            log.critical(f"➡️ Response: {r.text}")
+        raise
+
+def fetch_all_site_users(client_id: int, site_id: int, max_pages=5):
+    """GEFIXTE UAT-COMPATIBELE OPHAALFUNCTIE MET PAGINERING"""
+    log.info(f"🔍 Start ophalen gebruikers voor klant {client_id} en locatie {site_id} (UAT-modus)")
+    h = get_halo_headers()
+    all_users = []
+    page = 1
+    page_size = 50
     
-    # Geneste objecten controleren (bijv. site.id)
-    if field_name[:-3] in user and isinstance(user[field_name[:-3]], dict):
-        return normalize_id(user[field_name[:-3]].get("id"))
+    while page <= max_pages:
+        log.info(f"📄 Ophalen pagina {page} ({page_size} gebruikers per pagina)...")
+        
+        # UAT-SPECIFIEKE AANROEP (geen OData filters!)
+        params = {
+            "include": "site,client",
+            "client_id": client_id,
+            "site_id": site_id,
+            "page": page,
+            "page_size": page_size
+        }
+        
+        try:
+            r = session.get(
+                f"{HALO_API_BASE}/Users",
+                headers=h,
+                params=params,
+                timeout=15
+            )
+            
+            if r.status_code != 200:
+                log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
+                log.debug(f"➡️ Response: {r.text}")
+                break
+                
+            data = r.json()
+            users = data.get("users", [])
+            
+            if not users:
+                log.info(f"✅ Geen gebruikers gevonden op pagina {page} - einde bereikt")
+                break
+                
+            all_users.extend(users)
+            log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
+            
+            # Stop als we minder gebruikers krijgen dan page_size
+            if len(users) < page_size:
+                log.info("✅ Minder gebruikers dan page_size - einde bereikt")
+                break
+                
+            page += 1
+            
+        except Exception as e:
+            log.error(f"❌ Fout tijdens API-aanroep: {str(e)}")
+            break
     
+    log.info(f"👥 SUCCES: {len(all_users)} gebruikers opgehaald voor klant {client_id} en locatie {site_id}")
+    return all_users
+
+def get_main_users():
+    """GEUPDATE CACHE MET UAT-SPECIFIEKE VALIDATIE"""
+    if not USER_CACHE["users"]:
+        log.info("🔄 Cache leeg, ophalen Bossers & Cnossen Main users…")
+        
+        # Haal ALLE gebruikers op met UAT-compatibele paginering
+        users = fetch_all_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+        
+        # Filter extra op klant en locatie (UAT veiligheid)
+        valid_users = []
+        client_id_norm = normalize_id(HALO_CLIENT_ID_NUM)
+        site_id_norm = normalize_id(HALO_SITE_ID)
+        
+        for user in users:
+            # Normaliseer IDs uit API response
+            user_client_id = normalize_id(user.get("client_id"))
+            user_site_id = normalize_id(user.get("site_id"))
+            
+            # Controleer of het de juiste klant en locatie is
+            if user_client_id == client_id_norm and user_site_id == site_id_norm:
+                valid_users.append(user)
+            else:
+                log.debug(f"⚠️ Gebruiker {user.get('id')} overgeslagen (klant: {user_client_id}, locatie: {user_site_id})")
+        
+        USER_CACHE["users"] = valid_users
+        USER_CACHE["timestamp"] = time.time()
+        log.info(f"✅ {len(valid_users)} GEVALIDEERDE Main users gecached (van {len(users)} API-responses)")
+    
+    return USER_CACHE["users"]
+
+def get_halo_user_id(email: str):
+    """GEFIXTE EMAIL MATCHING MET UAT-COMPATIBILITEIT"""
+    if not email: 
+        return None
+    
+    email = email.strip().lower()
+    main_users = get_main_users()
+    
+    for u in main_users:
+        # Alle mogelijke email velden controleren (UAT compatibel)
+        email_fields = [
+            str(u.get("EmailAddress") or "").lower(),
+            str(u.get("emailaddress") or "").lower(),
+            str(u.get("PrimaryEmail") or "").lower(),
+            str(u.get("username") or "").lower(),
+            str(u.get("LoginName") or "").lower(),
+            str(u.get("networklogin") or "").lower(),
+            str(u.get("adobject") or "").lower()
+        ]
+        
+        # Controleer of de email overeenkomt met één van de velden
+        if email in [e for e in email_fields if e]:
+            log.info(f"✅ Email match gevonden: {email} → Gebruiker ID={u.get('id')}")
+            return u.get("id")
+    
+    log.warning(f"⚠️ Geen gebruiker gevonden voor email: {email}")
     return None
 
 # ------------------------------------------------------------------------------
-# GEUPDATE INTEGRATIE LOGICA MET PAGINERING
+# Halo Tickets
 # ------------------------------------------------------------------------------
-def get_halo_token():
-    """Haal token op met ALLE benodigde scopes"""
+def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
+                       watwerktniet, zelfgeprobeerd, impacttoelichting,
+                       impact_id, urgency_id, room_id=None):
+    h = get_halo_headers()
+    requester_id = get_halo_user_id(email)
+    body = {
+        "Summary": str(summary),
+        "Details": f"{omschrijving}\n\nSinds: {sindswanneer}\nWat werkt niet: {watwerktniet}\nZelf geprobeerd: {zelfgeprobeerd}\nImpact toelichting: {impacttoelichting}",
+        "TypeID": HALO_TICKET_TYPE_ID,
+        "ClientID": HALO_CLIENT_ID_NUM,
+        "SiteID": HALO_SITE_ID,
+        "TeamID": HALO_TEAM_ID,
+        "ImpactID": int(impact_id),
+        "UrgencyID": int(urgency_id)
+    }
+    
+    if requester_id:
+        body["UserID"] = int(requester_id)
+        log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
+    else:
+        log.warning("⚠️ Geen gebruiker gevonden - ticket zonder UserID")
+    
     try:
-        response = requests.post(
-            HALO_AUTH_URL,
-            data={
-                "grant_type": "client_credentials",
-                "client_id": HALO_CLIENT_ID,
-                "client_secret": HALO_CLIENT_SECRET,
-                "scope": "all"
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=10
-        )
-        response.raise_for_status()
-        return response.json()["access_token"]
+        r = session.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
+        log.info(f"➡️ Halo response {r.status_code}: {r.text[:200]}...")
+        
+        if r.status_code in (200, 201): 
+            return r.json()
+        
+        if room_id: 
+            send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")
+        return None
+        
     except Exception as e:
-        log.critical(f"❌ AUTH MISLUKT: {str(e)}")
-        if 'response' in locals():
-            log.critical(f"➡️ Response: {response.text}")
-        raise
-
-def get_client_by_id(client_id):
-    """Haal een specifieke klant op via ID (GEHERSTELD)"""
-    try:
-        token = get_halo_token()
-        response = requests.get(
-            f"{HALO_API_BASE}/Client/{client_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        log.error(f"❌ Fout bij ophalen klant met ID {client_id}: {str(e)}")
+        log.error(f"❌ Fout bij ticket aanmaken: {str(e)}")
+        if room_id: 
+            send_message(room_id, "⚠️ Verbinding met Halo mislukt")
         return None
 
-def get_site_by_id(site_id):
-    """Haal een specifieke locatie op via ID (GEHERSTELD)"""
-    try:
-        token = get_halo_token()
-        response = requests.get(
-            f"{HALO_API_BASE}/Site/{site_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
-        return None
-
-def get_all_users_for_site(site_id):
-    """Haal ALLE gebruikers op voor een locatie met paginering (UAT-specifiek)"""
-    token = get_halo_token()
-    all_users = []
-    page = 1
-    page_size = 50  # Halo API retourneert standaard 50 items per pagina
+# ------------------------------------------------------------------------------
+# Notes
+# ------------------------------------------------------------------------------
+def add_note_to_ticket(ticket_id, text, sender, email=None, room_id=None):
+    h = get_halo_headers()
+    body = {"Details": str(text), "ActionTypeID": HALO_ACTIONTYPE_PUBLIC, "IsPrivate": False}
+    uid = get_halo_user_id(email) if email else None
     
-    log.info(f"📚 Start paginering voor locatie {site_id} (50 gebruikers per pagina)")
-    
-    while True:
-        log.info(f"🔍 Ophalen gebruikers - Pagina {page} ({page_size} per pagina)...")
-        
-        response = requests.get(
-            f"{HALO_API_BASE}/Users",
-            params={
-                "include": "site,client",
-                "site_id": site_id,
-                "page": page,
-                "page_size": page_size
-            },
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
-        
-        response.raise_for_status()
-        data = response.json()
-        
-        # Haal gebruikers op uit de response
-        users = data.get("users", [])
-        if not users:
-            log.info("✅ Geen verdere gebruikers gevonden - einde bereikt")
-            break
-            
-        all_users.extend(users)
-        log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal verzameld: {len(all_users)})")
-        
-        # Controleer of we klaar zijn (minder gebruikers dan page_size betekent einde)
-        if len(users) < page_size:
-            log.info("✅ Alle pagina's opgehaald - geen verdere pagina's nodig")
-            break
-            
-        page += 1
-    
-    log.info(f"🎉 SUCCES: {len(all_users)} gebruikers opgehaald voor locatie {site_id} (inclusief alle pagina's)")
-    return all_users
-
-def get_users_by_site_id(site_id, client_id):
-    """Haal gebruikers op voor specifieke locatie met UAT-specifieke normalisatie en paginering"""
-    log.info(f"🔍 Haal gebruikers op voor locatie {site_id} (Main-site)...")
+    if uid: 
+        body["UserID"] = int(uid)
+        log.info(f"📎 Note gekoppeld aan gebruiker ID: {uid}")
     
     try:
-        # Haal ALLE gebruikers op met paginering
-        all_users = get_all_users_for_site(site_id)
+        r = session.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", headers=h, json=body, timeout=10)
+        log.info(f"➡️ AddNote response {r.status_code}")
         
-        if not all_users:
-            log.error(f"❌ Geen gebruikers gevonden voor site {site_id}")
-            return []
-        
-        # Log API response structuur voor debugging (alleen voor de eerste gebruiker)
-        first_user = all_users[0]
-        log.info("🔍 API RESPONSE STRUCTUUR (EERSTE GEBRUIKER):")
-        log.info(f" - Directe velden: {list(first_user.keys())}")
-        log.info(f" - Voorbeeld site_id: {first_user.get('site_id', 'Niet aanwezig')}")
-        log.info(f" - Voorbeeld client_id: {first_user.get('client_id', 'Niet aanwezig')}")
-        
-        # Normaliseer verwachte waarden
-        expected_client_id = normalize_id(client_id)
-        expected_site_id = normalize_id(site_id)
-        
-        log.info(f"🔧 Normalisatie doelstellingen:")
-        log.info(f" - Verwachte klant ID: {expected_client_id} (gebaseerd op {client_id})")
-        log.info(f" - Verwachte locatie ID: {expected_site_id} (gebaseerd op {site_id})")
-        
-        # Filter gebruikers met UAT-specifieke normalisatie
-        users = []
-        for user in all_users:
-            try:
-                # Haal en normaliseer IDs
-                user_client_id = get_normalized_id(user, "client_id")
-                user_site_id = get_normalized_id(user, "site_id")
-                
-                # Debug log voor elke gebruiker
-                debug_info = {
-                    "raw_client_id": user.get("client_id"),
-                    "raw_site_id": user.get("site_id"),
-                    "normalized_client_id": user_client_id,
-                    "normalized_site_id": user_site_id,
-                    "client_match": user_client_id == expected_client_id,
-                    "site_match": user_site_id == expected_site_id
-                }
-                
-                # Alleen toevoegen als beide matchen
-                if debug_info["client_match"] and debug_info["site_match"]:
-                    users.append({
-                        "id": user["id"],
-                        "name": user["name"],
-                        "email": user.get("emailaddress") or user.get("email") or "Geen email",
-                        "debug": debug_info
-                    })
-                    log.debug(f"✅ Gebruiker '{user['name']}' GEVONDEN (ID: {user['id']})")
-                else:
-                    mismatch_reasons = []
-                    if not debug_info["client_match"]:
-                        mismatch_reasons.append(f"Klant ID mismatch (gevonden: {user_client_id}, verwacht: {expected_client_id})")
-                    if not debug_info["site_match"]:
-                        mismatch_reasons.append(f"Locatie ID mismatch (gevonden: {user_site_id}, verwacht: {expected_site_id})")
-                    
-                    log.debug(f"❌ Gebruiker '{user.get('name', 'Onbekend')}' (ID: {user.get('id', 'Onbekend')}) overgeslagen - Reden: {', '.join(mismatch_reasons)}")
+        if r.status_code not in (200,201) and room_id:
+            send_message(room_id, f"⚠️ Note toevoegen mislukt ({r.status_code})")
             
-            except Exception as e:
-                log.warning(f"⚠️ Gebruiker overslaan bij verwerking: {str(e)} | Gegevens: {user.get('id', 'Onbekend')} - {user.get('name', 'Onbekend')}")
-                continue
-        
-        log.info(f"✅ {len(users)}/{len(all_users)} gebruikers GEVALIDEERD voor locatie {site_id}")
-        return users
-    
     except Exception as e:
-        log.error(f"❌ Fout bij ophalen site gebruikers: {str(e)}")
-        return []
-
-def get_main_users():
-    """Haal Main-site gebruikers op voor Bossers & Cnossen met HARDCODED ID's"""
-    log.info(f"🔍 Start proces voor Bossers & Cnossen (Klant ID: {BOSSERS_CLIENT_ID}, Locatie ID: {MAIN_SITE_ID})")
-    
-    # Stap 1: Valideer klant ID (extra veiligheid)
-    bossers_client = get_client_by_id(BOSSERS_CLIENT_ID)
-    if not bossers_client:
-        log.error(f"❌ Klant met ID {BOSSERS_CLIENT_ID} NIET GEVONDEN in Halo")
-        return []
-    
-    # Stap 2: Valideer locatie ID (extra veiligheid)
-    main_site = get_site_by_id(MAIN_SITE_ID)
-    if not main_site:
-        log.error(f"❌ Locatie met ID {MAIN_SITE_ID} NIET GEVONDEN in Halo")
-        return []
-    
-    # Stap 3: Haal gebruikers op met UAT-specifieke logica
-    main_users = get_users_by_site_id(MAIN_SITE_ID, BOSSERS_CLIENT_ID)
-    
-    if not main_users:
-        log.error("❌ Geen Main-site gebruikers gevonden - Controleer:")
-        log.error("1. Of de gebruikers ZOWEL aan de klant ALS aan de locatie zijn gekoppeld")
-        log.error("2. Of de locatie ID correct is (UAT gebruikt vaak floats als strings)")
-        log.error("3. De debug-gegevens in /debug voor exacte ID-waarden")
-        return []
-    
-    log.info(f"🎉 SUCCES: {len(main_users)} Main-site gebruikers GEVONDEN voor Bossers & Cnossen")
-    return main_users
+        log.error(f"❌ Fout bij notitie toevoegen: {str(e)}")
+        if room_id:
+            send_message(room_id, "⚠️ Verbinding met Halo mislukt")
 
 # ------------------------------------------------------------------------------
-# API Endpoints - ULTRA-DEBUGGABLE
+# Webex helpers
 # ------------------------------------------------------------------------------
+def send_message(room_id, text):
+    try:
+        session.post("https://webexapis.com/v1/messages",
+                     headers=WEBEX_HEADERS,
+                     json={"roomId": room_id, "markdown": text}, timeout=10)
+    except Exception as e:
+        log.error(f"❌ Fout bij Webex bericht: {str(e)}")
+
+def send_adaptive_card(room_id):
+    card = {
+        "roomId": room_id,
+        "markdown": "✍ Vul het formulier hieronder in:",
+        "attachments":[{
+            "contentType":"application/vnd.microsoft.card.adaptive",
+            "content":{
+                "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
+                "type":"AdaptiveCard","version":"1.2","body":[
+                    {"type":"Input.Text","id":"name","placeholder":"Naam"},
+                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres"},
+                    {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving"},
+                    {"type":"Input.Text","id":"sindswanneer","placeholder":"Sinds wanneer?"},
+                    {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?"},
+                    {"type":"Input.Text","id":"zelfgeprobeerd","isMultiline":True,"placeholder":"Zelf geprobeerd?"},
+                    {"type":"Input.Text","id":"impacttoelichting","isMultiline":True,"placeholder":"Impact toelichting"}
+                ],
+                "actions":[{"type":"Action.Submit","title":"Versturen"}]
+            }
+        }]
+    }
+    try:
+        session.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card, timeout=10)
+    except Exception as e:
+        log.error(f"❌ Fout bij Adaptive Card: {str(e)}")
+
+# ------------------------------------------------------------------------------
+# Webex Event Handler
+# ------------------------------------------------------------------------------
+def process_webex_event(data):
+    res = data.get("resource")
+    log.info(f"📩 Webex event: {res}")
+    
+    try:
+        if res == "messages":
+            msg_id = data["data"]["id"]
+            msg = session.get(f"https://webexapis.com/v1/messages/{msg_id}", 
+                             headers=WEBEX_HEADERS, timeout=10).json()
+            text, room_id, sender = msg.get("text","").strip(), msg.get("roomId"), msg.get("personEmail")
+            
+            if sender and sender.endswith("@webex.bot"): 
+                return
+                
+            if "nieuwe melding" in text.lower():
+                send_adaptive_card(room_id)
+                send_message(room_id,"📋 Vul formulier in om ticket te starten.")
+            else:
+                for t_id, rid in ticket_room_map.items():
+                    if rid == room_id:
+                        add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id)
+                        
+        elif res == "attachmentActions":
+            act_id = data["data"]["id"]
+            inputs = session.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", 
+                                headers=WEBEX_HEADERS, timeout=10).json().get("inputs",{})
+            log.info(f"➡️ Formulier inputs: {inputs}")
+            
+            # Validatie van verplichte velden
+            required_fields = ["name", "email", "omschrijving"]
+            missing = [field for field in required_fields if not inputs.get(field)]
+            
+            if missing:
+                send_message(data["data"]["roomId"], 
+                            f"⚠️ Verplichte velden ontbreken: {', '.join(missing)}")
+                return
+                
+            ticket = create_halo_ticket(
+                inputs.get("omschrijving","Melding via Webex"),
+                inputs["name"], inputs["email"], inputs["omschrijving"],
+                inputs.get("sindswanneer","Niet opgegeven"),
+                inputs.get("watwerktniet","Niet opgegeven"),
+                inputs.get("zelfgeprobeerd","Niet opgegeven"),
+                inputs.get("impacttoelichting","Niet opgegeven"),
+                inputs.get("impact", HALO_DEFAULT_IMPACT), 
+                inputs.get("urgency", HALO_DEFAULT_URGENCY),
+                room_id=data["data"]["roomId"]
+            )
+            
+            if ticket:
+                ticket_id = ticket.get("ID") or ticket.get("id")
+                ticket_room_map[ticket_id] = data["data"]["roomId"]
+                send_message(data["data"]["roomId"], 
+                            f"✅ Ticket aangemaakt: **{ticket.get('Ref', 'N/A')}**\n"
+                            f"🔢 Ticketnummer: {ticket_id}")
+            else:
+                send_message(data["data"]["roomId"], 
+                           "⚠️ Ticket kon niet worden aangemaakt. Probeer opnieuw.")
+                           
+    except Exception as e:
+        log.error(f"❌ Fout bij verwerken Webex event: {str(e)}")
+        if "room_id" in locals():
+            send_message(room_id, "⚠️ Er is een technische fout opgetreden")
+
+@app.route("/webex", methods=["POST"])
+def webex_webhook():
+    data = request.json
+    threading.Thread(target=process_webex_event, args=(data,)).start()
+    return {"status": "ok"}
+
 @app.route("/", methods=["GET"])
-def health_check():
+def health():
     return {
-        "status": "custom_integration_ready",
-        "message": "Halo Custom Integration API - Bezoek /users voor data",
+        "status": "ok",
+        "message": "Bossers & Cnossen Webex Ticket Bot",
         "environment": "UAT",
-        "instructions": [
-            "1. Zorg dat .env correct is ingesteld",
-            "2. Bezoek /debug voor technische validatie",
-            "3. Bezoek /users voor Main-site gebruikers"
-        ]
+        "endpoints": [
+            "/webex (POST) - Webex webhook",
+            "/ (GET) - Health check"
+        ],
+        "halo_connection": {
+            "client_id": HALO_CLIENT_ID_NUM,
+            "site_id": HALO_SITE_ID,
+            "user_cache_size": len(USER_CACHE["users"]),
+            "last_updated": USER_CACHE["timestamp"]
+        }
     }
 
-@app.route("/users", methods=["GET"])
-def get_users():
-    """Eindpunt voor jouw applicatie - MET HARDCODED ID'S"""
-    try:
-        log.info("🔄 /users endpoint aangeroepen - start verwerking")
-        main_users = get_main_users()
-        
-        if not main_users:
-            log.error("❌ Geen Main-site gebruikers gevonden")
-            return jsonify({
-                "error": "Geen Main-site gebruikers gevonden",
-                "solution": [
-                    "1. Zorg dat gebruikers ZOWEL aan de klant ALS aan de locatie zijn gekoppeld in Halo",
-                    "2. Controleer of de locatie ID correct is (soms als float geretourneerd)",
-                    "3. Bezoek /debug voor gedetailleerde technische informatie",
-                    "4. In Halo: Ga naar de locatie > Gebruikers om te controleren welke gebruikers gekoppeld zijn"
-                ],
-                "debug_hint": "Deze integratie logt nu de EXACTE ID-waarden zoals ontvangen van de API"
-            }), 500
-        
-        # Haal klant- en locatiegegevens op voor respons
-        bossers_client = get_client_by_id(BOSSERS_CLIENT_ID)
-        main_site = get_site_by_id(MAIN_SITE_ID)
-        
-        log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
-        return jsonify({
-            "client_id": BOSSERS_CLIENT_ID,
-            "client_name": bossers_client.get("name", "Onbekend") if bossers_client else "Niet gevonden",
-            "site_id": MAIN_SITE_ID,
-            "site_name": main_site.get("name", "Onbekend") if main_site else "Niet gevonden",
-            "total_users": len(main_users),
-            "users": main_users,
-            "environment": "UAT",
-            "pagination_note": "Alle pagina's zijn opgehaald - geen gebruikers gemist"
-        })
-    except Exception as e:
-        log.error(f"🔥 Fout in /users: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "hint": "Controleer de Render logs voor 'API RESPONSE STRUCTUUR' en 'Normalisatie doelstellingen'"
-        }), 500
-
-@app.route("/debug", methods=["GET"])
-def debug_info():
-    """Technische debug informatie met UAT-specifieke validatie"""
-    try:
-        log.info("🔍 /debug endpoint aangeroepen - start UAT-specifieke validatie")
-        
-        # Haal klantgegevens op
-        bossers_client = get_client_by_id(BOSSERS_CLIENT_ID)
-        client_valid = bossers_client is not None
-        
-        # Haal locatiegegevens op
-        main_site = get_site_by_id(MAIN_SITE_ID)
-        site_valid = main_site is not None
-        
-        # Haal gebruikers op met UAT-specifieke logica
-        site_users = get_users_by_site_id(MAIN_SITE_ID, BOSSERS_CLIENT_ID)
-        
-        # Haal alle gebruikers op voor paginering test
-        all_site_users = get_all_users_for_site(MAIN_SITE_ID)
-        
-        # Analyseer API response voor problemen
-        problem_analysis = []
-        if not site_valid:
-            problem_analysis.append("Locatie niet gevonden - Controleer of ID 992 bestaat in UAT")
-        if not client_valid:
-            problem_analysis.append("Klant niet gevonden - Controleer of ID 986 bestaat in UAT")
-        if site_users:
-            problem_analysis.append(f"Gebruikers gevonden - {len(site_users)} Main-site gebruikers gevalideerd")
-        else:
-            problem_analysis.append("GEEN gebruikers gevonden - Mogelijke oorzaken:")
-            problem_analysis.append("• Gebruikers zijn alleen aan de klant gekoppeld, niet aan de locatie")
-            problem_analysis.append("• ID-type mismatch (float vs integer) in UAT omgeving")
-            problem_analysis.append("• Onvoldoende API-permissies voor gebruikersgegevens")
-        
-        log.info("✅ /debug data verzameld - UAT-specifieke analyse klaar")
-        return jsonify({
-            "status": "debug_info",
-            "environment": "UAT",
-            "integration_version": "4.0",
-            "hardcoded_ids": {
-                "bossers_client_id": BOSSERS_CLIENT_ID,
-                "client_name": bossers_client.get("name", "Niet gevonden") if client_valid else "Niet gevonden",
-                "client_exists": client_valid,
-                "main_site_id": MAIN_SITE_ID,
-                "site_name": main_site.get("name", "Niet gevonden") if site_valid else "Niet gevonden",
-                "site_exists": site_valid
-            },
-            "api_validation": {
-                "total_users_found": len(site_users),
-                "total_users_in_system": len(all_site_users),
-                "api_endpoint_used": f"{HALO_API_BASE}/Users",
-                "request_parameters": {
-                    "include": "site,client",
-                    "site_id": MAIN_SITE_ID
-                },
-                "problem_analysis": problem_analysis
-            },
-            "pagination_analysis": {
-                "total_users_in_system": len(all_site_users),
-                "users_per_page": 50,
-                "total_pages": (len(all_site_users) + 49) // 50,
-                "users_matched_filters": len(site_users)
-            },
-            "user_sample": site_users[:3] if site_users else [],
-            "troubleshooting": [
-                "1. In Halo: Ga naar de locatie > Gebruikers (NIET de klant > Gebruikers)",
-                "2. Zorg dat gebruikers ZOWEL aan de klant ALS aan de locatie zijn gekoppeld",
-                "3. Controleer de Render logs op 'API RESPONSE STRUCTUUR' voor exacte ID-formaten",
-                "4. UAT retourneert vaak floats als strings (bijv. '992.0' i.p.v. 992)",
-                "5. Gebruik /debug om de exacte ID-waarden te zien die de API retourneert",
-                "6. De integratie haalt NU ALLE PAGINA'S op (geen gebruikers gemist)"
-            ]
-        })
-    except Exception as e:
-        log.error(f"❌ Fout in /debug: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "critical_hint": "Controleer de Render logs voor 'API RESPONSE STRUCTUUR'"
-        }), 500
-
-# ------------------------------------------------------------------------------
-# Render.com Deployment - KLAAR VOOR DIRECTE DEPLOY
-# ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info("="*70)
-    log.info("🚀 HALO CUSTOM INTEGRATION API - VOLLEDIG ZELFSTANDIG")
+    log.info("🚀 BOSSERS & CNOSSEN WEBEX TICKET BOT - UAT OMGEVING")
     log.info("-"*70)
-    log.info(f"✅ Gebruikt KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
-    log.info(f"✅ Gebruikt SITE ID: {MAIN_SITE_ID} (Main)")
-    log.info("✅ UAT-SPECIFIEKE NORMALISATIE INGEBOUWD VOOR ID TYPES")
-    log.info("✅ PAGINERING INGEBOUWD VOOR ALLE GEBRUIKERS (GEEN GEBRUIKERS GEMIST)")
+    log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
+    log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
+    log.info("✅ UAT-COMPATIBELE API AANROEPEN MET PAGINERING")
+    log.info("✅ ID NORMALISATIE VOOR FLOAT/INTEGER PROBLEMEN")
+    log.info("✅ EXTRA VALIDATIE OP GEHAALDE GEBRUIKERS")
     log.info("-"*70)
-    log.info("👉 VOLG DEZE 2 STAPPEN:")
-    log.info("1. Herdeploy deze code naar Render")
-    log.info("2. Bezoek EERST /debug en controleer de 'pagination_analysis' sectie")
+    log.info("👉 VOLG DEZE STAPPEN:")
+    log.info("1. Deploy deze code naar Render")
+    log.info("2. Verstuur 'nieuwe melding' in Webex om het formulier te openen")
+    log.info("3. Controleer de logs op 'SUCCES: X gebruikers opgehaald'")
     log.info("="*70)
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False)
