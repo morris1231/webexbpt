@@ -55,18 +55,21 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten op met VOLLEDIGE PAGINERING"""
+    """Haal ALLE klanten op met ULTRA-ROBUSTE PAGINERING"""
     token = get_halo_token()
     clients = []
     page = 1
+    total_fetched = 0
+    last_total = 0
     
     while True:
         try:
+            # 🔑 BELANGRIJK: Gebruik pageSize=50 (niet 100) want UAT geeft max 50 terug
             response = requests.get(
                 f"{HALO_API_BASE}/Client",
                 params={
                     "page": page,
-                    "pageSize": 50,  # UAT geeft max 50 per pagina
+                    "pageSize": 50,
                     "active": "true"
                 },
                 headers={"Authorization": f"Bearer {token}"},
@@ -74,19 +77,39 @@ def fetch_all_clients():
             )
             response.raise_for_status()
             data = response.json()
+            
             clients_page = data.get("clients", [])
             
-            if not clients_page:
+            # 🔑 ULTRA-VEILIGE controle op lege responses
+            if not clients_page or len(clients_page) == 0:
+                log.info(f"⏹️ Geen klanten meer gevonden op pagina {page}")
                 break
                 
-            clients.extend(clients_page)
-            log.info(f"✅ Pagina {page} klanten: {len(clients_page)} toegevoegd (totaal: {len(clients)})")
+            # Filter alleen unieke klanten
+            new_clients = []
+            for client in clients_page:
+                if not any(c["id"] == client["id"] for c in clients):
+                    new_clients.append(client)
             
-            if len(clients_page) < 50:
+            if not new_clients:
+                log.info(f"⏹️ Geen nieuwe klanten gevonden op pagina {page}")
                 break
                 
+            clients.extend(new_clients)
+            total_fetched += len(new_clients)
+            
+            log.info(f"✅ Pagina {page} klanten: {len(new_clients)} toegevoegd (totaal: {total_fetched})")
+            
+            # 🔑 BELANGRIJK: Stop als we geen nieuwe klanten meer krijgen
+            if len(new_clients) < 50 or total_fetched == last_total:
+                break
+                
+            last_total = total_fetched
             page += 1
-            if page > 100:  # Beveiliging tegen oneindige loops
+            
+            # 🔑 BELANGRIJK: Maximaal 20 paginas voor 956 klanten (50 per pagina)
+            if page > 20:
+                log.warning("⚠️ Maximaal aantal paginas bereikt, stoppen met pagineren")
                 break
                 
         except Exception as e:
@@ -97,16 +120,18 @@ def fetch_all_clients():
     return clients
 
 def fetch_all_organisations():
-    """Haal ALLE organisaties op via DE JUISTE ENDPOINT"""
+    """Haal ALLE organisaties op met ULTRA-ROBUSTE PAGINERING"""
     token = get_halo_token()
     organisations = []
     page = 1
+    total_fetched = 0
+    last_total = 0
     
     while True:
         try:
             # 🔑 BELANGRIJK: Gebruik de CORRECTE endpoint voor organisaties
             response = requests.get(
-                f"{HALO_API_BASE}/Organisation",  # Dit is de JUISTE endpoint
+                f"{HALO_API_BASE}/Organisation",
                 params={
                     "page": page,
                     "pageSize": 50,
@@ -119,17 +144,34 @@ def fetch_all_organisations():
             data = response.json()
             organisations_page = data.get("organisations", [])
             
-            if not organisations_page:
+            if not organisations_page or len(organisations_page) == 0:
+                log.info(f"⏹️ Geen organisaties meer gevonden op pagina {page}")
                 break
                 
-            organisations.extend(organisations_page)
-            log.info(f"✅ Pagina {page} organisaties: {len(organisations_page)} toegevoegd (totaal: {len(organisations)})")
+            # Filter alleen unieke organisaties
+            new_organisations = []
+            for org in organisations_page:
+                if not any(o["id"] == org["id"] for o in organisations):
+                    new_organisations.append(org)
             
-            if len(organisations_page) < 50:
+            if not new_organisations:
+                log.info(f"⏹️ Geen nieuwe organisaties gevonden op pagina {page}")
                 break
                 
+            organisations.extend(new_organisations)
+            total_fetched += len(new_organisations)
+            
+            log.info(f"✅ Pagina {page} organisaties: {len(new_organisations)} toegevoegd (totaal: {total_fetched})")
+            
+            if len(new_organisations) < 50 or total_fetched == last_total:
+                break
+                
+            last_total = total_fetched
             page += 1
-            if page > 100:
+            
+            # 🔑 BELANGRIJK: Maximaal 5 paginas voor 2 organisaties
+            if page > 5:
+                log.warning("⚠️ Maximaal aantal paginas voor organisaties bereikt, stoppen met pagineren")
                 break
                 
         except Exception as e:
@@ -140,10 +182,12 @@ def fetch_all_organisations():
     return organisations
 
 def fetch_all_sites():
-    """Haal ALLE locaties op met VOLLEDIGE PAGINERING"""
+    """Haal ALLE locaties op met ULTRA-ROBUSTE PAGINERING"""
     token = get_halo_token()
     sites = []
     page = 1
+    total_fetched = 0
+    last_total = 0
     
     while True:
         try:
@@ -161,18 +205,32 @@ def fetch_all_sites():
             data = response.json()
             sites_page = data.get("sites", [])
             
-            if not sites_page:
+            if not sites_page or len(sites_page) == 0:
                 break
                 
-            sites.extend(sites_page)
-            log.info(f"✅ Pagina {page} locaties: {len(sites_page)} toegevoegd (totaal: {len(sites)})")
+            # Filter alleen unieke locaties
+            new_sites = []
+            for site in sites_page:
+                if not any(s["id"] == site["id"] for s in sites):
+                    new_sites.append(site)
             
-            if len(sites_page) < 50:
+            if not new_sites:
                 break
                 
-            page += 1
-            if page > 100:
+            sites.extend(new_sites)
+            total_fetched += len(new_sites)
+            
+            log.info(f"✅ Pagina {page} locaties: {len(new_sites)} toegevoegd (totaal: {total_fetched})")
+            
+            if len(new_sites) < 50 or total_fetched == last_total:
                 break
+                
+            last_total = total_fetched
+            page += 1
+            
+            if page > 20:
+                break
+                
         except Exception as e:
             log.error(f"❌ Fout bij ophalen locaties: {str(e)}")
             break
@@ -181,10 +239,12 @@ def fetch_all_sites():
     return sites
 
 def fetch_all_users():
-    """Haal ALLE gebruikers op met VOLLEDIGE PAGINERING"""
+    """Haal ALLE gebruikers op met ULTRA-ROBUSTE PAGINERING"""
     token = get_halo_token()
     users = []
     page = 1
+    total_fetched = 0
+    last_total = 0
     
     while True:
         try:
@@ -202,17 +262,30 @@ def fetch_all_users():
             data = response.json()
             users_page = data.get("users", [])
             
-            if not users_page:
+            if not users_page or len(users_page) == 0:
                 break
                 
-            users.extend(users_page)
-            log.info(f"✅ Pagina {page} gebruikers: {len(users_page)} toegevoegd (totaal: {len(users)})")
+            # Filter alleen unieke gebruikers
+            new_users = []
+            for user in users_page:
+                if not any(u["id"] == user["id"] for u in users):
+                    new_users.append(user)
             
-            if len(users_page) < 50:
+            if not new_users:
                 break
                 
+            users.extend(new_users)
+            total_fetched += len(new_users)
+            
+            log.info(f"✅ Pagina {page} gebruikers: {len(new_users)} toegevoegd (totaal: {total_fetched})")
+            
+            if len(new_users) < 50 or total_fetched == last_total:
+                break
+                
+            last_total = total_fetched
             page += 1
-            if page > 100:
+            
+            if page > 20:
                 break
         except Exception as e:
             log.error(f"❌ Fout bij ophalen gebruikers: {str(e)}")
@@ -273,7 +346,7 @@ def get_main_users():
     # Stap 1: Haal alle benodigde data op
     log.info("🔍 Start met ophalen van klanten, organisaties, locaties en gebruikers...")
     clients = fetch_all_clients()
-    organisations = fetch_all_organisations()  # 🔑 GEbruik de JUISTE endpoint
+    organisations = fetch_all_organisations()
     sites = fetch_all_sites()
     users = fetch_all_users()
     
@@ -304,7 +377,7 @@ def get_main_users():
     
     # Zoek in organisaties
     for org in organisations:
-        org_name = org.get("name", "") or org.get("Name", "") or org.get("ORG_NAME", "")
+        org_name = org.get("name", "") or org.get("Name", "") or org.get("ORG_NAME", "") or ""
         normalized_name = normalize_name(org_name)
         
         # Check voor Bossers & Cnossen
@@ -320,7 +393,7 @@ def get_main_users():
     if not bossers_organisation:
         log.warning("⚠️ Organisatie niet gevonden, probeer klanten...")
         for client in clients:
-            client_name = client.get("name", "") or client.get("Name", "") or client.get("CLIENT_NAME", "")
+            client_name = client.get("name", "") or client.get("Name", "") or client.get("CLIENT_NAME", "") or ""
             normalized_name = normalize_name(client_name)
             
             has_bossers = any(keyword in normalized_name for keyword in bossers_keywords)
@@ -367,17 +440,30 @@ def get_main_users():
         org_id = int(bossers_organisation["id"])
         for client in clients:
             # In jouw UAT zit de organisatie koppeling in client.organisation_id
-            client_org_id = client.get("organisation_id") or client.get("OrganisationID") or client.get("organisationid")
-            if client_org_id and int(client_org_id) == org_id:
-                bossers_client = client
-                break
+            client_org_id = client.get("organisation_id") or client.get("OrganisationID") or client.get("organisationid") or ""
+            
+            if client_org_id:
+                try:
+                    if int(client_org主席
+                    if int(client_org_id) == org_id:
+                        bossers_client = client
+                        break
+                except (TypeError, ValueError):
+                    pass
     
     if not bossers_client:
         log.error("❌ Geen bijbehorende klant gevonden voor organisatie")
+        # Extra debug log voor koppeling
+        log.info("🔍 Controleer koppelingen tussen klanten en organisaties...")
+        for client in clients[:5]:  # Eerste 5 voor overzicht
+            org_id = client.get("organisation_id") or client.get("OrganisationID") or client.get("organisationid") or "N/A"
+            client_name = client.get("name", "Onbekend")
+            log.info(f" - Klant '{client_name}' is gekoppeld aan organisatie ID: {org_id}")
+        
         return []
     
     client_id = int(bossers_client["id"])
-    org_name = bossers_organisation.get("name", "") or bossers_organisation.get("Name", "")
+    org_name = bossers_organisation.get("name", "") or bossers_organisation.get("Name", "") or ""
     
     log.info(f"✅ Gebruik klant-ID: {client_id} (Naam: '{bossers_client['name']}' + Org: '{org_name}')")
     
@@ -477,7 +563,7 @@ def get_users():
         
         # Haal client en site namen op voor de response
         client_name = bossers_client["name"]
-        org_name = bossers_organisation.get("name", "") or bossers_organisation.get("Name", "")
+        org_name = bossers_organisation.get("name", "") or bossers_organisation.get("Name", "") or ""
         
         full_client_name = f"{client_name} {org_name}".strip()
         site_name = main_site["name"]
@@ -580,7 +666,8 @@ def debug_info():
                 "2. Gebruik de /debug output om de EXACTE spelling te zien",
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang",
                 "4. De organisatie zit mogelijk in een aparte endpoint (/Organisation)",
-                "5. De klant kan direct de naam 'Bossers & Cnossen' hebben"
+                "5. De klant kan direct de naam 'Bossers & Cnossen' hebben",
+                "6. Controleer de Render logs voor 'GEVONDEN' berichten"
             ],
             "hint": "Deze integratie doorzoekt NU zowel klanten als organisaties voor 'Bossers & Cnossen'"
         })
@@ -604,7 +691,7 @@ if __name__ == "__main__":
     log.info("✅ Normaliseert namen automatisch voor betere matching")
     log.info("✅ Haalt ORGANISATIES op via DE JUISTE ENDPOINT (/Organisation)")
     log.info("✅ Filtert alleen ACTIEVE klanten")
-    log.info("✅ VOLLEDIGE PAGINERING (UAT geeft max 50 per pagina)")
+    log.info("✅ VOLLEDIGE PAGINERING MET SAFEGUARDS (max 20 paginas voor klanten)")
     log.info("✅ ZOEKT NU ZOWEL IN KLANTEN ALS IN ORGANISATIES")
     log.info("✅ ULTRA-DEBUGGABLE MET VOLLEDIGE RAW DATA LOGGING")
     log.info("-"*70)
