@@ -9,12 +9,12 @@ from urllib3.util.retry import Retry
 # ------------------------------------------------------------------------------
 sys.stdout.reconfigure(line_buffering=True)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 log = logging.getLogger("ticketbot")
-log.info("✅ Logging systeem geïnitialiseerd - DEBUG niveau actief")
+log.info("✅ Logging systeem geïnitialiseerd - INFO niveau actief")
 log.info("💡 TIP: Bezoek /initialize na deploy om cache te vullen")
 
 # ------------------------------------------------------------------------------
@@ -229,7 +229,7 @@ def get_halo_user_id(email: str):
 log.info("✅ Gebruikers cache functies geregistreerd")
 
 # ------------------------------------------------------------------------------
-# Halo Tickets (DEFINITIEVE FIX VOOR 400-ERROR)
+# Halo Tickets (DEFINITIEVE FIX VOOR UAT)
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
@@ -238,21 +238,21 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
     
-    # ✅ CORRECTE STRUCTUUR VOOR HALO API (GEEN REQUESTER OBJECT)
+    # ✅ CORRECTE STRUCTUUR VOOR UAT - GEBRUIK GENESTE OBJECTEN
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
-        "TypeID": int(HALO_TICKET_TYPE_ID),
-        "ClientID": int(HALO_CLIENT_ID_NUM),
-        "SiteID": int(HALO_SITE_ID),
-        "TeamID": int(HALO_TEAM_ID),
-        "ImpactID": int(impact_id),
-        "UrgencyID": int(urgency_id)
+        "TypeID": {"ID": int(HALO_TICKET_TYPE_ID)},  # ✅ Genest object
+        "Client": {"ID": int(HALO_CLIENT_ID_NUM)},   # ✅ Genest object
+        "Site": {"ID": int(HALO_SITE_ID)},          # ✅ Genest object
+        "Team": {"ID": int(HALO_TEAM_ID)},          # ✅ Genest object
+        "Impact": {"ID": int(impact_id)},           # ✅ Genest object
+        "Urgency": {"ID": int(urgency_id)}         # ✅ Genest object
     }
     
-    # ✅ CRUCIALE FIX: GEBRUIK USERID IN PLAATS VAN REQUESTER OBJECT
+    # ✅ CORRECTE GEBRUIKER KOPPELING VOOR UAT
     if requester_id:
-        body["UserID"] = int(requester_id)  # ✅ Dit is de juiste manier voor UAT
+        body["UserID"] = int(requester_id)  # Dit werkt WEL in UAT
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
     else:
         log.warning("⚠️ Geen gebruiker gevonden - ticket zonder UserID")
@@ -536,8 +536,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ FIX VOOR 400-ERROR (GEEN REQUESTER OBJECT)")
-    log.info("✅ ALLE LOGS ZIJN ZICHTBAAR IN RENDER")
+    log.info("✅ FIX VOOR UAT: GEBRUIK GENESTE OBJECTEN IN API AANROEP")
+    log.info("✅ PROBLEEMOMSCHRIJVING ALLEEN IN DETAILS, REST IN PUBLIC NOTE")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
