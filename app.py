@@ -27,7 +27,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
     sys.exit(1)
 # ------------------------------------------------------------------------------
-# Custom Integration Core - CORRECTE HALO API ENDPOINT
+# Custom Integration Core - VOLLEDIG COMPLEET
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -50,6 +50,36 @@ def get_halo_token():
         if 'response' in locals():
             log.critical(f"➡️ Response: {response.text}")
         raise
+
+def get_client_by_id(client_id):
+    """Haal een specifieke klant op via ID"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Client/{client_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen klant met ID {client_id}: {str(e)}")
+        return None
+
+def get_site_by_id(site_id):
+    """Haal een specifieke locatie op via ID"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Site/{site_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
+        return None
 
 def get_site_users(site_id):
     """Haal GEBRUIKERS OP VOOR SPECIFIEKE SITE VIA DE JUISTE ENDPOINT"""
