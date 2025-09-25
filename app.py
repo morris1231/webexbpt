@@ -55,21 +55,18 @@ def get_halo_token():
         raise
 
 def fetch_all_clients():
-    """Haal ALLE klanten op met VOLLEDIGE PAGINERING en ORGANISATIE-EXTRACTIE"""
+    """Haal ALLE klanten op met VOLLEDIGE PAGINERING"""
     token = get_halo_token()
     clients = []
     page = 1
-    total_fetched = 0
     
     while True:
         try:
-            # 🔑 BELANGRIJK: Gebruik pageSize=50 (niet 100) want UAT geeft max 50 terug
             response = requests.get(
                 f"{HALO_API_BASE}/Client",
                 params={
                     "page": page,
-                    "pageSize": 50,  # CORRECTIE: UAT ondersteunt max 50 per pagina
-                    "includeorganisations": "true",
+                    "pageSize": 50,  # UAT geeft max 50 per pagina
                     "active": "true"
                 },
                 headers={"Authorization": f"Bearer {token}"},
@@ -77,63 +74,76 @@ def fetch_all_clients():
             )
             response.raise_for_status()
             data = response.json()
-            
-            # Log de RAW API response voor debugging
-            log.debug(f"🔍 RAW API response voor pagina {page}: {data.keys()}")
-            
             clients_page = data.get("clients", [])
             
             if not clients_page:
-                log.info(f"⏹️ Geen klanten meer gevonden op pagina {page}")
                 break
                 
-            # 🔑 ULTRA-ROBUSTE extractie van organisatiegegevens specifiek voor jouw UAT
-            for client in clients_page:
-                # In jouw specifieke UAT zit de organisatie in een array onder "Organisations"
-                # en de naam zit in een veld "Name" (met hoofdletter)
-                organisation_name = ""
-                
-                # Specifiek voor jouw UAT: Check op "Organisations" (met hoofdletter) en "Name"
-                if "Organisations" in client and isinstance(client["Organisations"], list) and len(client["Organisations"]) > 0:
-                    first_org = client["Organisations"][0]
-                    if isinstance(first_org, dict) and "Name" in first_org:
-                        organisation_name = first_org["Name"]
-                
-                # Sla de organisatie naam op voor later gebruik
-                client["organisation_name"] = organisation_name
-                
-                # Log de specifieke client data voor debugging
-                log.debug(f"🔍 Client gevonden: ID={client.get('id', 'Onbekend')} | Naam='{client.get('name', 'Onbekend')}' | Org='{organisation_name}'")
-            
             clients.extend(clients_page)
-            total_fetched += len(clients_page)
+            log.info(f"✅ Pagina {page} klanten: {len(clients_page)} toegevoegd (totaal: {len(clients)})")
             
-            log.info(f"✅ Pagina {page} klanten: {len(clients_page)} toegevoegd (totaal: {total_fetched})")
-            
-            # 🔑 BELANGRIJK: Blijf pagineren totdat er geen resultaten meer zijn
-            # (niet afhankelijk van pageSize omdat UAT max 50 teruggeeft)
             if len(clients_page) < 50:
                 break
                 
             page += 1
-            # Beveiliging tegen oneindige loops
-            if page > 100:
-                log.warning("⚠️ Te veel paginas - stoppen met pagineren")
+            if page > 100:  # Beveiliging tegen oneindige loops
                 break
                 
         except Exception as e:
             log.error(f"❌ Fout bij ophalen klanten: {str(e)}")
             break
             
-    log.info(f"🎉 Totaal {len(clients)} klanten opgehaald (inclusief organisatiegegevens)")
+    log.info(f"🎉 Totaal {len(clients)} klanten opgehaald")
     return clients
+
+def fetch_all_organisations():
+    """Haal ALLE organisaties op via DE JUISTE ENDPOINT"""
+    token = get_halo_token()
+    organisations = []
+    page = 1
+    
+    while True:
+        try:
+            # 🔑 BELANGRIJK: Gebruik de CORRECTE endpoint voor organisaties
+            response = requests.get(
+                f"{HALO_API_BASE}/Organisation",  # Dit is de JUISTE endpoint
+                params={
+                    "page": page,
+                    "pageSize": 50,
+                    "active": "true"
+                },
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            organisations_page = data.get("organisations", [])
+            
+            if not organisations_page:
+                break
+                
+            organisations.extend(organisations_page)
+            log.info(f"✅ Pagina {page} organisaties: {len(organisations_page)} toegevoegd (totaal: {len(organisations)})")
+            
+            if len(organisations_page) < 50:
+                break
+                
+            page += 1
+            if page > 100:
+                break
+                
+        except Exception as e:
+            log.error(f"❌ Fout bij ophalen organisaties: {str(e)}")
+            break
+            
+    log.info(f"🎉 Totaal {len(organisations)} organisaties opgehaald")
+    return organisations
 
 def fetch_all_sites():
     """Haal ALLE locaties op met VOLLEDIGE PAGINERING"""
     token = get_halo_token()
     sites = []
     page = 1
-    total_fetched = 0
     
     while True:
         try:
@@ -141,7 +151,7 @@ def fetch_all_sites():
                 f"{HALO_API_BASE}/Site",
                 params={
                     "page": page,
-                    "pageSize": 50,  # CORRECTIE: UAT ondersteunt max 50 per pagina
+                    "pageSize": 50,
                     "active": "true"
                 },
                 headers={"Authorization": f"Bearer {token}"},
@@ -155,9 +165,7 @@ def fetch_all_sites():
                 break
                 
             sites.extend(sites_page)
-            total_fetched += len(sites_page)
-            
-            log.info(f"✅ Pagina {page} locaties: {len(sites_page)} toegevoegd (totaal: {total_fetched})")
+            log.info(f"✅ Pagina {page} locaties: {len(sites_page)} toegevoegd (totaal: {len(sites)})")
             
             if len(sites_page) < 50:
                 break
@@ -177,7 +185,6 @@ def fetch_all_users():
     token = get_halo_token()
     users = []
     page = 1
-    total_fetched = 0
     
     while True:
         try:
@@ -185,7 +192,7 @@ def fetch_all_users():
                 f"{HALO_API_BASE}/User",
                 params={
                     "page": page,
-                    "pageSize": 50,  # CORRECTIE: UAT ondersteunt max 50 per pagina
+                    "pageSize": 50,
                     "active": "true"
                 },
                 headers={"Authorization": f"Bearer {token}"},
@@ -199,9 +206,7 @@ def fetch_all_users():
                 break
                 
             users.extend(users_page)
-            total_fetched += len(users_page)
-            
-            log.info(f"✅ Pagina {page} gebruikers: {len(users_page)} toegevoegd (totaal: {total_fetched})")
+            log.info(f"✅ Pagina {page} gebruikers: {len(users_page)} toegevoegd (totaal: {len(users)})")
             
             if len(users_page) < 50:
                 break
@@ -216,21 +221,15 @@ def fetch_all_users():
     log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald")
     return users
 
-def normalize_name(name, organisation_name=None):
+def normalize_name(name):
     """
     Normaliseer namen met ULTRA-ROBUSTE afhandeling specifiek voor jouw UAT
     """
-    # Combineer client en organisatie namen
-    full_name = (name or "").strip()
-    
-    # Voeg organisatie toe als beschikbaar
-    if organisation_name and str(organisation_name).strip() and str(organisation_name).strip() != "None":
-        # Voeg alleen toe als het niet al in de client naam zit
-        if organisation_name.lower() not in name.lower():
-            full_name += " " + str(organisation_name).strip()
+    if not name:
+        return ""
     
     # Stap 1: Basis schoonmaak
-    full_name = full_name.lower()
+    name = name.lower().strip()
     
     # Stap 2: Vervang veelvoorkomende varianten - ULTRA-ROBUST
     replacements = [
@@ -257,29 +256,30 @@ def normalize_name(name, organisation_name=None):
     ]
     
     for old, new in replacements:
-        full_name = full_name.replace(old, new)
+        name = name.replace(old, new)
     
     # Stap 3: Verwijder alle resterende niet-alphanumerieke tekens
-    full_name = re.sub(r'[^a-z0-9 ]', ' ', full_name)
+    name = re.sub(r'[^a-z0-9 ]', ' ', name)
     
     # Stap 4: Schoonmaak spaties
-    full_name = re.sub(r'\s+', ' ', full_name).strip()
+    name = re.sub(r'\s+', ' ', name).strip()
     
-    return full_name
+    return name
 
 def get_main_users():
     """Combineer alle data met ULTRA-FLEXIBELE ZOEKOPDRACHTEN specifiek voor jouw UAT"""
     global client_id, bossers_client, site_id, main_site
     
     # Stap 1: Haal alle benodigde data op
-    log.info("🔍 Start met ophalen van klanten, locaties en gebruikers...")
+    log.info("🔍 Start met ophalen van klanten, organisaties, locaties en gebruikers...")
     clients = fetch_all_clients()
+    organisations = fetch_all_organisations()  # 🔑 GEbruik de JUISTE endpoint
     sites = fetch_all_sites()
     users = fetch_all_users()
     
-    # Stap 2: Verbeterde klantzoekfunctie met ULTRA-ROBUSTE matching
-    log.info("🔍 Zoek klant 'Bossers & Cnossen' met ULTRA-FLEXIBELE matching...")
-    bossers_client = None
+    # Stap 2: Zoek de juiste organisatie voor "Bossers & Cnossen"
+    log.info("🔍 Zoek organisatie 'Bossers & Cnossen' met ULTRA-FLEXIBELE matching...")
+    bossers_organisation = None
     
     # 🔑 ULTRA-ROBUSTE zoektermen specifiek voor jouw UAT omgeving
     bossers_keywords = [
@@ -302,72 +302,86 @@ def get_main_users():
         "cnossen", "cnossen", "cnossen", "cnossen", "cnossen", "cnossen"
     ]
     
-    potential_matches = []
-    for c in clients:
-        # Haal organisatie naam op met ULTRA-VEILIGE afhandeling
-        organisation_name = c.get("organisation_name", "")
+    # Zoek in organisaties
+    for org in organisations:
+        org_name = org.get("name", "") or org.get("Name", "") or org.get("ORG_NAME", "")
+        normalized_name = normalize_name(org_name)
         
-        # Log de RAW data voor debugging
-        client_name = c.get("name", "Onbekend")
-        log.debug(f"🔍 RAW Client: '{client_name}' | Org: '{organisation_name}'")
-        
-        # Normaliseer met ULTRA-ROBUSTE methode
-        normalized_name = normalize_name(client_name, organisation_name)
-        
-        # 🔑 ULTRA-FLEXIBELE matching - check op beide delen
+        # Check voor Bossers & Cnossen
         has_bossers = any(keyword in normalized_name for keyword in bossers_keywords)
         has_cnossen = any(keyword in normalized_name for keyword in cnossen_keywords)
         
-        # Log alles voor debugging
-        if has_bossers or has_cnossen:
-            match_type = []
-            if has_bossers: match_type.append("✅ Bossers-match")
-            if has_cnossen: match_type.append("✅ Cnossen-match")
-            log.info(f"{' '.join(match_type)}: '{client_name}' + Org: '{organisation_name}' → '{normalized_name}'")
-            
-            potential_matches.append({
-                "id": c["id"],
-                "client_name": client_name,
-                "organisation_name": organisation_name,
-                "normalized_name": normalized_name,
-                "has_bossers": has_bossers,
-                "has_cnossen": has_cnossen
-            })
-        
-        # Sla op als potentiële match (alleen als BEIDE delen aanwezig zijn)
-        if has_bossers and has_cnossen and not bossers_client:
-            bossers_client = c
-            log.info(f"🎯 GEVONDEN: Klant '{client_name}' + Org: '{organisation_name}' gematcht als Bossers & Cnossen")
+        if has_bossers and has_cnossen:
+            bossers_organisation = org
+            log.info(f"🎯 GEVONDEN: Organisatie '{org_name}' gematcht als Bossers & Cnossen")
+            break
     
-    # Als we geen perfecte match vonden, gebruik dan de beste potentiële match
-    if not bossers_client and potential_matches:
-        log.warning("⚠️ Geen perfecte match gevonden, probeer beste potentiële match...")
-        # Sorteer op meeste matches
-        potential_matches.sort(key=lambda x: (x["has_bossers"] + x["has_cnossen"]), reverse=True)
-        best_match_id = potential_matches[0]["id"]
-        
-        bossers_client = next((c for c in clients if c["id"] == best_match_id), None)
-        if bossers_client:
-            org_name = bossers_client.get("organisation_name", "")
+    # Als we de organisatie niet vonden, probeer dan klanten
+    if not bossers_organisation:
+        log.warning("⚠️ Organisatie niet gevonden, probeer klanten...")
+        for client in clients:
+            client_name = client.get("name", "") or client.get("Name", "") or client.get("CLIENT_NAME", "")
+            normalized_name = normalize_name(client_name)
             
-            log.warning(f"⚠️ Gebruik BESTE POTENTIËLE MATCH voor klant: {bossers_client['name']} + Org: {org_name}")
+            has_bossers = any(keyword in normalized_name for keyword in bossers_keywords)
+            has_cnossen = any(keyword in normalized_name for keyword in cnossen_keywords)
+            
+            if has_bossers and has_cnossen:
+                # Behandel als klant in plaats van organisatie
+                bossers_organisation = {
+                    "id": client["id"],
+                    "name": client_name,
+                    "is_client": True
+                }
+                log.info(f"🎯 GEVONDEN: Klant '{client_name}' gematcht als Bossers & Cnossen")
+                break
     
-    if not bossers_client:
-        log.error("❌ Klant 'Bossers & Cnossen' NIET GEVONDEN in Halo")
-        # Toon ALLE klanten voor debugging
-        log.info("🔍 Alle klanten in Halo (voor debugging):")
-        for c in clients[:50]:  # Meer voor overzicht
-            org_name = c.get("organisation_name", "")
-            log.info(f" - Client: '{c.get('name', 'Onbekend')}' + Org: '{org_name}'")
+    if not bossers_organisation:
+        log.error("❌ 'Bossers & Cnossen' NIET GEVONDEN in Halo")
+        # Toon de eerste 20 organisaties en klanten voor debugging
+        log.info("🔍 Eerste 10 organisaties in Halo (voor debugging):")
+        for org in organisations[:10]:
+            org_name = org.get("name", "") or org.get("Name", "") or "Onbekend"
+            log.info(f" - Org: '{org_name}' (ID: {org.get('id', 'Onbekend')})")
+        
+        log.info("🔍 Eerste 10 klanten in Halo (voor debugging):")
+        for client in clients[:10]:
+            client_name = client.get("name", "") or "Onbekend"
+            log.info(f" - Client: '{client_name}' (ID: {client.get('id', 'Onbekend')})")
         
         return []
     
+    # Stap 3: Vind de bijbehorende klant
+    log.info("🔍 Zoek bijbehorende klant voor organisatie...")
+    bossers_client = None
+    
+    if bossers_organisation.get("is_client", False):
+        # Als we een klant hebben gevonden in plaats van organisatie
+        client_id = int(bossers_organisation["id"])
+        for client in clients:
+            if int(client["id"]) == client_id:
+                bossers_client = client
+                break
+    else:
+        # Zoek klant met dezelfde ID als organisatie
+        org_id = int(bossers_organisation["id"])
+        for client in clients:
+            # In jouw UAT zit de organisatie koppeling in client.organisation_id
+            client_org_id = client.get("organisation_id") or client.get("OrganisationID") or client.get("organisationid")
+            if client_org_id and int(client_org_id) == org_id:
+                bossers_client = client
+                break
+    
+    if not bossers_client:
+        log.error("❌ Geen bijbehorende klant gevonden voor organisatie")
+        return []
+    
     client_id = int(bossers_client["id"])
-    org_name = bossers_client.get("organisation_name", "")
+    org_name = bossers_organisation.get("name", "") or bossers_organisation.get("Name", "")
     
     log.info(f"✅ Gebruik klant-ID: {client_id} (Naam: '{bossers_client['name']}' + Org: '{org_name}')")
     
-    # Stap 3: Vind de juiste Site ID voor "Main"
+    # Stap 4: Vind de juiste Site ID voor "Main"
     log.info("🔍 Zoek locatie 'Main' met flexibele matching...")
     main_site = None
     for s in sites:
@@ -393,7 +407,7 @@ def get_main_users():
     site_id = int(main_site["id"])
     log.info(f"✅ Gebruik locatie-ID: {site_id} (Naam: '{main_site['name']}')")
     
-    # Stap 4: Filter gebruikers
+    # Stap 5: Filter gebruikers
     log.info("🔍 Filter Main-site gebruikers...")
     main_users = []
     for user in users:
@@ -407,9 +421,6 @@ def get_main_users():
             user_site_id = int(user.get("site_id", 0))
             if user_site_id != site_id:
                 continue
-            
-            # Haal organisatie naam op voor logging
-            org_name = bossers_client.get("organisation_name", "")
             
             main_users.append({
                 "id": user["id"],
@@ -466,7 +477,7 @@ def get_users():
         
         # Haal client en site namen op voor de response
         client_name = bossers_client["name"]
-        org_name = bossers_client.get("organisation_name", "")
+        org_name = bossers_organisation.get("name", "") or bossers_organisation.get("Name", "")
         
         full_client_name = f"{client_name} {org_name}".strip()
         site_name = main_site["name"]
@@ -491,24 +502,22 @@ def get_users():
 def debug_info():
     """Technische debug informatie - MET ULTRA-DETAILRIJKE LOGGING"""
     try:
-        log.info("🔍 /debug endpoint aangeroepen - haal klanten en locaties op")
+        log.info("🔍 /debug endpoint aangeroepen - haal klanten, organisaties en locaties op")
         clients = fetch_all_clients()
+        organisations = fetch_all_organisations()
         sites = fetch_all_sites()
         
-        # Toon eerste 5 klanten en locaties voor debugging
-        sample_clients = [{"id": c["id"], "name": c["name"], "organisation": c.get("organisation_name", "")} for c in clients[:5]]
+        # Toon eerste 5 klanten, organisaties en locaties voor debugging
+        sample_clients = [{"id": c["id"], "name": c["name"]} for c in clients[:5]]
+        sample_organisations = [{"id": o["id"], "name": o.get("name", "") or o.get("Name", "")} for o in organisations[:5]]
         sample_sites = [{"id": s["id"], "name": s["name"]} for s in sites[:5]]
         
-        # Zoek naar potentiële Bossers & Cnossen varianten
+        # Zoek naar potentiële Bossers & Cnossen varianten in organisaties
         bossers_variants = []
-        all_candidates = []
         
-        for c in clients:
-            # Haal organisatie naam op
-            organisation_name = c.get("organisation_name", "")
-            
-            original_name = c.get("name", "Onbekend")
-            normalized_name = normalize_name(original_name, organisation_name)
+        for org in organisations:
+            org_name = org.get("name", "") or org.get("Name", "") or "Onbekend"
+            normalized_name = normalize_name(org_name)
             
             # Check voor Bossers & Cnossen
             has_bossers = any(
@@ -522,21 +531,35 @@ def debug_info():
             
             if has_bossers or has_cnossen:
                 bossers_variants.append({
-                    "id": c["id"],
-                    "client_name": original_name,
-                    "organisation_name": organisation_name,
+                    "id": org["id"],
+                    "organisation_name": org_name,
                     "normalized_name": normalized_name,
                     "has_bossers": has_bossers,
                     "has_cnossen": has_cnossen
                 })
+        
+        # Zoek in klanten als alternatief
+        for client in clients:
+            client_name = client.get("name", "Onbekend")
+            normalized_name = normalize_name(client_name)
             
-            # Check voor alle kandidaten met 'bos' of 'cno' (ULTRA-ROBUST)
-            if "bos" in normalized_name or "cno" in normalized_name or "boss" in normalized_name or "cnos" in normalized_name:
-                all_candidates.append({
-                    "id": c["id"],
-                    "client_name": original_name,
-                    "organisation_name": organisation_name,
-                    "full_normalized": normalized_name
+            has_bossers = any(
+                keyword in normalized_name
+                for keyword in ["boss", "b os", "b.o", "b&", "b c", "b.c", "b&c", "bossers"]
+            )
+            has_cnossen = any(
+                keyword in normalized_name
+                for keyword in ["cno", "c.o", "c&", "c c", "c.c", "c&c", "cnossen"]
+            )
+            
+            if has_bossers or has_cnossen:
+                bossers_variants.append({
+                    "id": client["id"],
+                    "client_name": client_name,
+                    "is_client": True,
+                    "normalized_name": normalized_name,
+                    "has_bossers": has_bossers,
+                    "has_cnossen": has_cnossen
                 })
         
         log.info("✅ /debug data verzameld - controleer op Bossers & Main")
@@ -545,21 +568,21 @@ def debug_info():
             "halo_data": {
                 "total_clients": len(clients),
                 "example_clients": sample_clients,
+                "total_organisations": len(organisations),
+                "example_organisations": sample_organisations,
                 "total_sites": len(sites),
                 "example_sites": sample_sites,
                 "note": "Controleer of 'Bossers & Cnossen' en 'Main' in deze lijsten staan"
             },
             "bossers_variants_found": bossers_variants,
-            "all_possible_candidates": all_candidates,
             "troubleshooting": [
                 "1. Klantnaam kan variëren: 'Bossers & Cnossen', 'B&C', 'Bossers en Cnossen'",
-                "2. Organisatie naam is KRIKEND belangrijk - check 'organisation_name' in response",
+                "2. Gebruik de /debug output om de EXACTE spelling te zien",
                 "3. Beheerder moet ALLE vinkjes hebben aangevinkt in API-toegang",
-                "4. Gebruik 'all_possible_candidates' om de exacte spelling te vinden",
-                "5. De integratie combineert nu client-naam en organisatie-naam voor matching",
-                "6. API gebruikt 'Organisations' (met hoofdletter) en 'Name' (met hoofdletter) in jouw UAT"
+                "4. De organisatie zit mogelijk in een aparte endpoint (/Organisation)",
+                "5. De klant kan direct de naam 'Bossers & Cnossen' hebben"
             ],
-            "hint": "Deze integratie gebruikt ULTRA-FLEXIBELE matching voor klantnamen inclusief organisaties"
+            "hint": "Deze integratie doorzoekt NU zowel klanten als organisaties voor 'Bossers & Cnossen'"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -579,10 +602,10 @@ if __name__ == "__main__":
     log.info("✅ Werkt ZONDER 'include' parameter (omzeilt Halo UAT bugs)")
     log.info("✅ Gebruikt ULTRA-FLEXIBELE matching voor klantnamen")
     log.info("✅ Normaliseert namen automatisch voor betere matching")
-    log.info("✅ Haalt ORGANISATIES op via includeorganisations=true")
+    log.info("✅ Haalt ORGANISATIES op via DE JUISTE ENDPOINT (/Organisation)")
     log.info("✅ Filtert alleen ACTIEVE klanten")
     log.info("✅ VOLLEDIGE PAGINERING (UAT geeft max 50 per pagina)")
-    log.info("✅ CORRECTE ORGANISATIE-EXTRACTIE VOOR JOUW SPECIFIEKE UAT")
+    log.info("✅ ZOEKT NU ZOWEL IN KLANTEN ALS IN ORGANISATIES")
     log.info("✅ ULTRA-DEBUGGABLE MET VOLLEDIGE RAW DATA LOGGING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
