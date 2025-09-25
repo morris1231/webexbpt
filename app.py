@@ -46,7 +46,7 @@ HALO_API_BASE = "https://bncuat.halopsa.com/api"
 log.info(f"✅ Halo API endpoints ingesteld: {HALO_AUTH_URL} en {HALO_API_BASE}")
 
 # Halo ticket instellingen
-HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "65"))
+HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", "65"))  # ✅ GEUPDATE NAAR 65
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", "1"))
 HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", "3"))
 HALO_DEFAULT_URGENCY = int(os.getenv("HALO_URGENCY", "3"))
@@ -229,7 +229,7 @@ def get_halo_user_id(email: str):
 log.info("✅ Gebruikers cache functies geregistreerd")
 
 # ------------------------------------------------------------------------------
-# Halo Tickets (DEFINITIEVE FIX VOOR UAT)
+# Halo Tickets (ULTRA-FIX VOOR TICKETTYPE 65 IN UAT)
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
@@ -238,40 +238,109 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
     
-    # ✅ CORRECTE STRUCTUUR VOOR UAT - DIRECTE INTEGER WAARDEN
+    # ✅ STAP 1: BASIS TICKET AANMAKEN (GEEN CUSTOM FIELDS)
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
-        "TypeID": int(HALO_TICKET_TYPE_ID),  # ✅ Directe integer
-        "ClientID": int(HALO_CLIENT_ID_NUM),  # ✅ Directe integer
-        "SiteID": int(HALO_SITE_ID),         # ✅ Directe integer
-        "TeamID": int(HALO_TEAM_ID),         # ✅ Directe integer
-        "ImpactID": int(impact_id),          # ✅ Directe integer
-        "UrgencyID": int(urgency_id)         # ✅ Directe integer
+        "TypeID": int(HALO_TICKET_TYPE_ID),
+        "ClientID": int(HALO_CLIENT_ID_NUM),
+        "SiteID": int(HALO_SITE_ID),
+        "TeamID": int(HALO_TEAM_ID),
+        "ImpactID": int(impact_id),
+        "UrgencyID": int(urgency_id)
     }
     
-    # ✅ GEBRUIKER KOPPELEN MET USERID (GEEN REQUESTER OBJECT)
+    # ✅ GEBRUIKER KOPPELEN MET USERID
     if requester_id:
         body["UserID"] = int(requester_id)
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
-    else:
-        log.warning("⚠️ Geen gebruiker gevonden - ticket zonder UserID")
     
     try:
-        log.debug(f"➡️ Halo API aanroep met body: {body}")
+        log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")
         r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
         
         if r.status_code not in (200, 201):
-            log.error(f"❌ Halo response {r.status_code}: {r.text[:500]}")
-            if room_id: 
-                send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code}) - Controleer logs")
+            log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code} - {r.text[:500]}")
+            if room_id:
+                send_message(room_id, f"⚠️ Basis ticket aanmaken mislukt ({r.status_code})")
             return None
         
-        log.info(f"✅ Ticket succesvol aangemaakt: {r.json().get('Ref', 'Onbekend')}")
+        log.info("✅ Basis ticket succesvol aangemaakt")
         ticket = r.json()
         ticket_id = ticket.get("ID") or ticket.get("id")
         
-        # ✅ PUBLIC NOTE TOEVOEGEN MET ALLE ANDERE VRAGEN
+        # ✅ STAP 2: CUSTOM FIELDS TOEVOEGEN (SPECIFIEK VOOR TICKETTYPE 65)
+        log.info(f"🔧 Custom fields toevoegen aan ticket {ticket_id}...")
+        
+        # Custom field 1: Sinds wanneer
+        if sindswanneer != "Niet opgegeven":
+            cf_body = {
+                "FieldName": "Sinds wanneer",  # Moet EXACT overeenkomen met Halo
+                "Value": str(sindswanneer)
+            }
+            r = requests.post(
+                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
+                headers=h,
+                json=cf_body,
+                timeout=10
+            )
+            if r.status_code in (200, 201):
+                log.info("✅ Custom field 'Sinds wanneer' toegevoegd")
+            else:
+                log.error(f"❌ Fout bij 'Sinds wanneer': {r.status_code} - {r.text[:500]}")
+        
+        # Custom field 2: Wat werkt niet
+        if watwerktniet != "Niet opgegeven":
+            cf_body = {
+                "FieldName": "Wat werkt niet",  # Moet EXACT overeenkomen met Halo
+                "Value": str(watwerktniet)
+            }
+            r = requests.post(
+                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
+                headers=h,
+                json=cf_body,
+                timeout=10
+            )
+            if r.status_code in (200, 201):
+                log.info("✅ Custom field 'Wat werkt niet' toegevoegd")
+            else:
+                log.error(f"❌ Fout bij 'Wat werkt niet': {r.status_code} - {r.text[:500]}")
+        
+        # Custom field 3: Zelf geprobeerd
+        if zelfgeprobeerd != "Niet opgegeven":
+            cf_body = {
+                "FieldName": "Zelf geprobeerd",  # Moet EXACT overeenkomen met Halo
+                "Value": str(zelfgeprobeerd)
+            }
+            r = requests.post(
+                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
+                headers=h,
+                json=cf_body,
+                timeout=10
+            )
+            if r.status_code in (200, 201):
+                log.info("✅ Custom field 'Zelf geprobeerd' toegevoegd")
+            else:
+                log.error(f"❌ Fout bij 'Zelf geprobeerd': {r.status_code} - {r.text[:500]}")
+        
+        # Custom field 4: Impact toelichting
+        if impacttoelichting != "Niet opgegeven":
+            cf_body = {
+                "FieldName": "Impact toelichting",  # Moet EXACT overeenkomen met Halo
+                "Value": str(impacttoelichting)
+            }
+            r = requests.post(
+                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
+                headers=h,
+                json=cf_body,
+                timeout=10
+            )
+            if r.status_code in (200, 201):
+                log.info("✅ Custom field 'Impact toelichting' toegevoegd")
+            else:
+                log.error(f"❌ Fout bij 'Impact toelichting': {r.status_code} - {r.text[:500]}")
+        
+        # ✅ STAP 3: PUBLIC NOTE TOEVOEGEN MET ALLE ANDERE VRAGEN
         log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
         
         public_note = (
@@ -536,8 +605,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ FIX VOOR UAT: GEBRUIK DIRECTE INTEGER WAARDEN VOOR ALLE ID'S")
-    log.info("✅ PROBLEEMOMSCHRIJVING ALLEEN IN DETAILS, REST IN PUBLIC NOTE")
+    log.info("✅ FIX VOOR TICKETTYPE 65: STAPSGEWIJZE AANMAAK")
+    log.info("✅ PROBLEEMOMSCHRIJVING ALLEEN IN DETAILS, REST IN CUSTOM FIELDS")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
