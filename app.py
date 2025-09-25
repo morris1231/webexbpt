@@ -21,10 +21,9 @@ load_dotenv()
 app = Flask(__name__)
 log.info("✅ Flask applicatie geïnitialiseerd")
 
-# ✅ FIX 1: HALO API ENDPOINT MET /v1 (VERPLICHT VOOR HALO PSA)
-# Oorspronkelijke fout: Geen /v1 leidde tot 404 fouten
+# ✅ UAT SPECIFIEKE ENDPOINTS (GEEN /v1 VOOR UAT!)
 HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
-HALO_API_BASE = "https://bncuat.halopsa.com/api/v1"  # ✅ CORRECTIE: /v1 toegevoegd
+HALO_API_BASE = "https://bncuat.halopsa.com/api"  # GEEN /v1 VOOR UAT OMGEVING
 log.info(f"✅ Halo API endpoints ingesteld: {HALO_AUTH_URL} en {HALO_API_BASE}")
 
 # Webex token validatie
@@ -44,21 +43,20 @@ else:
     log.info(f"✅ Halo credentials gevonden (Client ID: {HALO_CLIENT_ID})")
 
 # Halo ticket instellingen
-HALO_TICKET_TYPE_ID = "65"  # ✅ ALS STRING, niet integer
+HALO_TICKET_TYPE_ID = "65"
 HALO_TEAM_ID = "1"
 HALO_DEFAULT_IMPACT = "3"
 HALO_DEFAULT_URGENCY = "3"
 HALO_ACTIONTYPE_PUBLIC = "78"
 log.info(f"✅ Halo ticket instellingen: Type={HALO_TICKET_TYPE_ID}, Team={HALO_TEAM_ID}")
 
-# Klant en locatie ID's - ALS STRINGS (cruciaal voor jouw UAT)
+# Klant en locatie ID's - ALS STRINGS
 HALO_CLIENT_ID_NUM = "986"  # Bossers & Cnossen
 HALO_SITE_ID = "992"        # Main site
 log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen)")
 log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main site)")
 
 # Globale cache variabele
-# ✅ FIX 2: SYNTAX CORRECTIE (VERVANGEN _ DOOR *)
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur (correcte Python syntax)
 log.info("✅ Cache systeem geïnitialiseerd (24-uurs cache)")
@@ -108,7 +106,7 @@ def get_halo_headers():
         raise
 
 def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
-    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN MET /v1 SUPPORT"""
+    """UAT-GESCHIKTE OPHAALFUNCTIE VOOR KLANTCONTACTEN"""
     log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")
     h = get_halo_headers()
     all_contacts = []
@@ -119,7 +117,7 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
             "include": "site,client",
             "client_id": client_id,
             "site_id": site_id,
-            "type": "contact",  # Alleen klantcontacten
+            "type": "contact",
             "page": page,
             "page_size": 50
         }
@@ -132,9 +130,10 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                 params=params,
                 timeout=15
             )
-            # ✅ FIX 3: ROBUSTERE RESPONSE HANDELING
+            
+            # ✅ UAT SPECIFIEKE RESPONSE HANDELING
             if r.status_code == 404:
-                log.critical("❌ FATALE FOUT: Verkeerd API-endpoint! Moet /api/v1/People zijn")
+                log.critical("❌ FATALE FOUT: Verkeerd API-endpoint! Moet /api/People zijn (GEEN /v1)")
                 break
             if r.status_code != 200:
                 log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
@@ -143,14 +142,14 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
             
             try:
                 data = r.json()
-                # ✅ FIX 4: MEER ROBUSTE RESPONSE PARSING
-                contacts = data.get('people', []) or data.get('items', []) or []
+                # ✅ UAT SPECIFIEKE RESPONSE STRUCTUUR
+                contacts = data.get('people', []) or data.get('items', []) or data or []
                 if not contacts:
                     log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
                     break
                 
                 log.debug(f"⬅️ API response ontvangen: {len(contacts)} klantcontacten gevonden")
-                # Log voor debugging (case-insensitive email matching)
+                # Log voor debugging
                 for contact in contacts[:3]:
                     email_fields = [
                         str(contact.get("EmailAddress") or "").lower(),
@@ -208,6 +207,15 @@ def get_halo_contact_id(email: str):
     log.debug(f"🔍 Zoeken naar klantcontact met email: {email}")
     main_contacts = get_main_contacts()
     
+    # Log alle gecachte contacten voor debugging
+    log.debug(f"📊 Gecachte contacten ({len(main_contacts)}):")
+    for c in main_contacts[:3]:
+        log.debug(
+            f"📧 Contact: ID={c.get('id','N/A')}, "
+            f"Naam={c.get('name','N/A')}, "
+            f"Email={c.get('EmailAddress','N/A')}"
+        )
+    
     for c in main_contacts:
         # Alle mogelijke email velden controleren (case-insensitive)
         email_fields = [
@@ -217,7 +225,11 @@ def get_halo_contact_id(email: str):
             str(c.get("username") or "").lower()
         ]
         
-        # ✅ FIX 5: ROBUSTERE EMAIL MATCHING
+        # Log voor debugging
+        for field in email_fields:
+            if field:
+                log.debug(f"🔍 Vergelijk: '{field}' vs '{email}'")
+        
         if any(email == e for e in email_fields if e):
             log.info(f"✅ Email match gevonden: {email} → Klantcontact ID={c.get('id')}")
             return c.get("id")
@@ -247,7 +259,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "UrgencyID": str(urgency_id)
     }
     
-    # ✅ FIX 6: CONTACT VALIDATIE
+    # ✅ CONTACT VALIDATIE VOOR UAT
     if not contact_id:
         log.critical("❌ FATALE FOUT: Geen klantcontact gevonden - Controleer klant/locatie ID's")
         if room_id:
@@ -256,11 +268,10 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     
     body["ContactID"] = str(contact_id)
     log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id}")
+    log.debug(f"➡️ Volledige ticket payload: {body}")
 
     try:
         log.info("➡️ Halo API aanroep voor basis ticket")
-        log.debug(f"➡️ Volledige ticket payload: {body}")
-        
         r = requests.post(
             f"{HALO_API_BASE}/Tickets",
             headers=h,
@@ -268,7 +279,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             timeout=15
         )
         
-        # ✅ FIX 7: ROBUSTERE RESPONSE HANDELING
+        # ✅ UAT SPECIFIEKE RESPONSE HANDELING
         log.info(f"⬅️ API response status: {r.status_code}")
         log.debug(f"⬅️ Volledige API response: {r.text}")
         
@@ -276,17 +287,19 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")
             log.error(f"➡️ Response body: {r.text}")
             
-            # Specifieke foutanalyse
+            # Specifieke UAT foutanalyse
             if r.status_code == 400:
                 log.critical("❌ Mogelijk ongeldige waarden in ticket payload - Controleer ID's")
             elif r.status_code == 401:
                 log.critical("❌ Ongeautoriseerd - Controleer Halo credentials")
+            elif r.status_code == 404:
+                log.critical("❌ Endpoint niet gevonden - Zeker weten dat UAT geen /v1 gebruikt?")
                 
             if room_id:
                 send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")
             return None
 
-        # ✅ FIX 8: ROBUSTERE TICKET ID EXTRACTIE
+        # ✅ ROBUSTERE TICKET ID EXTRACTIE VOOR UAT
         try:
             ticket = r.json()
             ticket_id = ticket.get("ID") or ticket.get("id") or ticket.get("TicketID")
@@ -561,13 +574,13 @@ def initialize_cache():
     duration = time.time() - start_time
     log.info(f"⏱️  Cache geinitialiseerd in {duration:.2f} seconden")
     
-    # ✅ FIX 9: EXTRA DEBUGGING INFO VOOR CACHE
+    # ✅ EXTRA DEBUGGING INFO VOOR CACHE
     cache_size = len(CONTACT_CACHE["contacts"])
     if cache_size == 0:
         log.critical("❌ CACHE IS LEEG! Mogelijke oorzaken:")
         log.critical("1. Verkeerde klant/locatie ID's (momenteel: Client=%s, Site=%s)", HALO_CLIENT_ID_NUM, HALO_SITE_ID)
         log.critical("2. Halo API token problemen")
-        log.critical("3. Verkeerd API-endpoint (moet /api/v1 zijn)")
+        log.critical("3. Verkeerd API-endpoint (UAT gebruikt GEEN /v1)")
     
     return {
         "status": "initialized",
@@ -575,8 +588,49 @@ def initialize_cache():
         "duration_seconds": duration,
         "cache_timestamp": CONTACT_CACHE["timestamp"],
         "client_id": HALO_CLIENT_ID_NUM,
-        "site_id": HALO_SITE_ID
+        "site_id": HALO_SITE_ID,
+        "api_base": HALO_API_BASE
     }
+
+@app.route("/test-halo", methods=["GET"])
+def test_halo_api():
+    """Test of Halo API correct reageert in UAT"""
+    try:
+        h = get_halo_headers()
+        
+        # Test People endpoint
+        people = requests.get(
+            f"{HALO_API_BASE}/People",
+            headers=h,
+            params={"client_id": HALO_CLIENT_ID_NUM, "site_id": HALO_SITE_ID},
+            timeout=10
+        )
+        
+        # Test Tickets endpoint
+        tickets = requests.get(
+            f"{HALO_API_BASE}/Tickets",
+            headers=h,
+            params={"page_size": 1},
+            timeout=10
+        )
+        
+        return {
+            "status": "Halo API Test",
+            "environment": "UAT",
+            "api_base": HALO_API_BASE,
+            "people_endpoint": {
+                "url": f"{HALO_API_BASE}/People",
+                "status": people.status_code,
+                "response": people.json() if people.status_code == 200 else people.text
+            },
+            "tickets_endpoint": {
+                "url": f"{HALO_API_BASE}/Tickets",
+                "status": tickets.status_code,
+                "response": tickets.json() if tickets.status_code == 200 else tickets.text
+            }
+        }
+    except Exception as e:
+        return {"error": str(e)}
 log.info("✅ Webex event handler geregistreerd")
 # ------------------------------------------------------------------------------
 # INITIELE CACHE LOADING BIJ OPSTARTEN
@@ -589,7 +643,7 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ GEBRUIKT /api/v1 ENDPOINTS VOOR KLANTCONTACTEN")
+    log.info("✅ GEBRUIKT /api ENDPOINTS VOOR KLANTCONTACTEN (GEEN /v1 VOOR UAT!)")
     log.info("✅ ContactID GEBRUIKT VOOR KOPPELING (ALS STRING)")
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN")
     log.info("-"*70)
@@ -617,11 +671,11 @@ if __name__ == "__main__":
     log.info("2. Bezoek direct na deploy: /initialize (vul URL in browser)")
     log.info("   Voorbeeld: https://jouw-app-naam.onrender.com/initialize")
     log.info("3. Controleer de logs voor cache details")
-    log.info("4. Typ in Webex: 'nieuwe melding' om het formulier te openen")
-    log.info("5. Vul het formulier in en verstuur")
-    log.info("6. BELANGRIJK: Alle ID's worden als STRING verstuurd")
-    log.info("7. API-endpoints gebruiken nu correct /api/v1")
-    log.info("8. Bij problemen: Controleer of klant/locatie ID's kloppen")
+    log.info("4. Gebruik /test-halo endpoint voor directe API-test")
+    log.info("   Voorbeeld: https://jouw-app-naam.onrender.com/test-halo")
+    log.info("5. Typ in Webex: 'nieuwe melding' om het formulier te openen")
+    log.info("6. BELANGRIJK: UAT GEBRUIKT GEEN /v1 IN DE API-URL")
+    log.info("7. Controleer of klant/locatie ID's correct zijn in UAT")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port, debug=False)
 else:
