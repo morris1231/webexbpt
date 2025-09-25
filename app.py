@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
 # ------------------------------------------------------------------------------
 # FORCEER LOGGING NAAR STDOUT (GEEN BUFFERING)
 # ------------------------------------------------------------------------------
@@ -30,6 +31,7 @@ if not WEBEX_TOKEN:
     log.critical("❌ FOUT: WEBEX_BOT_TOKEN niet ingesteld in .env!")
 else:
     log.info(f"✅ Webex token gevonden (lengte: {len(WEBEX_TOKEN)} tekens)")
+
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
 
 # Halo credentials validatie
@@ -63,6 +65,10 @@ log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main site)")
 USER_CACHE = {"users": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 log.info("✅ Cache systeem geïnitialiseerd (24-uurs cache)")
+
+# Globale ticket kamer mapping
+ticket_room_map = {}
+log.info("✅ Ticket kamer mapping systeem geïnitialiseerd")
 
 # ------------------------------------------------------------------------------
 # ID Normalisatie Helper
@@ -113,10 +119,8 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
     all_users = []
     page = 1
     page_size = 50
-    
     while page <= max_pages:
         log.info(f"📄 Ophalen pagina {page} ({page_size} gebruikers per pagina)...")
-        
         params = {
             "include": "site,client",
             "client_id": client_id,
@@ -124,7 +128,6 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
             "page": page,
             "page_size": page_size
         }
-        
         try:
             log.debug(f"➡️ API aanvraag met parameters: {params}")
             r = requests.get(
@@ -133,82 +136,63 @@ def fetch_all_site_users(client_id: int, site_id: int, max_pages=20):
                 params=params,
                 timeout=15
             )
-            
             if r.status_code != 200:
                 log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
                 log.debug(f"➡️ Response: {r.text}")
                 break
-                
             data = r.json()
             log.debug(f"⬅️ API response ontvangen: {len(data.get('users', []))} gebruikers gevonden")
             users = data.get("users", [])
-            
             if not users:
                 log.info(f"✅ Geen gebruikers gevonden op pagina {page} - einde bereikt")
                 break
-                
             all_users.extend(users)
             log.info(f"📥 Pagina {page} opgehaald: {len(users)} gebruikers (Totaal: {len(all_users)})")
-            
             if len(users) < page_size:
                 log.info("✅ Minder gebruikers dan page_size - einde bereikt")
                 break
-                
             page += 1
-            
         except Exception as e:
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
-    
     log.info(f"👥 SUCCES: {len(all_users)} gebruikers opgehaald voor klant {client_id} en locatie {site_id}")
     return all_users
 
 def get_main_users():
     """24-UURS CACHE MET UAT-SPECIFIEKE VALIDATIE + INITIELE LOADING"""
     current_time = time.time()
-    
     # Controleer of cache geldig is
     if USER_CACHE["users"] and (current_time - USER_CACHE["timestamp"] < CACHE_DURATION):
         log.info(f"✅ Cache gebruikt (vernieuwd {int((current_time - USER_CACHE['timestamp'])/60)} minuten geleden)")
         return USER_CACHE["users"]
-    
     log.warning("🔄 Cache verlopen, vernieuwen Bossers & Cnossen Main users…")
-    
     # Haal ALLE gebruikers op
     log.info("⏳ Start ophalen van alle gebruikers...")
     start_time = time.time()
     users = fetch_all_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     duration = time.time() - start_time
     log.info(f"⏱️  Gebruikers opgehaald in {duration:.2f} seconden")
-    
     # Filter op juiste klant en locatie
     valid_users = []
     client_id_norm = normalize_id(HALO_CLIENT_ID_NUM)
     site_id_norm = normalize_id(HALO_SITE_ID)
-    
     for user in users:
         user_client_id = normalize_id(user.get("client_id"))
         user_site_id = normalize_id(user.get("site_id"))
-        
         if user_client_id == client_id_norm and user_site_id == site_id_norm:
             valid_users.append(user)
-    
     USER_CACHE["users"] = valid_users
     USER_CACHE["timestamp"] = time.time()
     log.info(f"✅ {len(valid_users)} GEVALIDEERDE Main users gecached (van {len(users)} API-responses)")
-    
     return USER_CACHE["users"]
 
 def get_halo_user_id(email: str):
     """GEFIXTE EMAIL MATCHING MET UAT-COMPATIBILITEIT"""
-    if not email: 
+    if not email:
         return None
-    
     email = email.strip().lower()
     log.debug(f"🔍 Zoeken naar gebruiker met email: {email}")
-    
     main_users = get_main_users()
-    
     for u in main_users:
         email_fields = [
             str(u.get("EmailAddress") or "").lower(),
@@ -219,17 +203,15 @@ def get_halo_user_id(email: str):
             str(u.get("networklogin") or "").lower(),
             str(u.get("adobject") or "").lower()
         ]
-        
         if email in [e for e in email_fields if e]:
             log.info(f"✅ Email match gevonden: {email} → Gebruiker ID={u.get('id')}")
             return u.get("id")
-    
     log.warning(f"⚠️ Geen gebruiker gevonden voor email: {email}")
     return None
 log.info("✅ Gebruikers cache functies geregistreerd")
 
 # ------------------------------------------------------------------------------
-# Halo Tickets (ULTRA-FIX VOOR TICKETTYPE 65 IN UAT)
+# Halo Tickets (FIX VOOR TICKETTYPE 65 - ZONDER CUSTOM FIELDS)
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
@@ -238,7 +220,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()
     requester_id = get_halo_user_id(email)
     
-    # ✅ STAP 1: BASIS TICKET AANMAKEN (GEEN CUSTOM FIELDS)
+    # ✅ STAP 1: BASIS TICKET AANMAKEN (ALLEEN STANDAARD FIELDS)
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
@@ -254,6 +236,8 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     if requester_id:
         body["UserID"] = int(requester_id)
         log.info(f"👤 Ticket gekoppeld aan gebruiker ID: {requester_id}")
+    else:
+        log.warning("⚠️ Geen gebruiker gevonden in Halo voor het opgegeven e-mailadres")
     
     try:
         log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")
@@ -264,108 +248,50 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             if room_id:
                 send_message(room_id, f"⚠️ Basis ticket aanmaken mislukt ({r.status_code})")
             return None
-        
+            
         log.info("✅ Basis ticket succesvol aangemaakt")
         ticket = r.json()
         ticket_id = ticket.get("ID") or ticket.get("id")
         
-        # ✅ STAP 2: CUSTOM FIELDS TOEVOEGEN (SPECIFIEK VOOR TICKETTYPE 65)
-        log.info(f"🔧 Custom fields toevoegen aan ticket {ticket_id}...")
+        if not ticket_id:
+            log.error("❌ Ticket ID niet gevonden in antwoord")
+            return None
+            
+        log.info(f"🎫 Ticket ID: {ticket_id}")
         
-        # Custom field 1: Sinds wanneer
-        if sindswanneer != "Niet opgegeven":
-            cf_body = {
-                "FieldName": "Sinds wanneer",  # Moet EXACT overeenkomen met Halo
-                "Value": str(sindswanneer)
-            }
-            r = requests.post(
-                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
-                headers=h,
-                json=cf_body,
-                timeout=10
-            )
-            if r.status_code in (200, 201):
-                log.info("✅ Custom field 'Sinds wanneer' toegevoegd")
-            else:
-                log.error(f"❌ Fout bij 'Sinds wanneer': {r.status_code} - {r.text[:500]}")
-        
-        # Custom field 2: Wat werkt niet
-        if watwerktniet != "Niet opgegeven":
-            cf_body = {
-                "FieldName": "Wat werkt niet",  # Moet EXACT overeenkomen met Halo
-                "Value": str(watwerktniet)
-            }
-            r = requests.post(
-                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
-                headers=h,
-                json=cf_body,
-                timeout=10
-            )
-            if r.status_code in (200, 201):
-                log.info("✅ Custom field 'Wat werkt niet' toegevoegd")
-            else:
-                log.error(f"❌ Fout bij 'Wat werkt niet': {r.status_code} - {r.text[:500]}")
-        
-        # Custom field 3: Zelf geprobeerd
-        if zelfgeprobeerd != "Niet opgegeven":
-            cf_body = {
-                "FieldName": "Zelf geprobeerd",  # Moet EXACT overeenkomen met Halo
-                "Value": str(zelfgeprobeerd)
-            }
-            r = requests.post(
-                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
-                headers=h,
-                json=cf_body,
-                timeout=10
-            )
-            if r.status_code in (200, 201):
-                log.info("✅ Custom field 'Zelf geprobeerd' toegevoegd")
-            else:
-                log.error(f"❌ Fout bij 'Zelf geprobeerd': {r.status_code} - {r.text[:500]}")
-        
-        # Custom field 4: Impact toelichting
-        if impacttoelichting != "Niet opgegeven":
-            cf_body = {
-                "FieldName": "Impact toelichting",  # Moet EXACT overeenkomen met Halo
-                "Value": str(impacttoelichting)
-            }
-            r = requests.post(
-                f"{HALO_API_BASE}/Tickets/{ticket_id}/CustomFieldValues",
-                headers=h,
-                json=cf_body,
-                timeout=10
-            )
-            if r.status_code in (200, 201):
-                log.info("✅ Custom field 'Impact toelichting' toegevoegd")
-            else:
-                log.error(f"❌ Fout bij 'Impact toelichting': {r.status_code} - {r.text[:500]}")
-        
-        # ✅ STAP 3: PUBLIC NOTE TOEVOEGEN MET ALLE ANDERE VRAGEN
+        # ✅ STAP 2: PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE
         log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")
         
+        # Maak de public note met alle informatie
         public_note = (
             f"**Naam:** {name}\n"
             f"**E-mail:** {email}\n"
+            f"**Probleemomschrijving:** {omschrijving}\n\n"
             f"**Sinds wanneer:** {sindswanneer}\n"
             f"**Wat werkt niet:** {watwerktniet}\n"
             f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
-            f"**Impact toelichting:** {impacttoelichting}"
+            f"**Impact toelichting:** {impacttoelichting}\n\n"
+            f"Ticket aangemaakt via Webex bot"
         )
         
         # Voeg de public note toe
-        add_note_to_ticket(
+        note_added = add_note_to_ticket(
             ticket_id,
             public_output=public_note,
-            sender="Webex Bot",
+            sender=name,
             email=email,
             room_id=room_id
         )
         
+        if note_added:
+            log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
+        else:
+            log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")
+            
         return ticket
-        
     except Exception as e:
         log.exception(f"❌ Fout bij ticket aanmaken: {str(e)}")
-        if room_id: 
+        if room_id:
             send_message(room_id, "⚠️ Verbinding met Halo mislukt")
         return None
 log.info("✅ Ticket aanmaak functie geregistreerd")
@@ -376,7 +302,6 @@ log.info("✅ Ticket aanmaak functie geregistreerd")
 def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=None):
     log.info(f"📎 Note toevoegen aan ticket {ticket_id}")
     h = get_halo_headers()
-    
     body = {
         "Details": str(public_output),
         "ActionTypeID": int(HALO_ACTIONTYPE_PUBLIC),
@@ -384,6 +309,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         "TimeSpent": "00:00:00"
     }
     
+    # Koppel de note aan de gebruiker als we een e-mail hebben
     if email:
         requester_id = get_halo_user_id(email)
         if requester_id:
@@ -392,21 +318,18 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     
     try:
         r = requests.post(
-            f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions", 
-            headers=h, 
-            json=body, 
+            f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions",
+            headers=h,
+            json=body,
             timeout=10
         )
-        
         if r.status_code in (200, 201):
             log.info(f"✅ Note succesvol toegevoegd aan ticket {ticket_id}")
             return True
-            
         log.error(f"❌ Note toevoegen mislukt ({r.status_code}): {r.text[:500]}")
         if room_id:
             send_message(room_id, f"⚠️ Note toevoegen mislukt ({r.status_code})")
         return False
-        
     except Exception as e:
         log.exception(f"❌ Fout bij notitie toevoegen: {str(e)}")
         if room_id:
@@ -441,9 +364,9 @@ def send_adaptive_card(room_id):
             "content":{
                 "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
                 "type":"AdaptiveCard","version":"1.2","body":[
-                    {"type":"Input.Text","id":"name","placeholder":"Naam"},
-                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres"},
-                    {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving"},
+                    {"type":"Input.Text","id":"name","placeholder":"Naam","isRequired":True},
+                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres","isRequired":True},
+                    {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving","isRequired":True},
                     {"type":"Input.Text","id":"sindswanneer","placeholder":"Sinds wanneer?"},
                     {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?"},
                     {"type":"Input.Text","id":"zelfgeprobeerd","isMultiline":True,"placeholder":"Zelf geprobeerd?"},
@@ -455,9 +378,9 @@ def send_adaptive_card(room_id):
     }
     try:
         response = requests.post(
-            "https://webexapis.com/v1/messages", 
-            headers=WEBEX_HEADERS, 
-            json=card, 
+            "https://webexapis.com/v1/messages",
+            headers=WEBEX_HEADERS,
+            json=card,
             timeout=10
         )
         if response.status_code != 200:
@@ -472,20 +395,19 @@ log.info("✅ Webex helper functies geregistreerd")
 def process_webex_event(data):
     res = data.get("resource")
     log.info(f"📩 Webex event ontvangen: {res}")
-    
     try:
         if res == "messages":
             msg_id = data["data"]["id"]
             log.debug(f"🔍 Ophalen bericht details voor ID: {msg_id}")
             msg = requests.get(
-                f"https://webexapis.com/v1/messages/{msg_id}", 
-                headers=WEBEX_HEADERS, 
+                f"https://webexapis.com/v1/messages/{msg_id}",
+                headers=WEBEX_HEADERS,
                 timeout=10
             ).json()
             text, room_id, sender = msg.get("text","").strip(), msg.get("roomId"), msg.get("personEmail")
             log.debug(f"💬 Bericht inhoud: '{text[:50]}...' van {sender} in kamer {room_id}")
             
-            if sender and sender.endswith("@webex.bot"): 
+            if sender and sender.endswith("@webex.bot"):
                 log.debug("🤖 Bericht is van een bot - negeren")
                 return
                 
@@ -504,30 +426,38 @@ def process_webex_event(data):
             act_id = data["data"]["id"]
             log.info(f"🔘 Formulier actie ontvangen met ID: {act_id}")
             inputs = requests.get(
-                f"https://webexapis.com/v1/attachment/actions/{act_id}", 
-                headers=WEBEX_HEADERS, 
+                f"https://webexapis.com/v1/attachment/actions/{act_id}",
+                headers=WEBEX_HEADERS,
                 timeout=10
             ).json().get("inputs",{})
             log.info(f"➡️ Formulier inputs ontvangen: {inputs}")
             
+            # Controleer verplichte velden
             required_fields = ["name", "email", "omschrijving"]
             missing = [field for field in required_fields if not inputs.get(field)]
-            
             if missing:
                 log.warning(f"❌ Verplichte velden ontbreken: {', '.join(missing)}")
-                send_message(data["data"]["roomId"], 
+                send_message(data["data"]["roomId"],
                             f"⚠️ Verplichte velden ontbreken: {', '.join(missing)}")
                 return
                 
+            # Standaardwaarden voor optionele velden
+            sindswanneer = inputs.get("sindswanneer", "Niet opgegeven")
+            watwerktniet = inputs.get("watwerktniet", "Niet opgegeven")
+            zelfgeprobeerd = inputs.get("zelfgeprobeerd", "Niet opgegeven")
+            impacttoelichting = inputs.get("impacttoelichting", "Niet opgegeven")
+            
             log.info(f"🚀 Ticket aanmaken voor {inputs['email']}")
             ticket = create_halo_ticket(
-                inputs.get("omschrijving","Melding via Webex"),
-                inputs["name"], inputs["email"], inputs["omschrijving"],
-                inputs.get("sindswanneer","Niet opgegeven"),
-                inputs.get("watwerktniet","Niet opgegeven"),
-                inputs.get("zelfgeprobeerd","Niet opgegeven"),
-                inputs.get("impacttoelichting","Niet opgegeven"),
-                inputs.get("impact", HALO_DEFAULT_IMPACT), 
+                inputs.get("omschrijving", "Melding via Webex"),
+                inputs["name"], 
+                inputs["email"], 
+                inputs["omschrijving"],
+                sindswanneer,
+                watwerktniet,
+                zelfgeprobeerd,
+                impacttoelichting,
+                inputs.get("impact", HALO_DEFAULT_IMPACT),
                 inputs.get("urgency", HALO_DEFAULT_URGENCY),
                 room_id=data["data"]["roomId"]
             )
@@ -537,14 +467,14 @@ def process_webex_event(data):
                 ticket_room_map[ticket_id] = data["data"]["roomId"]
                 ref = ticket.get('Ref', 'Onbekend')
                 log.info(f"🎫 Ticket {ref} succesvol aangemaakt (ID: {ticket_id})")
-                send_message(data["data"]["roomId"], 
+                send_message(data["data"]["roomId"],
                             f"✅ Ticket aangemaakt: **{ref}**\n"
-                            f"🔢 Ticketnummer: {ticket_id}")
+                            f"🔢 Ticketnummer: {ticket_id}\n\n"
+                            f"Alle details zijn toegevoegd in een public note.")
             else:
                 log.error("❌ Ticket kon niet worden aangemaakt")
-                send_message(data["data"]["roomId"], 
+                send_message(data["data"]["roomId"],
                            "⚠️ Ticket kon niet worden aangemaakt. Probeer opnieuw.")
-                           
     except Exception as e:
         log.exception(f"❌ Fout bij verwerken Webex event: {str(e)}")
         if "room_id" in locals():
@@ -598,21 +528,19 @@ log.info("✅ Webex event handler geregistreerd")
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    
     log.info("="*70)
     log.info("🚀 BOSSERS & CNOSSEN WEBEX TICKET BOT - UAT OMGEVING")
     log.info("-"*70)
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ FIX VOOR TICKETTYPE 65: STAPSGEWIJZE AANMAAK")
-    log.info("✅ PROBLEEMOMSCHRIJVING ALLEEN IN DETAILS, REST IN CUSTOM FIELDS")
+    log.info("✅ GEEN CUSTOM FIELDS - ALLES GAAT NAAR PUBLIC NOTE")
+    log.info("✅ USERID WORDT GEKOPPELD AAN DE AANMAKER")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
     log.warning("⏳ Initialiseren gebruikerscache bij opstarten...")
     start_time = time.time()
-    
     try:
         get_main_users()
         init_time = time.time() - start_time
@@ -631,7 +559,6 @@ if __name__ == "__main__":
     log.info("5. Vul het formulier in en verstuur")
     log.info("6. Controleer logs voor alle stappen")
     log.info("="*70)
-    
     app.run(host="0.0.0.0", port=port, debug=False)
 else:
     # Voor WSGI-servers (zoals op Render.com)
