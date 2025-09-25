@@ -87,86 +87,92 @@ def get_site_by_id(site_id):
         log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
         return None
 
+def fetch_all_users():
+    """Haal ALLE gebruikers op via DE JUISTE ENDPOINT (/Users)"""
+    token = get_halo_token()
+    users = []
+    page = 1
+    total_fetched = 0
+    
+    while True:
+        try:
+            # 🔑 BELANGRIJK: Gebruik de CORRECTE endpoint voor gebruikers
+            response = requests.get(
+                f"{HALO_API_BASE}/Users",  # Let op: PLURAL 'Users' (dit is de JUISTE endpoint)
+                params={
+                    "page": page,
+                    "pageSize": 50
+                },
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Log de VOLLEDIGE API response voor debugging
+            log.debug(f"🔍 VOLLEDIGE USERS API RESPONSE (Pagina {page}): {data}")
+            
+            users_page = data.get("users", [])
+            
+            if not users_page or len(users_page) == 0:
+                log.info(f"⏹️ Geen gebruikers meer gevonden op pagina {page}")
+                break
+                
+            # Filter alleen unieke gebruikers
+            new_users = []
+            for user in users_page:
+                if not any(u["id"] == user["id"] for u in users):
+                    new_users.append(user)
+            
+            if not new_users:
+                log.info(f"⏹️ Geen nieuwe gebruikers gevonden op pagina {page}")
+                break
+                
+            users.extend(new_users)
+            total_fetched += len(new_users)
+            
+            log.info(f"✅ Pagina {page} gebruikers: {len(new_users)} toegevoegd (totaal: {total_fetched})")
+            
+            if len(new_users) < 50:
+                break
+                
+            page += 1
+            if page > 20:
+                log.warning("⚠️ Maximaal aantal paginas bereikt, stoppen met pagineren")
+                break
+                
+        except Exception as e:
+            log.error(f"❌ Fout bij ophalen gebruikers: {str(e)}")
+            break
+            
+    log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald")
+    return users
+
 def get_users_by_site_id(site_id):
     """Haal gebruikers op voor specifieke locatie met ULTRA-ROBUSTE EXTRACTIE"""
-    try:
-        token = get_halo_token()
-        
-        # 🔑 BELANGRIJK: Gebruik de locatie endpoint met include=users
-        response = requests.get(
-            f"{HALO_API_BASE}/Site/{site_id}",
-            params={
-                "include": "users"  # Dit is de JUISTE parameter voor gebruikers in jouw UAT
-            },
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30
-        )
-        response.raise_for_status()
-        site_data = response.json()
-        
-        # Log de VOLLEDIGE API response voor debugging
-        log.debug(f"🔍 VOLLEDIGE SITE DATA RESPONSE: {site_data}")
-        
-        # 🔑 ULTRA-ROBUSTE extractie van gebruikers - probeer ALLE mogelijke structuren
-        users = []
-        
-        # Mogelijkheid 1: Gebruikers zitten direct onder "users"
-        if "users" in site_data and isinstance(site_data["users"], list):
-            for user in site_data["users"]:
-                try:
-                    users.append({
-                        "id": user["id"],
-                        "name": user["name"],
-                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                    })
-                except (TypeError, ValueError, KeyError) as e:
-                    log.debug(f"⚠️ Gebruiker overslaan bij directe extractie: {str(e)}")
-                    continue
-        
-        # Mogelijkheid 2: Gebruikers zitten onder "SiteUsers" (specifiek voor jouw UAT)
-        elif "SiteUsers" in site_data and isinstance(site_data["SiteUsers"], list):
-            for user in site_data["SiteUsers"]:
-                try:
-                    users.append({
-                        "id": user["id"],
-                        "name": user["name"],
-                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                    })
-                except (TypeError, ValueError, KeyError) as e:
-                    log.debug(f"⚠️ Gebruiker overslaan bij SiteUsers extractie: {str(e)}")
-                    continue
-        
-        # Mogelijkheid 3: Gebruikers zitten onder "site_users" (alternatieve notatie)
-        elif "site_users" in site_data and isinstance(site_data["site_users"], list):
-            for user in site_data["site_users"]:
-                try:
-                    users.append({
-                        "id": user["id"],
-                        "name": user["name"],
-                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                    })
-                except (TypeError, ValueError, KeyError) as e:
-                    log.debug(f"⚠️ Gebruiker overslaan bij site_users extractie: {str(e)}")
-                    continue
-        
-        # Mogelijkheid 4: Gebruikers zitten in een geneste "users" array
-        elif "users" in site_data and isinstance(site_data["users"], dict) and "user" in site_data["users"]:
-            for user in site_data["users"]["user"]:
-                try:
-                    users.append({
-                        "id": user["id"],
-                        "name": user["name"],
-                        "email": user.get("emailaddress") or user.get("email") or "Geen email"
-                    })
-                except (TypeError, ValueError, KeyError) as e:
-                    log.debug(f"⚠️ Gebruiker overslaan bij geneste extractie: {str(e)}")
-                    continue
-        
-        log.info(f"✅ {len(users)} gebruikers gevonden voor locatie {site_id}")
-        return users
-    except Exception as e:
-        log.error(f"❌ Fout bij ophalen gebruikers via locatie: {str(e)}")
-        return []
+    log.info(f"🔍 Haal ALLE gebruikers op om te filteren op locatie {site_id}")
+    
+    # Stap 1: Haal alle gebruikers op
+    all_users = fetch_all_users()
+    
+    # Stap 2: Filter op de juiste locatie
+    site_users = []
+    for user in all_users:
+        try:
+            # Controleer site koppeling
+            user_site_id = int(user.get("site_id", 0))
+            if user_site_id == site_id:
+                site_users.append({
+                    "id": user["id"],
+                    "name": user["name"],
+                    "email": user.get("emailaddress") or user.get("email") or "Geen email"
+                })
+        except (TypeError, ValueError, KeyError) as e:
+            log.debug(f"⚠️ Gebruiker overslaan bij filtering: {str(e)}")
+            continue
+    
+    log.info(f"✅ {len(site_users)}/{len(all_users)} gebruikers gevonden voor locatie {site_id}")
+    return site_users
 
 def get_main_users():
     """Haal Main-site gebruikers op voor Bossers & Cnossen met HARDCODED ID's"""
@@ -194,12 +200,12 @@ def get_main_users():
     site_id = MAIN_SITE_ID
     log.info(f"✅ Gebruik locatie-ID: {site_id} (Naam: '{main_site.get('name', 'Onbekend')}')")
     
-    # Stap 3: Haal de gebruikers op VIA DE LOCATIE ENDPOINT (de JUISTE methode)
-    log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de locatie endpoint...")
+    # Stap 3: Haal de gebruikers op VIA DE USERS ENDPOINT (de JUISTE methode)
+    log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de Users endpoint...")
     main_users = get_users_by_site_id(MAIN_SITE_ID)
     
     if not main_users:
-        log.warning("⚠️ Geen gebruikers gevonden via de locatie endpoint, controleer de API response")
+        log.error("❌ Geen gebruikers gevonden voor de locatie")
     
     log.info(f"✅ {len(main_users)} Main-site gebruikers gevonden")
     return main_users
@@ -235,9 +241,9 @@ def get_users():
                     f"1. Controleer of klant met ID {BOSSERS_CLIENT_ID} bestaat",
                     f"2. Controleer of locatie met ID {MAIN_SITE_ID} bestaat",
                     "3. Zorg dat gebruikers correct zijn gekoppeld aan deze locatie",
-                    "4. Controleer de Render logs voor 'VOLLEDIGE SITE DATA RESPONSE'"
+                    "4. Controleer de Render logs voor 'VOLLEDIGE USERS API RESPONSE'"
                 ],
-                "debug_hint": "Deze integratie logt nu de VOLLEDIGE API response voor debugging"
+                "debug_hint": "Deze integratie haalt gebruikers nu via de USERS ENDPOINT (/Users)"
             }), 500
         
         log.info(f"🎉 Succesvol {len(main_users)} Main-site gebruikers geretourneerd")
@@ -253,7 +259,7 @@ def get_users():
         log.error(f"🔥 Fout in /users: {str(e)}")
         return jsonify({
             "error": str(e),
-            "hint": "Controleer eerst de Render logs voor de VOLLEDIGE SITE DATA RESPONSE"
+            "hint": "Controleer eerst de Render logs voor de VOLLEDIGE USERS API RESPONSE"
         }), 500
 
 @app.route("/debug", methods=["GET"])
@@ -270,13 +276,12 @@ def debug_info():
         main_site = get_site_by_id(MAIN_SITE_ID)
         site_valid = main_site is not None
         
-        # Haal gebruikers op via de locatie endpoint
-        log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de locatie endpoint...")
+        # Haal gebruikers op via de Users endpoint
+        log.info(f"🔍 Haal gebruikers op voor locatie {MAIN_SITE_ID} via de Users endpoint...")
         site_users = get_users_by_site_id(MAIN_SITE_ID)
         
-        # Log de specifieke site data voor debugging
-        if site_valid:
-            log.info(f"🔍 Site data voor ID {MAIN_SITE_ID}: {main_site}")
+        # Haal een sample van de gebruikers voor debugging
+        sample_users = site_users[:3] if site_users else []
         
         log.info("✅ /debug data verzameld - controleer hardcoded ID's")
         return jsonify({
@@ -291,7 +296,7 @@ def debug_info():
             },
             "user_data": {
                 "total_users_found": len(site_users),
-                "users": site_users,
+                "sample_users": sample_users,
                 "site_data_structure": main_site if site_valid else "Site niet gevonden"
             },
             "troubleshooting": [
@@ -300,15 +305,15 @@ def debug_info():
                 "3. Zorg dat gebruikers correct zijn gekoppeld aan deze locatie (NIET alleen aan de klant)",
                 "4. In Halo: Ga naar de locatie > Gebruikers om te controleren welke gebruikers gekoppeld zijn",
                 "5. Gebruikers moeten zowel aan de klant ALS aan de locatie zijn gekoppeld",
-                "6. BELANGRIJK: De API gebruikt 'include=users' (met '=') in jouw UAT, niet 'includeusers=true'"
+                "6. BELANGRIJK: De API gebruikt '/Users' endpoint (met 's') in jouw UAT, niet '/User'"
             ],
-            "hint": "Deze integratie logt nu de VOLLEDIGE API response voor debugging - controleer de Render logs"
+            "hint": "Deze integratie haalt gebruikers nu via de CORRECTE '/Users' endpoint (met 's') - controleer de Render logs"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
         return jsonify({
             "error": str(e),
-            "critical_hint": "Controleer de Render logs voor de VOLLEDIGE SITE DATA RESPONSE"
+            "critical_hint": "Controleer de Render logs voor de VOLLEDIGE USERS API RESPONSE"
         }), 500
 
 # ------------------------------------------------------------------------------
@@ -321,12 +326,12 @@ if __name__ == "__main__":
     log.info("-"*70)
     log.info(f"✅ Gebruikt HARDCODED KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt HARDCODED SITE ID: {MAIN_SITE_ID} (Main)")
-    log.info("✅ GEBRUIKT 'include=users' PARAMETER (de JUISTE methode voor jouw UAT)")
-    log.info("✅ ULTRA-ROBUSTE EXTRACTIE VAN GEBRUIKERS UIT ALLE MOGELIJKE STRUCTUREN")
-    log.info("✅ LOGT DE VOLLEDIGE API RESPONSE VOOR EENVOUDIGE DEBUGGING")
+    log.info("✅ GEBRUIKT '/Users' ENDPOINT (MET 'S') VOOR GEBRUIKERSOPHAAL")
+    log.info("✅ FILTERT GEBRUIKERS OP SITE_ID IN PLAATS VAN INCLUDE=USERS")
+    log.info("✅ LOGT DE VOLLEDIGE USERS API RESPONSE VOOR EENVOUDIGE DEBUGGING")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
-    log.info("2. Bezoek EERST /debug en controleer de Render logs voor 'VOLLEDIGE SITE DATA RESPONSE'")
+    log.info("2. Bezoek EERST /debug en controleer de Render logs voor 'VOLLEDIGE USERS API RESPONSE'")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port)
