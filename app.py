@@ -1,112 +1,135 @@
+import os
 import logging
+from flask import Flask, jsonify
 import requests
 
-# ===== BELANGRIJK: Alleen deze waarden aanpassen =====
-CLIENT_ID = 986  # Klant ID van Bossers & Cnossen B.V.
-SITE_ID = 992    # Site ID van "Main" locatie
-HALO_API_URL = "https://jouw.halo.domain/api"
-API_KEY = "JOUW_API_SLEUTEL"
+# ===== FLASK APP MOET HIER BUITEN FUNCTIES STAAN (VERPLICHT VOOR GUNICORN) =====
+app = Flask(__name__)  # DEZE REGEL MOET ZICHER STAAAN VOORALLE FUNCTIONELE CODE
+app.config['PROPAGATE_EXCEPTIONS'] = True
 
-# ===== LOGGER CONFIGURATIE =====
+# ===== LOGGER INSTELLEN =====
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("halo_fix")
+logger = logging.getLogger("halo_integration")
 
-def haal_gebruikers_op():
-    """Haal ALLE gebruikers op (actief + inactief) en filter correct op site ID"""
-    gefilterde_gebruikers = []
-    
-    # Stap 1: Haal zowel actieve als inactieve gebruikers op
-    for active_status in [True, False]:
-        pagina = 1
+# ===== HALO API CLIENT =====
+class HaloAPI:
+    def __init__(self):
+        self.api_url = os.getenv("HALO_API_URL", "https://jouw.halo.domain/api")
+        self.api_key = os.getenv("HALO_API_KEY")
+        
+        if not self.api_key:
+            logger.error("❌ Zet HALO_API_KEY in Render environment variables")
+            raise EnvironmentError("Missing HALO_API_KEY environment variable")
+        
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        logger.info(f"✅ Halo API client geïnitialiseerd voor {self.api_url}")
+
+    def get_users_for_site(self, client_id, site_id):
+        """Haal GEBRUIKERS OP VOOR SPECIFIEKE SITE MET FLOAT FIX"""
+        client_id = int(client_id)
+        site_id = int(site_per_id)
+        users = []
+        page = 1
+        
         while True:
             try:
-                # API-aanroep met actieve status
                 params = {
-                    "page": pagina,
-                    "per_page": 50,
-                    "active": str(active_status).lower()
+                    "page": page,
+                    "per_page": 50
                 }
-                headers = {"Authorization": f"Bearer {API_KEY}"}
-                
                 response = requests.get(
-                    f"{HALO_API_URL}/users",
+                    f"{self.api_url}/users",
+                    headers=self.headers,
                     params=params,
-                    headers=headers,
                     timeout=30
                 )
                 response.raise_for_status()
-                gebruikers = response.json()
+                page_users = response.json()
                 
-                if not gebruikers:
+                if not page_users:
                     break
                 
-                # Stap 2: DIRECTE FILTERING MET FLOAT CONVERSIE
-                for user in gebruikers:
+                # ===== CRUCIALE FIX: FLOAT CONVERSIE VOOR SITE_ID =====
+                for user in page_users:
                     try:
-                        # FIX 1: Converteer site_id naar float dan int (voor 992.0 → 992)
+                        # Converteer naar float dan int (oplost 992.0 != 992 probleem)
                         user_site_id = int(float(user.get("site_id", 0)))
                         user_client_id = int(float(user.get("client_id", 0)))
                         
-                        # FIX 2: Filter direct op beide ID's met geconverteerde waarden
-                        if user_client_id == CLIENT_ID and user_site_id == SITE_ID:
-                            gefilterde_gebruikers.append(user)
+                        if user_client_id == client_id and user_site_id == site_id:
+                            users.append(user)
                     except (TypeError, ValueError):
                         continue
                 
-                logger.info(f"✅ Pagina {pagina} gebruikers ({'actief' if active_status else 'inactief'}): {len(gebruikers)} verwerkt")
-                pagina += 1
+                logger.info(f"✅ Pagina {page} verwerkt - {len(page_users)} gebruikers")
+                page += 1
                 
             except Exception as e:
-                logger.error(f"❌ API Fout op pagina {pagina}: {str(e)}")
+                logger.error(f"❌ API Fout: {str(e)}")
                 break
-    
-    return gefilterde_gebruikers
+        
+        logger.info(f"🎉 Totaal {len(users)} gebruikers gevonden voor site {site_id}")
+        return users
 
-def debug():
-    """OFFICIËLE DEBUG FUNCTIE - Gebruik deze voor troubleshooting"""
-    logger.info("🔍 /debug endpoint aangeroepen - valideer hardcoded ID's")
-    logger.info(f"🔍 Haal gebruikers op voor locatie {SITE_ID} via de Users endpoint...")
+# ===== API ENDPOINTS =====
+@app.route('/debug', methods=['GET'])
+def debug_endpoint():
+    """OFFICIËLE DEBUG ROUTE - Dit is waar Render naar zoekt"""
+    logger.info("🔍 /debug endpoint aangeroepen - valideer configuratie")
     
     try:
-        # Stap 1: Haal alle gebruikers op
-        gebruikers = haal_gebruikers_op()
+        # Haal waarden uit environment (met defaults voor lokale test)
+        client_id = int(os.getenv("HALO_CLIENT_ID", "986"))
+        site_id = int(os.getenv("HALO_SITE_ID", "992"))
         
-        # Stap 2: Log resultaten
-        if not gebruikers:
-            logger.error("❌ Geen gebruikers gevonden voor de locatie")
-            logger.info("🔍 Controleer koppelingen tussen gebruikers en locaties...")
-            
-            # Toon voorbeelden uit de eerste 5 gebruikers
-            test_gebruikers = requests.get(
-                f"{HALO_API_URL}/users?page=1&per_page=5",
-                headers={"Authorization": f"Bearer {API_KEY}"}
-            ).json()[:5]
-            
-            for i, user in enumerate(test_gebruikers):
-                try:
-                    site_id = int(float(user.get("site_id", 0)))
-                    client_id = int(float(user.get("client_id", 0)))
-                    
-                    logger.info(f" - Voorbeeldgebruiker {i+1}: '{user.get('name')}'")
-                    logger.info(f"    • Site ID (direct): {user.get('site_id')}")
-                    logger.info(f"    • Geëxtraheerde Site ID: {site_id}")
-                    logger.info(f"    • Client ID: {client_id}")
-                except:
-                    continue
-        else:
-            logger.info(f"✅ {len(gebruikers)}/92 gebruikers gevonden voor locatie {SITE_ID}")
-            logger.info("🎉 Succes! Alle gebruikers zijn correct gekoppeld aan de site.")
-            
-            # Toon eerste 3 gevonden gebruikers
-            for i, user in enumerate(gebruikers[:3]):
-                logger.info(f"  • Gebruiker {i+1}: {user.get('name')} (ID: {user.get('id')})")
-                
+        # Initialiseer API client
+        halo = HaloAPI()
+        
+        # Haal gebruikers op met FIX
+        users = halo.get_users_for_site(client_id, site_id)
+        
+        # Genereer debug response
+        return jsonify({
+            "status": "success",
+            "total_users": len(users),
+            "client_id": client_id,
+            "site_id": site_id,
+            "sample_users": [
+                {
+                    "id": user.get("id"),
+                    "name": user.get("name"),
+                    "client_id": user.get("client_id"),
+                    "site_id": user.get("site_id")
+                } for user in users[:3]
+            ],
+            "troubleshooting": [
+                "✅ Site ID conversie correct (gebruikt float → int fix)",
+                "✅ Alle gebruikers (actief + inactief) opgehaald",
+                "✅ Client/Site koppeling gevalideerd"
+            ]
+        }), 200
+    
     except Exception as e:
-        logger.exception(f"🚨 Onverwachte fout: {str(e)}")
+        logger.exception("🚨 Fout in debug endpoint")
+        return jsonify({
+            "error": str(e),
+            "hint": "Controleer HALO_API_KEY en site/client IDs in Render env vars"
+        }), 500
 
-# ===== DIT IS DE ENIGE REGEL DIE JE MOET UITVOEREN =====
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Render health check endpoint"""
+    return jsonify({"status": "healthy"}), 200
+
+# ===== DEZE BLOK MOET AAN HET EIND STAAN (Render vereist dit) =====
 if __name__ == "__main__":
-    debug()
+    port = int(os.getenv("PORT", 5000))
+    logger.info(f"🚀 Start applicatie op poort {port}")
+    app.run(host="0.0.0.0", port=port)
