@@ -51,6 +51,36 @@ def get_halo_token():
             log.critical(f"➡️ Response: {response.text}")
         raise
 
+def get_client_by_id(client_id):
+    """Haal een specifieke klant op via ID"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Client/{client_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen klant met ID {client_id}: {str(e)}")
+        return None
+
+def get_site_by_id(site_id):
+    """Haal een specifieke locatie op via ID"""
+    try:
+        token = get_halo_token()
+        response = requests.get(
+            f"{HALO_API_BASE}/Site/{site_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
+        return None
+
 def fetch_all_agents():
     """Haal ALLE AGENT USERS op met VOLLEDIGE STRUCTUUR INSPECTIE"""
     token = get_halo_token()
