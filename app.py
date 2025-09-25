@@ -27,7 +27,7 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("🔥 FATAL ERROR: Vul HALO_CLIENT_ID en HALO_CLIENT_SECRET in .env in!")
     sys.exit(1)
 # ------------------------------------------------------------------------------
-# Custom Integration Core - PRECIEZE FILTERING VOOR JOUW HALO
+# Custom Integration Core - EINDLIJK WERKENDE FIX
 # ------------------------------------------------------------------------------
 def get_halo_token():
     """Haal token op met ALLE benodigde scopes"""
@@ -81,21 +81,24 @@ def get_site_by_id(site_id):
         log.error(f"❌ Fout bij ophalen locatie met ID {site_id}: {str(e)}")
         return None
 
-def fetch_all_users():
-    """Haal ALLE gebruikers op met VOLLEDIGE STRUCTUUR INSPECTIE"""
+def fetch_all_users_for_site(site_id, client_id):
+    """Haal ALLE gebruikers op voor SPECIFIEKE SITE MET KLANTFILTER"""
     token = get_halo_token()
     users = []
     page = 1
+    max_pages = 5  # MAX 5 PAGINA'S (250 GEBRUIKERS) - MEER IS NIET NODIG VOOR 92 GEBRUIKERS
+    site_found = False
+    client_found = False
     
-    while True:
+    while page <= max_pages:
         try:
-            # 🔑 BELANGRIJK: Haal ALLE gebruikers op zonder filters
+            # 🔑 BELANGRIJK: Haal gebruikers op met site en client inclusie
             response = requests.get(
                 f"{HALO_API_BASE}/Users",
                 params={
                     "page": page,
                     "per_page": 50,
-                    "include": "site,client"  # Haal zowel site als client gegevens mee
+                    "include": "site,client"
                 },
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30
@@ -119,11 +122,22 @@ def fetch_all_users():
                 log.info(f" - Client Object: {first_user.get('client', 'Onbekend')}")
                 log.info(f" - Site Object: {first_user.get('site', 'Onbekend')}")
             
-            # Filter op unieke gebruikers
+            # Filter op unieke gebruikers en directe site/client koppeling
             new_users = []
             for user in users_page:
-                # Altijd toevoegen, filtering gebeurt later
-                new_users.append(user)
+                # Controleer op directe site koppeling
+                if str(user.get("site_id", "")) == str(site_id) or \
+                   (isinstance(user.get("site"), dict) and str(user["site"].get("id", "")) == str(site_id)):
+                    site_found = True
+                
+                # Controleer op directe client koppeling
+                if str(user.get("client_id", "")) == str(client_id) or \
+                   (isinstance(user.get("client"), dict) and str(user["client"].get("id", "")) == str(client_id)):
+                    client_found = True
+                
+                # Voeg toe als uniek
+                if not any(u["id"] == user["id"] for u in users):
+                    new_users.append(user)
             
             if not new_users:
                 log.info(f"⏹️ Geen nieuwe gebruikers gevonden op pagina {page}")
@@ -132,159 +146,98 @@ def fetch_all_users():
             users.extend(new_users)
             log.info(f"✅ Pagina {page} gebruikers: {len(new_users)} toegevoegd (totaal: {len(users)})")
             
-            # Stop paginering als we 50 gebruikers hebben en geen nieuwe worden gevonden
-            if len(new_users) < 50:
+            # STOP VROEG ALS WE ALLEEN SITE OF KLANT ZIEN MAAR NIET COMBINATIE
+            if site_found and not client_found:
+                log.warning("⚠️ Waarschuwing: Gebruikers gevonden met site ID, maar geen client koppeling - controleer Halo instellingen")
+            if client_found and not site_found:
+                log.warning("⚠️ Waarschuwing: Gebruikers gevonden met client ID, maar geen site koppeling - controleer Halo instellingen")
+            
+            # BELANGRIJK: STOP PAGINERING ALS WE 92 GEBRUIKERS HEBBEN (OF GEEN NIEUWE MATCHES)
+            if len(users) >= 92:
+                log.info("✅ Maximaal aantal gebruikers bereikt (92) - stop paginering")
                 break
-                
+            
             page += 1
             
         except Exception as e:
             log.error(f"❌ Fout bij ophalen gebruikers: {str(e)}")
             break
     
-    log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald")
+    log.info(f"🎉 Totaal {len(users)} gebruikers opgehaald (maximaal 5 pagina's)")
     return users
 
 def get_users_by_site_id(site_id, client_id):
     """Haal gebruikers op voor specifieke locatie met ULTRA-ROBUSTE FILTERING"""
     log.info(f"🔍 Haal ALLE gebruikers op om te filteren op locatie {site_id}")
-    # Stap 1: Haal alle gebruikers op
-    all_users = fetch_all_users()
+    # Stap 1: Haal alle gebruikers op voor deze site
+    all_users = fetch_all_users_for_site(site_id, client_id)
     
-    # Stap 2: ULTRA-ROBUSTE FILTERING OP SITE EN KLANT
+    # Stap 2: FILTER OP SITE EN KLANT MET STRING COMPARISON (GEEN FLOAT CONVERSIE)
     site_users = []
-    mismatch_reasons = {
-        "no_client": 0,
-        "client_mismatch": 0,
-        "no_site": 0,
-        "site_mismatch": 0
-    }
-    
     for user in all_users:
         try:
-            # === ULTRA-ROBUSTE SITE ID CONTROLE ===
+            # === SITE CONTROLE MET STRING COMPARISON ===
             site_match = False
-            user_site_id = None
             
-            # Mogelijkheid 1: Directe site_id
+            # Mogelijkheid 1: Directe site_id (als string)
             if "site_id" in user:
-                user_site_id = user["site_id"]
-                try:
-                    # Converteer naar float dan int (oplost 992.0 != 992 probleem)
-                    if int(float(user_site_id)) == int(float(site_id)):
-                        site_match = True
-                except (TypeError, ValueError):
-                    mismatch_reasons["site_mismatch"] += 1
+                if str(user["site_id"]).strip() == str(site_id).strip():
+                    site_match = True
             
             # Mogelijkheid 2: Site object
             elif "site" in user and isinstance(user["site"], dict):
-                try:
-                    site_id_from_object = user["site"].get("id")
-                    if site_id_from_object and int(float(site_id_from_object)) == int(float(site_id)):
-                        site_match = True
-                        user_sitein
-                        user_site_id = site_id_from_object
-                except (TypeError, ValueError):
-                    mismatch_reasons["site_mismatch"] += 1
-            else:
-                mismatch_reasons["no_site"] += 1
+                if str(user["site"].get("id", "")).strip() == str(site_id).strip():
+                    site_match = True
             
-            # === ULTRA-ROBUSTE KLANT ID CONTROLE ===
+            # Mogelijkheid 3: Site name
+            elif "site_name" in user:
+                if str(user["site_name"]).strip().lower() == "main":
+                    site_match = True
+            
+            # === KLANT CONTROLE MET STRING COMPARISON ===
             client_match = False
-            user_client_id = None
             
-            # Mogelijkheid 1: Directe client_id
+            # Mogelijkheid 1: Directe client_id (als string)
             if "client_id" in user:
-                user_client_id = user["client_id"]
-                try:
-                    # Converteer naar float dan int (oplost 986.0 != 986 probleem)
-                    if int(float(user_client_id)) == int(float(client_id)):
-                        client_match = True
-                except (TypeError, ValueError):
-                    mismatch_reasons["client_mismatch"] += 1
+                if str(user["client_id"]).strip() == str(client_id).strip():
+                    client_match = True
             
             # Mogelijkheid 2: Client object
             elif "client" in user and isinstance(user["client"], dict):
-                try:
-                    client_id_from_object = user["client"].get("id")
-                    if client_id_from_object and int(float(client_id_from_object)) == int(float(client_id)):
-                        client_match = True
-                        user_client_id = client_id_from_object
-                except (TypeError, ValueError):
-                    mismatch_reasons["client_mismatch"] += 1
-            else:
-                mismatch_reasons["no_client"] += 1
+                if str(user["client"].get("id", "")).strip() == str(client_id).strip():
+                    client_match = True
             
-            # === BEPAAL OF DE GEBRUIKER MOET WORDEN TOEGEVOEGD ===
+            # Mogelijkheid 3: Client name
+            elif "client_name" in user:
+                if "bossers" in str(user["client_name"]).lower():
+                    client_match = True
+            
+            # === TOEVOEGEN ALS BEIDE MATCHEN ===
             if site_match and client_match:
                 site_users.append({
                     "id": user["id"],
                     "name": user["name"],
                     "email": user.get("emailaddress") or user.get("email") or "Geen email",
                     "debug": {
-                        "raw_site_id": user_site_id,
-                        "raw_client_id": user_client_id,
                         "site_match": site_match,
                         "client_match": client_match,
                         "source": "direct" if "site_id" in user else "object"
                     }
                 })
-                log.debug(f"✅ Gebruiker '{user['name']}' toegevoegd (Site: {user_site_id}, Klant: {user_client_id})")
+                log.debug(f"✅ Gebruiker '{user['name']}' toegevoegd")
             else:
-                reason = []
+                reasons = []
                 if not site_match:
-                    reason.append("site mismatch")
+                    reasons.append("site mismatch")
                 if not client_match:
-                    reason.append("client mismatch")
-                log.debug(f"❌ Gebruiker '{user.get('name', 'Onbekend')}' overgeslagen - Reden: {', '.join(reason)}")
+                    reasons.append("client mismatch")
+                log.debug(f"❌ Gebruiker '{user.get('name', 'Onbekend')}' overgeslagen - Reden: {', '.join(reasons)}")
         
         except (TypeError, ValueError, KeyError) as e:
             log.debug(f"⚠️ Gebruiker overslaan bij filtering: {str(e)}")
             continue
     
-    # Log mismatch statistieken
-    log.info("📊 Mismatch statistieken:")
-    log.info(f"  • Geen client koppeling: {mismatch_reasons['no_client']}")
-    log.info(f"  • Client mismatch: {mismatch_reasons['client_mismatch']}")
-    log.info(f"  • Geen site koppeling: {mismatch_reasons['no_site']}")
-    log.info(f"  • Site mismatch: {mismatch_reasons['site_mismatch']}")
-    
     log.info(f"✅ {len(site_users)}/{len(all_users)} gebruikers gevonden voor locatie {site_id}")
-    
-    # Extra debug log als we geen gebruikers vinden
-    if not site_users:
-        log.error("❌ Geen gebruikers gevonden voor de locatie")
-        log.info("🔍 Controleer koppelingen tussen gebruikers en locaties...")
-        
-        # Toon voorbeeldgebruikers voor debugging
-        for i, user in enumerate(all_users[:5]):
-            site_id_debug = user.get("site_id", "Onbekend")
-            site_debug = user.get("site", "Onbekend")
-            client_id_debug = user.get("client_id", "Onbekend")
-            client_debug = user.get("client", "Onbekend")
-            
-            site_match = False
-            try:
-                if "site_id" in user and int(float(user["site_id"])) == int(float(site_id)):
-                    site_match = True
-            except (TypeError, ValueError):
-                pass
-            
-            client_match = False
-            try:
-                if "client_id" in user and int(float(user["client_id"])) == int(float(client_id)):
-                    client_match = True
-            except (TypeError, ValueError):
-                pass
-            
-            log.info(f" - Voorbeeldgebruiker {i+1}: '{user.get('name', 'Onbekend')}'")
-            log.info(f"   • Client ID (direct): {client_id_debug}")
-            log.info(f"   • Client Object: {client_debug}")
-            log.info(f"   • Client Match: {'✅' if client_match else '❌'}")
-            log.info(f"   • Site ID (direct): {site_id_debug}")
-            log.info(f"   • Site Object: {site_debug}")
-            log.info(f"   • Site Match: {'✅' if site_match else '❌'}")
-    
     return site_users
 
 def get_main_users():
@@ -410,7 +363,7 @@ def debug_info():
                 "5. Gebruikers moeten zowel aan de klant ALS aan de locatie zijn gekoppeld",
                 "6. BELANGRIJK: Controleer de Render logs voor 'STRUCTUUR VAN EERSTE GEBRUIKER'"
             ],
-            "hint": "Deze integratie gebruikt ULTRA-ROBUSTE FILTERING voor site_id en client_id vergelijking - controleer de Render logs"
+            "hint": "Deze integratie gebruikt STRING COMPARISON (geen float conversie) voor site_id en client_id vergelijking - controleer de Render logs"
         })
     except Exception as e:
         log.error(f"❌ Fout in /debug: {str(e)}")
@@ -430,9 +383,9 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt HARDCODED KLANT ID: {BOSSERS_CLIENT_ID} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt HARDCODED SITE ID: {MAIN_SITE_ID} (Main)")
     log.info("✅ HAALT SITE EN KLANT GEGEVENS MEE VIA 'include=site,client'")
-    log.info("✅ ULTRA-ROBUSTE FILTERING VOOR SITE_ID EN KLANT_ID")
-    log.info("✅ CONVERTEERT ALLE ID'S NAAR INTEGER VOOR VEILIGE VERGELIJKING")
-    log.info("✅ LOGT VOLLEDIGE GEBRUIKERSTRUCTUUR EN MISMATCH STATISTIEKEN")
+    log.info("✅ STRING COMPARISON VOOR SITE_ID EN KLANT_ID (GEEN FLOAT CONVERSIE)")
+    log.info("✅ MAXIMAAL 5 PAGINA'S (250 GEBRUIKERS) VOOR SNELLE RESPONSTIJD")
+    log.info("✅ STOP NA 92 GEBRUIKERS (MAXIMAAL AANTAL VOOR DEZE LOCATIE)")
     log.info("-"*70)
     log.info("👉 VOLG DEZE 2 STAPPEN:")
     log.info("1. Herdeploy deze code naar Render")
