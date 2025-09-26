@@ -238,10 +238,12 @@ def create_halo_ticket(omschrijving, email, sindswanneer,
     # ✅ HAAL CONTACTNAAM OP UIT DE CACHE (GEEN NAME PARAMETER MEER NODIG)
     contact_name = get_contact_name(contact_id)
     
-    # ✅ CORRECTE FIX: Gebruik 'subject' i.p.v. 'summary' (Halo PSA standaard)
+    # ✅ ULTIEME FIX VOOR HALO PSA: GEBRUIK FAULTS ARRAY (GEEN SUBJECT)
     body = {  
-        "subject": str(omschrijving)[:100],  # Halo heeft limiet op subject lengte
-        "details": str(omschrijving),  
+        "faults": [{
+            "summary": str(omschrijving)[:100],  # Max 100 karakters voor summary
+            "details": str(omschrijving)
+        }],
         "typeId": int(HALO_TICKET_TYPE_ID),  
         "clientId": int(HALO_CLIENT_ID_NUM),  
         "siteId": int(HALO_SITE_ID),  
@@ -251,7 +253,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer,
         "requesterId": int(contact_id),  
         "requesterEmail": str(email)  
     }  
-    log.debug(f"➡️ Volledige ticket payload (gebruikt 'subject'): {body}")  
+    log.debug(f"➡️ Volledige ticket payload (gebruikt Faults array): {body}")  
     try:  
         log.debug(f"➡️ Halo API aanroep voor basis ticket")  
         r = requests.post(  
@@ -270,6 +272,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer,
             return None  
         try:  
             response_data = r.json()
+            # ✅ FIX: HANDEL ZOWEL ARRAY ALS ENKEL OBJECT
             if isinstance(response_data, list) and response_data:
                 ticket = response_data[0]
             else:
