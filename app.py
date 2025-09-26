@@ -36,9 +36,8 @@ HALO_DEFAULT_IMPACT = 3
 HALO_DEFAULT_URGENCY = 3
 HALO_ACTIONTYPE_PUBLIC = 78
 
-# 🚩 Altijd deze gebruiken
-HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen
-HALO_SITE_ID = 992          # Main site
+# 🚩 Jij gaf aan altijd deze klant
+HALO_CUSTOMER_ID = 986     # <-- customerId i.p.v. clientId/siteId
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
@@ -64,15 +63,14 @@ def get_halo_headers():
 # --------------------------------------------------------------------------
 # CONTACTS
 # --------------------------------------------------------------------------
-def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
+def fetch_all_site_contacts(customer_id: int, max_pages=20):
     h = get_halo_headers()
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
     while page <= max_pages:
         params = {
-            "include": "site,client",
-            "client_id": client_id,
-            "site_id": site_id,
+            "include": "site,customer",
+            "customer_id": customer_id,
             "type": "contact",
             "page": page,
             "page_size": 50
@@ -100,15 +98,14 @@ def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
         return CONTACT_CACHE["contacts"]
-    log.info(f"🔄 Ophalen contacten client={HALO_CLIENT_ID_NUM} site={HALO_SITE_ID}")
-    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    log.info(f"🔄 Ophalen contacten customer={HALO_CUSTOMER_ID}")
+    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CUSTOMER_ID)
     CONTACT_CACHE["timestamp"] = time.time()
     log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecached")
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact(email: str):
-    if not email:
-        return None
+    if not email: return None
     email = email.strip().lower()
     for c in get_main_contacts():
         fields = [
@@ -124,7 +121,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN (nu altijd requestContactId)
+# TICKET AANMAKEN
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -133,32 +130,30 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     h = get_halo_headers()
     contact = get_halo_contact(email)
     if not contact:
-        if room_id:
-            send_message(room_id, "⚠️ Geen matchend contact in Halo.")
+        if room_id: send_message(room_id, "⚠️ Geen matchend contact in Halo.")
         return None
 
     contact_id = contact.get("id")
     contact_name = contact.get("name", "Onbekend")
 
-    # Als agent → blokkeren
+    # Blokkeer als agent
     if contact.get("linked_agent_id", 0) > 0:
-        log.warning(f"⚠️ {email} is een interne medewerker (agent_id={contact['linked_agent_id']}), niet bruikbaar als ticketrequester.")
+        log.warning(f"⚠️ {email} is een interne medewerker, niet bruikbaar als ticketrequester.")
         if room_id:
-            send_message(room_id, f"⚠️ {email} is een interne medewerker en kan niet als aanvrager worden gebruikt. "
+            send_message(room_id, f"⚠️ {email} is een interne medewerker en kan niet als aanvrager. "
                                   f"Gebruik een klantcontactadres a.u.b.")
         return None
 
-    # ✅ Klantcontact → juiste veld is requestContactId
+    # 🚩 Customer + requestContactId
     body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": HALO_CLIENT_ID_NUM,
-        "siteId": HALO_SITE_ID,
+        "customerId": HALO_CUSTOMER_ID,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "requestContactId": int(contact_id),   # <-- FIX
+        "requestContactId": int(contact_id),
         "emailAddress": email
     }
 
@@ -183,8 +178,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         return {"ID": ticket_id, "Ref": f"BC-{ticket_id}", "contact_id": contact_id}
     else:
         log.error(f"❌ Halo error {r.text}")
-        if room_id:
-            send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
+        if room_id: send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
         return None
 
 # --------------------------------------------------------------------------
