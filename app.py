@@ -139,6 +139,8 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
                             log.info(  
                                 f"👤 Uniek klantcontact gevonden - "  
                                 f"ID: {contact_id}, "  
+                                f"ClientID: {contact.get('clientid', 'N/A')}, "  
+                                f"SiteID: {contact.get('siteid', 'N/A')}, "  
                                 f"Naam: {contact.get('name', 'N/A')}, "  
                                 f"Emails: {', '.join([e for e in email_fields if e])}"  
                             )  
@@ -244,11 +246,10 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         return None  
     
     # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
-    # Halo UAT vereist zowel ContactID ALS RequesterID voor bepaalde instanties
-    body["ContactID"] = int(contact_id)
-    body["RequesterID"] = int(contact_id)
+    # Halo UAT vereist specifiek UserId (GEEN ContactID of RequesterID)
+    body["UserId"] = int(contact_id)
     
-    log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id} (gebruikt als ContactID en RequesterID)")  
+    log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")  
     log.debug(f"➡️ Volledige ticket payload: {body}")  
     
     try:  
@@ -345,10 +346,9 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         contact_id = get_halo_contact_id(email)  
         if contact_id:  
             # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
-            # Halo UAT vereist zowel ContactID ALS RequesterID voor bepaalde instanties
-            body["ContactID"] = int(contact_id)
-            body["RequesterID"] = int(contact_id)
-            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id} (gebruikt als ContactID en RequesterID)")  
+            # Halo UAT vereist specifiek UserId (GEEN ContactID of RequesterID)
+            body["UserId"] = int(contact_id)
+            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact__id} (gebruikt als UserId)")  
     
     try:  
         r = requests.post(  
@@ -573,6 +573,8 @@ def inspect_cache():
         clean_contact = {  
             "id": contact.get("id", "N/A"),  
             "name": contact.get("name", "N/A"),  
+            "client_id": contact.get("clientid", "N/A"),  
+            "site_id": contact.get("siteid", "N/A"),  
             "emails": []  
         }  
         # Verzamel alle emailvelden  
@@ -609,7 +611,7 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")  
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
     log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
-    log.info("✅ ContactID EN RequesterID GEBRUIKT VOOR KOPPELING (ALS INTEGER)")  
+    log.info("✅ UserId GEBRUIKT VOOR KOPPELING (ALS INTEGER) - VERPLICHT VOOR DEZE UAT-INSTANTIE")  
     log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
@@ -642,7 +644,7 @@ if __name__ == "__main__":
     log.info("5. Typ in Webex: 'nieuwe melding' om het formulier te openen")  
     log.info("6. Vul het formulier in en verstuur")  
     log.info("7. Controleer logs op succesmeldingen:")  
-    log.info("   - '👤 Ticket gekoppeld aan klantcontact ID: 1086 (gebruikt als ContactID en RequesterID)'")  
+    log.info("   - '👤 Ticket gekoppeld aan klantcontact ID: 1086 (gebruikt als UserId)'")  
     log.info("   - '➡️ Halo API aanroep voor basis ticket: [{...}]'")  
     log.info("   - '✅ Ticket succesvol aangemaakt'")  
     log.info("   - '✅ Public note succesvol toegevoegd'")  
