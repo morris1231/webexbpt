@@ -37,7 +37,7 @@ HALO_DEFAULT_URGENCY = 3
 HALO_ACTIONTYPE_PUBLIC = 78
 
 # 🚩 Altijd deze gebruiken
-HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen B.V.
+HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen
 HALO_SITE_ID = 992          # Main site
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
@@ -65,11 +65,10 @@ def get_halo_headers():
 # CONTACTS
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
-    """Haal alle site contacts voor client/site op"""
+    """Haal contacten van specifieke client/site op"""
     h = get_halo_headers()
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
-
     while page <= max_pages:
         params = {
             "include": "site,client",
@@ -79,7 +78,6 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
             "page": page,
             "page_size": 50
         }
-        log.info(f"📡 Ophalen contacten: client={client_id} site={site_id} page={page}")
         r = requests.get(f"{HALO_API_BASE}{endpoint}", headers=h, params=params, timeout=15)
         if r.status_code == 200:
             data = r.json()
@@ -90,7 +88,6 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
                 if cid and cid not in processed_ids:
                     processed_ids.add(cid)
                     all_contacts.append(contact)
-                    log.debug(f"👤 Contact: {contact.get('name')} id={cid} email={contact.get('emailaddress')}")
             if len(contacts) < 50: break
             page += 1
         else:
@@ -101,10 +98,8 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
 def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
-        log.info("✅ Cache gebruikt")
         return CONTACT_CACHE["contacts"]
-
-    log.info("🔄 Cache leeg of verlopen – ophalen...")
+    log.info(f"🔄 Ophalen contacten client={HALO_CLIENT_ID_NUM} site={HALO_SITE_ID}")
     CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = time.time()
     log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecached")
@@ -121,9 +116,9 @@ def get_halo_contact_id(email: str):
         ]
         for f in fields:
             if f and email == f.lower():
-                log.info(f"✅ Email match: {email} → ID {c.get('id')}")
+                log.info(f"✅ Email match {email} → ID {c.get('id')}")
                 return c.get("id")
-    log.warning(f"⚠️ Geen match gevonden voor {email}")
+    log.warning(f"⚠️ Geen match voor {email}")
     return None
 
 def get_contact_name(contact_id):
@@ -138,7 +133,6 @@ def get_contact_name(contact_id):
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                       zelfgeprobeerd, impacttoelichting,
                       impact_id, urgency_id, room_id=None):
-    log.info(f"🎫 Ticket maken voor {email}")
     h = get_halo_headers()
     contact_id = get_halo_contact_id(email)
     if not contact_id:
@@ -166,7 +160,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         resp = r.json()
         ticket = resp[0] if isinstance(resp,list) else resp
         ticket_id = ticket.get("id") or ticket.get("ID")
-        log.info(f"✅ Ticket ID {ticket_id}")
+        log.info(f"✅ Ticket aangemaakt ID={ticket_id}")
 
         note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
                 f"**Probleem:** {omschrijving}\n\n"
@@ -291,4 +285,5 @@ def inspect_cache():
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT",5000))
+    log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
