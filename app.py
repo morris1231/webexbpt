@@ -36,8 +36,10 @@ HALO_DEFAULT_IMPACT = 3
 HALO_DEFAULT_URGENCY = 3
 HALO_ACTIONTYPE_PUBLIC = 78
 
-# 🚩 Jij gaf aan altijd deze klant
-HALO_CUSTOMER_ID = 986     # <-- customerId i.p.v. clientId/siteId
+# 🚩 IDs
+HALO_CLIENT_ID_NUM = 986    # old clientId voor ophalen users
+HALO_SITE_ID = 992          # old siteId voor ophalen users
+HALO_CUSTOMER_ID = 986      # customerId bij ticket creation
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
@@ -63,14 +65,18 @@ def get_halo_headers():
 # --------------------------------------------------------------------------
 # CONTACTS
 # --------------------------------------------------------------------------
-def fetch_all_site_contacts(customer_id: int, max_pages=20):
+def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
+    """
+    ✅ Contacts ophalen werkt in jouw omgeving alleen met client_id+site_id
+    """
     h = get_halo_headers()
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
     while page <= max_pages:
         params = {
-            "include": "site,customer",
-            "customer_id": customer_id,
+            "include": "site,client",
+            "client_id": client_id,
+            "site_id": site_id,
             "type": "contact",
             "page": page,
             "page_size": 50
@@ -98,8 +104,8 @@ def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
         return CONTACT_CACHE["contacts"]
-    log.info(f"🔄 Ophalen contacten customer={HALO_CUSTOMER_ID}")
-    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CUSTOMER_ID)
+    log.info(f"🔄 Ophalen contacten client={HALO_CLIENT_ID_NUM} site={HALO_SITE_ID}")
+    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = time.time()
     log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecached")
     return CONTACT_CACHE["contacts"]
@@ -121,7 +127,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN
+# TICKET AANMAKEN met customerId/requestContactId
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -136,15 +142,14 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     contact_id = contact.get("id")
     contact_name = contact.get("name", "Onbekend")
 
-    # Blokkeer als agent
+    # Blokkeer interne agent
     if contact.get("linked_agent_id", 0) > 0:
-        log.warning(f"⚠️ {email} is een interne medewerker, niet bruikbaar als ticketrequester.")
+        log.warning(f"⚠️ {email} is een interne medewerker (agent_id={contact['linked_agent_id']}).")
         if room_id:
-            send_message(room_id, f"⚠️ {email} is een interne medewerker en kan niet als aanvrager. "
-                                  f"Gebruik een klantcontactadres a.u.b.")
+            send_message(room_id, f"⚠️ {email} is een interne medewerker en kan niet worden gebruikt als ticketrequester.")
         return None
 
-    # 🚩 Customer + requestContactId
+    # ✅ Ticket body met customerId + requestContactId
     body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
