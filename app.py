@@ -121,7 +121,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN met auto-detectie (agent vs klantcontact)
+# TICKET AANMAKEN (nu altijd requestUserId)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -135,9 +135,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
 
     contact_id = contact.get("id")
     contact_name = contact.get("name", "Onbekend")
-    is_agent = contact.get("linked_agent_id", 0) > 0   # 👈 check
 
-    base_body = {
+    body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
@@ -146,27 +145,13 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
+        "requestUserId": int(contact_id),   # ✅ juiste veld!
         "emailAddress": email
     }
 
-    # ------ Agent → use userId
-    if is_agent:
-        body = base_body | {"userId": int(contact_id)}
-        log.info(f"➡️ Ticket body (userId):\n{json.dumps(body, indent=2)}")
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+    log.info(f"➡️ Ticket body (requestUserId):\n{json.dumps(body, indent=2)}")
 
-    # ------ Klantcontact → use contactId with fallback endUserId
-    else:
-        body = base_body | {"contactId": int(contact_id)}
-        log.info(f"➡️ Ticket body (contactId):\n{json.dumps(body, indent=2)}")
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-
-        if r.status_code == 400:
-            log.warning("⚠️ Halo 400 bij contactId → probeer met endUserId")
-            body = base_body | {"endUserId": int(contact_id)}
-            log.info(f"➡️ Ticket body (endUserId):\n{json.dumps(body, indent=2)}")
-            r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
     log.info(f"⬅️ Halo status {r.status_code}")
 
     if r.status_code in (200, 201):
@@ -199,7 +184,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         "actionTypeId": HALO_ACTIONTYPE_PUBLIC,
         "isPrivate": False,
         "timeSpent": "00:00:00",
-        "userId": contact_id
+        "userId": contact_id   # degene die de note aanmaakt
     }
     r = requests.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions",
                       headers=h, json=body, timeout=10)
