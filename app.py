@@ -225,7 +225,7 @@ def get_halo_contact_id(email: str):
 log.info("✅ Klantcontact cache functies geregistreerd")
 
 # **------------------------------------------------------------------------------**
-# **Halo Tickets (CRUCIALE FIX VOOR UW SPECIFIEKE UAT)**
+# **Halo Tickets (DEFINITIEVE FIX VOOR UW SPECIFIEKE UAT)**
 # **------------------------------------------------------------------------------**
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,  
                       watwerktniet, zelfgeprobeerd, impacttoelichting,  
@@ -241,7 +241,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer e-mailadres.")  
         return None
     
-    # ✅ CRUCIALE FIX VOOR UW UAT: MOET BEIDE VELDEN HEBBEN
+    # ✅ CRUCIALE FIX VOOR UW UAT: GEBRUIK ContactId IN PLAATS VAN UserId
     body = {  
         "Summary": str(summary),  
         "Details": str(omschrijving),  
@@ -251,7 +251,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "TeamID": int(HALO_TEAM_ID),  
         "ImpactID": int(impact_id),  
         "UrgencyID": int(urgency_id),
-        "UserId": int(contact_id),  # ✅ ABSOLUUT VERPLICHT VOOR UW UAT
+        "ContactId": int(contact_id),  # ✅ JUISTE VELD VOOR KLANTCONTACTEN
         "RequesterEmail": str(email)  # Voor extra validatie
     }  
     
@@ -271,10 +271,10 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         if r.status_code not in (200, 201):  
             # ✅ SPECIFIEKE FOUTDIAGNOSE VOOR UW UAT
             if "valid Client/Site/User" in r.text:
-                log.critical("❌ FATALE FOUT: INVALIDE USER KOPPELING - CONTROLEER:")
+                log.critical("❌ FATALE FOUT: INVALIDE KOPPELING - CONTROLEER:")
                 log.critical(f"1. Contact ID {contact_id} bestaat in Halo")
                 log.critical(f"2. Contact {contact_id} is gekoppeld aan Klant {HALO_CLIENT_ID_NUM} en Locatie {HALO_SITE_ID}")
-                log.critical(f"3. Gebruik INTEGER voor UserId (geen string)")
+                log.critical(f"3. Gebruik 'ContactId' in plaats van 'UserId' (geen string)")
                 log.critical(f"4. Zorg dat de contactpersoon ook in Halo UAT zichtbaar is via /customer?userid={contact_id}")
             
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")  
@@ -287,7 +287,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         try:  
             response_data = r.json()  
             if isinstance(response_data, list) and len(response_data) > 0:  
-                ticket = response__data[0] # Eerste ticket uit de array  
+                ticket = response_data[0] # Eerste ticket uit de array  
                 ticket_id = ticket.get("ID") or ticket.get("id")  
                 if ticket_id:  
                     log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
@@ -356,7 +356,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         "ActionTypeID": int(HALO_ACTIONTYPE_PUBLIC),  
         "IsPrivate": False,  
         "TimeSpent": "00:00:00",
-        "UserId": int(contact_id)  # ✅ ABSOLUUT VERPLICHT VOOR UW UAT
+        "UserId": int(contact_id)  # ✅ Dit moet UserId blijven voor notities
     }  
     
     log.debug(f"➡️ Note payload: {body}")
@@ -637,7 +637,7 @@ if __name__ == "__main__":
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
     log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
     log.info("✅ AGENT CREDENTIALS GEBRUIKT VOOR API TOEGANG")  
-    log.info("✅ USERID + REQUESTEREMAIL GEBRUIKT VOOR KLANTKOPPELING")  
+    log.info("✅ CONTACTID GEBRUIKT VOOR KLANTKOPPELING (GEEN USERID)")  
     log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
