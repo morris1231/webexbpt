@@ -38,16 +38,16 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
     log.critical("❌ FOUT: Halo credentials niet ingesteld in .env!")  
 else:  
     log.info(f"✅ Halo credentials gevonden (Client ID: {HALO_CLIENT_ID})")
-# Halo ticket instellingen - ✅ INTEGERS (GEEN STRINGS VOOR UW UAT)
-HALO_TICKET_TYPE_ID = 65  
-HALO_TEAM_ID = 1  
-HALO_DEFAULT_IMPACT = 3  
-HALO_DEFAULT_URGENCY = 3  
-HALO_ACTIONTYPE_PUBLIC = 78  
+# Halo ticket instellingen - ✅ STRINGS (GEEN INTEGERS VOOR UW UAT)
+HALO_TICKET_TYPE_ID = "65"  
+HALO_TEAM_ID = "1"  
+HALO_DEFAULT_IMPACT = "3"  
+HALO_DEFAULT_URGENCY = "3"  
+HALO_ACTIONTYPE_PUBLIC = "78"  
 log.info(f"✅ Halo ticket instellingen: Type={HALO_TICKET_TYPE_ID}, Team={HALO_TEAM_ID}")
-# Klant en locatie ID's - ✅ INTEGERS (GEEN STRINGS VOOR UW UAT)
-HALO_CLIENT_ID_NUM = 986 # Bossers & Cnossen  
-HALO_SITE_ID = 992 # Main site  
+# Klant en locatie ID's - ✅ STRINGS (GEEN INTEGERS VOOR UW UAT)
+HALO_CLIENT_ID_NUM = "986" # Bossers & Cnossen  
+HALO_SITE_ID = "992" # Main site  
 log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen)")  
 log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main site)")
 # Globale cache variabele
@@ -85,7 +85,7 @@ def get_halo_headers():
             log.critical(f"➡️ Response: {r.text}")  
         raise  
         
-def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):  
+def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):  
     """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN MET ONEINDIGE LUS FIX"""  
     log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")  
     h = get_halo_headers()  
@@ -99,8 +99,8 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
         log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")  
         params = {  
             "include": "site,client",  
-            "client_id": client_id,  
-            "site_id": site_id,  
+            "clientid": client_id,  
+            "siteid": site_id,  
             "type": "contact",  
             "page": page,  
             "page_size": 50  
@@ -127,23 +127,25 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
                         # ✅ VOORKOMT DUBBELE CONTACTEN  
                         contact_id = str(contact.get('id', ''))  
                         if contact_id and contact_id not in processed_ids:  
-                            processed_ids.add(contact_id)  
-                            new_contacts.append(contact)  
-                            # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING  
-                            email_fields = [  
-                                contact.get("EmailAddress", ""),  
-                                contact.get("emailaddress", ""),  
-                                contact.get("PrimaryEmail", ""),  
-                                contact.get("username", "")  
-                            ]  
-                            log.info(  
-                                f"👤 Uniek klantcontact gevonden - "  
-                                f"ID: {contact_id}, "  
-                                f"ClientID: {contact.get('clientid', 'N/A')}, "  
-                                f"SiteID: {contact.get('siteid', 'N/A')}, "  
-                                f"Naam: {contact.get('name', 'N/A')}, "  
-                                f"Emails: {', '.join([e for e in email_fields if e])}"  
-                            )  
+                            # ✅ EXTRA VALIDATIE: ALLEEN CONTACTEN MET JUISTE CLIENT/SITE  
+                            if str(contact.get('clientid', '')) == client_id and str(contact.get('siteid', '')) == site_id:  
+                                processed_ids.add(contact_id)  
+                                new_contacts.append(contact)  
+                                # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING  
+                                email_fields = [  
+                                    contact.get("EmailAddress", ""),  
+                                    contact.get("emailaddress", ""),  
+                                    contact.get("PrimaryEmail", ""),  
+                                    contact.get("username", "")  
+                                ]  
+                                log.info(  
+                                    f"👤 Uniek klantcontact gevonden - "  
+                                    f"ID: {contact_id}, "  
+                                    f"ClientID: {contact.get('clientid', 'N/A')}, "  
+                                    f"SiteID: {contact.get('siteid', 'N/A')}, "  
+                                    f"Naam: {contact.get('name', 'N/A')}, "  
+                                    f"Emails: {', '.join([e for e in email_fields if e])}"  
+                                )  
                     if not new_contacts:  
                         log.warning("⚠️ Geen nieuwe contacten gevonden - mogelijke oneindige lus")  
                         break  
@@ -226,16 +228,16 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     h = get_halo_headers()  
     contact_id = get_halo_contact_id(email)  
     
-    # ✅ CRUCIALE FIX: ALLE ID'S ALS INTEGER (GEEN STRINGS VOOR UW UAT)  
+    # ✅ CRUCIALE FIX: ALLE ID'S ALS STRING (GEEN INTEGERS VOOR UW UAT)  
     body = {  
         "Summary": str(summary),  
         "Details": str(omschrijving),  
-        "TypeID": int(HALO_TICKET_TYPE_ID),  
-        "ClientID": int(HALO_CLIENT_ID_NUM),  
-        "SiteID": int(HALO_SITE_ID),  
-        "TeamID": int(HALO_TEAM_ID),  
-        "ImpactID": int(impact_id),  
-        "UrgencyID": int(urgency_id)  
+        "TypeID": str(HALO_TICKET_TYPE_ID),  
+        "ClientID": str(HALO_CLIENT_ID_NUM),  
+        "SiteID": str(HALO_SITE_ID),  
+        "TeamID": str(HALO_TEAM_ID),  
+        "ImpactID": str(impact_id),  
+        "UrgencyID": str(urgency_id)  
     }  
     
     # ✅ CONTACT VALIDATIE VOOR UAT  
@@ -245,10 +247,8 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer configuratie.")  
         return None  
     
-    # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
-    # Halo UAT vereist specifiek UserId (GEEN ContactID of RequesterID)
-    body["UserId"] = int(contact_id)
-    
+    # ✅ CRUCIALE FIX: GEBRUIK UserId IN PLAATS VAN ContactID VOOR UW UAT  
+    body["UserId"] = str(contact_id)  
     log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")  
     log.debug(f"➡️ Volledige ticket payload: {body}")  
     
@@ -336,7 +336,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     
     body = {  
         "Details": str(public_output),  
-        "ActionTypeID": int(HALO_ACTIONTYPE_PUBLIC),  
+        "ActionTypeID": str(HALO_ACTIONTYPE_PUBLIC),  
         "IsPrivate": False,  
         "TimeSpent": "00:00:00"  
     }  
@@ -345,10 +345,9 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     if email:  
         contact_id = get_halo_contact_id(email)  
         if contact_id:  
-            # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
-            # Halo UAT vereist specifiek UserId (GEEN ContactID of RequesterID)
-            body["UserId"] = int(contact_id)
-            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact__id} (gebruikt als UserId)")  
+            # ✅ CRUCIALE FIX: GEBRUIK UserId VOOR UW UAT  
+            body["UserId"] = str(contact__id)  
+            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")  
     
     try:  
         r = requests.post(  
@@ -611,8 +610,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")  
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
     log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
-    log.info("✅ UserId GEBRUIKT VOOR KOPPELING (ALS INTEGER) - VERPLICHT VOOR DEZE UAT-INSTANTIE")  
-    log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")  
+    log.info("✅ UserId GEBRUIKT VOOR KOPPELING (ALS STRING) - VERPLICHT VOOR DEZE UAT-INSTANTIE")  
+    log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN - CRUCIAAL VOOR DEZE UAT-INSTANTIE")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
     log.info("✅ FIX VOOR 'PLEASE SELECT A VALID CLIENT/SITE/USER' FOUT")  
