@@ -238,12 +238,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer,
     # ✅ HAAL CONTACTNAAM OP UIT DE CACHE (GEEN NAME PARAMETER MEER NODIG)
     contact_name = get_contact_name(contact_id)
     
-    # ✅ ULTIEME FIX VOOR HALO PSA: GEBRUIK FAULTS ARRAY (GEEN SUBJECT)
+    # ✅ ULTIEME FIX VOOR HALO PSA: GEBRUIK DE JUISTE STRUCTUUR ZONDER FAULTS ARRAY
+    # Halo vereist een object met "summary" en "details" op het hoogste niveau
     body = {  
-        "faults": [{
-            "summary": str(omschrijving)[:100],  # Max 100 karakters voor summary
-            "details": str(omschrijving)
-        }],
+        "summary": str(omschrijving)[:100],  # Max 100 karakters voor summary
+        "details": str(omschrijving),
         "typeId": int(HALO_TICKET_TYPE_ID),  
         "clientId": int(HALO_CLIENT_ID_NUM),  
         "siteId": int(HALO_SITE_ID),  
@@ -253,7 +252,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer,
         "requesterId": int(contact_id),  
         "requesterEmail": str(email)  
     }  
-    log.debug(f"➡️ Volledige ticket payload (gebruikt Faults array): {body}")  
+    log.debug(f"➡️ Volledige ticket payload (gebruikt standaard structuur): {body}")  
     try:  
         log.debug(f"➡️ Halo API aanroep voor basis ticket")  
         r = requests.post(  
@@ -264,53 +263,64 @@ def create_halo_ticket(omschrijving, email, sindswanneer,
         )  
         log.info(f"⬅️ API response status: {r.status_code}")  
         log.debug(f"⬅️ Volledige API response: {r.text}")  
-        if r.status_code not in (200, 201):  
+        
+        # ✅ SPECIALE AFHANDELING VOOR HALO PSA ANTWOORDEN
+        if r.status_code == 200 or r.status_code == 201:
+            try:
+                response_data = r.json()
+                # Halo soms retourneert een array, soms een object
+                if isinstance(response_data, list) and len(response_data) > 0:
+                    ticket = response_data[0]
+                else:
+                    ticket = response_data
+                
+                ticket_id = ticket.get("id") or ticket.get("ID") or ticket.get("ticketid")
+                if ticket_id:  
+                    log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
+                    
+                    # ✅ PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE  
+                    log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")  
+                    public_note = (  
+                        f"**Naam:** {contact_name}\n"  
+                        f"**E-mail:** {email}\n"  
+                        f"**Probleemomschrijving:** {omschrijving}\n\n"  
+                        f"**Sinds wanneer:** {sindswanneer}\n"  
+                        f"**Wat werkt niet:** {watwerktniet}\n"  
+                        f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"  
+                        f"**Impact toelichting:** {impacttoelichting}\n\n"  
+                        f"Ticket aangemaakt via Webex bot"  
+                    )  
+                    
+                    note_added = add_note_to_ticket(  
+                        ticket_id,  
+                        public_output=public_note,  
+                        sender=contact_name,  
+                        email=email,  
+                        room_id=room_id,
+                        contact_id=contact_id
+                    )  
+                    
+                    if note_added:  
+                        log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")  
+                        return {"ID": ticket_id, "Ref": f"BC-{ticket_id}", "contact_id": contact_id}  
+                    else:  
+                        log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")  
+                        return {"ID": ticket_id, "contact_id": contact_id}  
+                else:
+                    log.error("❌ Ticket ID niet gevonden in antwoord")
+                    if room_id:
+                        send_message(room_id, "⚠️ Ticket aangemaakt, maar ID niet ontvangen")
+                    return None
+            except Exception as e:
+                log.exception("❌ Fout bij verwerken API response")
+                if room_id:
+                    send_message(room_id, "⚠️ Ticket aangemaakt, maar respons kon niet worden verwerkt")
+                return {"contact_id": contact_id}
+        else:
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")  
             log.error(f"➡️ Response body: {r.text}")  
             if room_id:  
                 send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.text[:100]}")  
-            return None  
-        try:  
-            response_data = r.json()
-            # ✅ FIX: HANDEL ZOWEL ARRAY ALS ENKEL OBJECT
-            if isinstance(response_data, list) and response_data:
-                ticket = response_data[0]
-            else:
-                ticket = response_data
-            ticket_id = ticket.get("id") or ticket.get("ID")
-            if ticket_id:  
-                log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
-            else:  
-                log.error("❌ Ticket ID niet gevonden in antwoord")  
-                return None  
-            # ✅ PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE  
-            log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")  
-            public_note = (  
-                f"**Naam:** {contact_name}\n"  
-                f"**E-mail:** {email}\n"  
-                f"**Probleemomschrijving:** {omschrijving}\n\n"  
-                f"**Sinds wanneer:** {sindswanneer}\n"  
-                f"**Wat werkt niet:** {watwerktniet}\n"  
-                f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"  
-                f"**Impact toelichting:** {impacttoelichting}\n\n"  
-                f"Ticket aangemaakt via Webex bot"  
-            )  
-            note_added = add_note_to_ticket(  
-                ticket_id,  
-                public_output=public_note,  
-                sender=contact_name,  
-                email=email,  
-                room_id=room_id,
-                contact_id=contact_id
-            )  
-            if note_added:  
-                log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")  
-                return {"ID": ticket_id, "Ref": f"BC-{ticket_id}", "contact_id": contact_id}  
-            else:  
-                log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")  
-                return {"ID": ticket_id, "contact_id": contact_id}  
-        except Exception as e:  
-            log.exception("❌ Fout bij verwerken API response")  
             return None  
     except Exception as e:  
         log.exception(f"❌ Fout bij ticket aanmaken: {str(e)}")  
