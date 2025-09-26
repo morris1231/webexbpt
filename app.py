@@ -1,5 +1,5 @@
 import os, urllib.parse, logging, sys, time, threading
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
 # ------------------------------------------------------------------------------
@@ -93,13 +93,14 @@ def get_halo_headers():
         raise
 
 def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
-    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN - SPECIAAL VOOR UW UAT"""
+    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN MET ONEINDIGE LUS FIX"""
     log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")
     h = get_halo_headers()
     all_contacts = []
     page = 1
+    processed_ids = set()  # ✅ VOORKOMT ONEINDIGE LUS
     
-    # ✅ PROBEER EERST /Users ENDPOINT (GEVALSPECIFIEK VOOR UW UAT)
+    # ✅ PROBEER EERST /Users ENDPOINT
     endpoint = "/Users"
     log.info(f"ℹ️ Probeer eerste endpoint: {HALO_API_BASE}{endpoint}")
     
@@ -109,7 +110,7 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
             "include": "site,client",
             "client_id": client_id,
             "site_id": site_id,
-            "type": "contact",  # Alleen klantcontacten
+            "type": "contact",
             "page": page,
             "page_size": 50
         }
@@ -127,26 +128,43 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                 log.info(f"✅ Succesvol verbonden met {endpoint} endpoint")
                 try:
                     data = r.json()
-                    # ✅ PROBEER VERSCHILLENDE RESPONSE STRUCTUREN
+                    # ✅ VERWERK VERSCHILLENDE RESPONSE STRUCTUREN
                     contacts = data.get('users', []) or data.get('items', []) or data
                     
                     if not contacts:
                         log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
                         break
                     
-                    # Log voor debugging
-                    for contact in contacts[:3]:
-                        log.info(
-                            f"👤 Klantcontact gevonden - "
-                            f"ID: {contact.get('id', 'N/A')}, "
-                            f"Naam: {contact.get('name', 'N/A')}, "
-                            f"Email: {contact.get('EmailAddress', 'N/A')}"
-                        )
+                    new_contacts = []
+                    for contact in contacts:
+                        # ✅ VOORKOMT DUBBELE CONTACTEN
+                        contact_id = str(contact.get('id', ''))
+                        if contact_id and contact_id not in processed_ids:
+                            processed_ids.add(contact_id)
+                            new_contacts.append(contact)
+                            
+                            # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING
+                            email_fields = [
+                                contact.get("EmailAddress", ""),
+                                contact.get("emailaddress", ""),
+                                contact.get("PrimaryEmail", ""),
+                                contact.get("username", "")
+                            ]
+                            log.info(
+                                f"👤 Uniek klantcontact gevonden - "
+                                f"ID: {contact_id}, "
+                                f"Naam: {contact.get('name', 'N/A')}, "
+                                f"Emails: {', '.join([e for e in email_fields if e])}"
+                            )
                     
-                    all_contacts.extend(contacts)
-                    log.info(f"📥 Pagina {page} opgehaald: {len(contacts)} klantcontacten (Totaal: {len(all_contacts)})")
+                    if not new_contacts:
+                        log.warning("⚠️ Geen nieuwe contacten gevonden - mogelijke oneindige lus")
+                        break
+                        
+                    all_contacts.extend(new_contacts)
+                    log.info(f"📥 Pagina {page} opgehaald: {len(new_contacts)} nieuwe klantcontacten (Totaal: {len(all_contacts)})")
                     
-                    if len(contacts) < 50:
+                    if len(new_contacts) < 50:
                         log.info("✅ Einde bereikt (minder dan page_size)")
                         break
                         
@@ -170,7 +188,7 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
             
-    log.info(f"👥 SUCCES: {len(all_contacts)} klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")
+    log.info(f"👥 SUCCES: {len(all_contacts)} unieke klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")
     return all_contacts
 
 def get_main_contacts():
@@ -190,7 +208,7 @@ def get_main_contacts():
     
     CONTACT_CACHE["contacts"] = contacts
     CONTACT_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(contacts)} KLANTCONTACTEN GECACHED")
+    log.info(f"✅ {len(contacts)} UNIEKE KLANTCONTACTEN GECACHED")
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact_id(email: str):
@@ -209,6 +227,11 @@ def get_halo_contact_id(email: str):
             str(c.get("PrimaryEmail") or "").lower(),
             str(c.get("username") or "").lower()
         ]
+        
+        # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING
+        for field in email_fields:
+            if field:
+                log.debug(f"🔍 Vergelijking: '{field}' vs '{email}'")
         
         if email in [e for e in email_fields if e]:
             log.info(f"✅ Email match gevonden: {email} → Klantcontact ID={c.get('id')}")
@@ -459,7 +482,7 @@ def process_webex_event(data):
                 return
             
             # Standaardwaarden voor optionele velden
-            sindswanneer = inputs.get("sindswangen", "Niet opgegeven")
+            sindswanneer = inputs.get("sindswanneer", "Niet opgegeven")
             watwerktniet = inputs.get("watwerktniet", "Niet opgegeven")
             zelfgeprobeerd = inputs.get("zelfgeprobeerd", "Niet opgegeven")
             impacttoelichting = inputs.get("impacttoelichting", "Niet opgegeven")
@@ -511,7 +534,8 @@ def health():
         "endpoints": [
             "/webex (POST) - Webex webhook",
             "/ (GET) - Health check",
-            "/initialize (GET) - Cache verversen"
+            "/initialize (GET) - Cache verversen",
+            "/cache (GET) - Cache inspectie"
         ],
         "timestamp": time.time()
     }
@@ -541,6 +565,46 @@ def initialize_cache():
         "site_id": HALO_SITE_ID,
         "used_endpoint": "/Users or /Person"
     }
+
+@app.route("/cache", methods=["GET"])
+def inspect_cache():
+    """Endpoint om de cache te inspecteren"""
+    log.info("🔍 Cache inspectie aangevraagd")
+    
+    # Maak een schone versie van de cache voor weergave
+    clean_cache = []
+    for contact in CONTACT_CACHE["contacts"]:
+        clean_contact = {
+            "id": contact.get("id", "N/A"),
+            "name": contact.get("name", "N/A"),
+            "emails": []
+        }
+        
+        # Verzamel alle emailvelden
+        email_fields = [
+            contact.get("EmailAddress", ""),
+            contact.get("emailaddress", ""),
+            contact.get("PrimaryEmail", ""),
+            contact.get("username", "")
+        ]
+        
+        # Voeg alleen niet-lege emails toe
+        for email in email_fields:
+            if email and email.lower() not in [e.lower() for e in clean_contact["emails"]]:
+                clean_contact["emails"].append(email)
+        
+        clean_cache.append(clean_contact)
+    
+    log.info(f"📊 Cache inspectie: {len(clean_cache)} unieke contacten gevonden")
+    return jsonify({
+        "status": "success",
+        "cache_size": len(clean_cache),
+        "cache_timestamp": CONTACT_CACHE["timestamp"],
+        "contacts": clean_cache[:20],  # Toon maximaal 20 contacten voor overzicht
+        "truncated": len(clean_cache) > 20,
+        "message": "Toon slechts 20 contacten voor overzicht - gebruik filters voor specifieke zoekopdrachten"
+    })
+log.info("✅ Webex event handler geregistreerd")
 # ------------------------------------------------------------------------------
 # INITIELE CACHE LOADING BIJ OPSTARTEN
 # ------------------------------------------------------------------------------
@@ -555,6 +619,8 @@ if __name__ == "__main__":
     log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")
     log.info("✅ ContactID GEBRUIKT VOOR KOPPELING (ALS STRING)")
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN")
+    log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")
+    log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
@@ -564,7 +630,7 @@ if __name__ == "__main__":
         get_main_contacts()
         init_time = time.time() - start_time
         log.info(f"✅ Klantcontactcache geïnitialiseerd in {init_time:.2f} seconden")
-        log.info(f"📊 Cache bevat nu {len(CONTACT_CACHE['contacts'])} klantcontacten")
+        log.info(f"📊 Cache bevat nu {len(CONTACT_CACHE['contacts'])} unieke klantcontacten")
         
         # Extra validatie
         if len(CONTACT_CACHE['contacts']) == 0:
@@ -577,11 +643,16 @@ if __name__ == "__main__":
     log.info("👉 VOLG DEZE STAPPEN:")
     log.info("1. Deploy deze code naar Render")
     log.info("2. Bezoek direct na deploy: /initialize")
-    log.info("3. Typ in Webex: 'nieuwe melding' om het formulier te openen")
-    log.info("4. Vul het formulier in en verstuur")
-    log.info("5. Controleer logs op succesmeldingen:")
-    log.info("   - '✅ Succesvol verbonden met /Users endpoint'")
+    log.info("3. Controleer de logs op:")
+    log.info("   - '✅ Uniek klantcontact gevonden'")
+    log.info("   - '✅ {N} UNIEKE KLANTCONTACTEN GECACHED'")
+    log.info("4. Bezoek /cache endpoint om de gecachte contacten te inspecteren")
+    log.info("   Voorbeeld: https://uw-app-naam.onrender.com/cache")
+    log.info("5. Typ in Webex: 'nieuwe melding' om het formulier te openen")
+    log.info("6. Vul het formulier in en verstuur")
+    log.info("7. Controleer logs op succesmeldingen:")
     log.info("   - '✅ Email match gevonden'")
     log.info("   - '✅ Ticket succesvol aangemaakt'")
+    log.info("   - '✅ Public note succesvol toegevoegd'")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port, debug=False)
