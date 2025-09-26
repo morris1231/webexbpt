@@ -42,22 +42,22 @@ if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
 else:
     log.info(f"✅ Halo credentials gevonden (Client ID: {HALO_CLIENT_ID})")
 
-# Halo ticket instellingen - ✅ ALLEEN STRINGS (GEEN INTEGERS)
-HALO_TICKET_TYPE_ID = "65"
-HALO_TEAM_ID = "1"
-HALO_DEFAULT_IMPACT = "3"
-HALO_DEFAULT_URGENCY = "3"
-HALO_ACTIONTYPE_PUBLIC = "78"
+# Halo ticket instellingen - ✅ INTEGERS (GEEN STRINGS VOOR UW UAT)
+HALO_TICKET_TYPE_ID = 65
+HALO_TEAM_ID = 1
+HALO_DEFAULT_IMPACT = 3
+HALO_DEFAULT_URGENCY = 3
+HALO_ACTIONTYPE_PUBLIC = 78
 log.info(f"✅ Halo ticket instellingen: Type={HALO_TICKET_TYPE_ID}, Team={HALO_TEAM_ID}")
 
-# Klant en locatie ID's - ✅ ALLEEN STRINGS (CRUCIAAL VOOR UAT)
-HALO_CLIENT_ID_NUM = "986"  # Bossers & Cnossen
-HALO_SITE_ID = "992"        # Main site
+# Klant en locatie ID's - ✅ INTEGERS (GEEN STRINGS VOOR UW UAT)
+HALO_CLIENT_ID_NUM = 986  # Bossers & Cnossen
+HALO_SITE_ID = 992        # Main site
 log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen)")
 log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main site)")
 
 # Globale cache variabele
-USER_CACHE = {"users": [], "timestamp": 0}
+CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 log.info("✅ Cache systeem geïnitialiseerd (24-uurs cache)")
 
@@ -65,7 +65,7 @@ log.info("✅ Cache systeem geïnitialiseerd (24-uurs cache)")
 ticket_room_map = {}
 log.info("✅ Ticket kamer mapping systeem geïnitialiseerd")
 # ------------------------------------------------------------------------------
-# User Cache (24-uurs cache met UAT-paginering)
+# Contact Cache (24-uurs cache met UAT-paginering)
 # ------------------------------------------------------------------------------
 def get_halo_headers():
     """Haal Halo API headers met token"""
@@ -92,11 +92,11 @@ def get_halo_headers():
             log.critical(f"➡️ Response: {r.text}")
         raise
 
-def fetch_all_site_users(client_id: str, site_id: str, max_pages=20):
-    """GEFIXTE OPHAALFUNCTIE VOOR KLANTGEBRUIKERS MET ONEINDIGE LUS FIX"""
-    log.info(f"🔍 Start ophalen klantgebruikers voor klant {client_id} en locatie {site_id}")
+def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
+    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN MET ONEINDIGE LUS FIX"""
+    log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")
     h = get_halo_headers()
-    all_users = []
+    all_contacts = []
     page = 1
     processed_ids = set()  # ✅ VOORKOMT ONEINDIGE LUS
     
@@ -105,7 +105,7 @@ def fetch_all_site_users(client_id: str, site_id: str, max_pages=20):
     log.info(f"ℹ️ Probeer eerste endpoint: {HALO_API_BASE}{endpoint}")
     
     while page <= max_pages:
-        log.info(f"📄 Ophalen pagina {page} (klantgebruikers)...")
+        log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")
         params = {
             "include": "site,client",
             "client_id": client_id,
@@ -129,42 +129,42 @@ def fetch_all_site_users(client_id: str, site_id: str, max_pages=20):
                 try:
                     data = r.json()
                     # ✅ VERWERK VERSCHILLENDE RESPONSE STRUCTUREN
-                    users = data.get('users', []) or data.get('items', []) or data
+                    contacts = data.get('users', []) or data.get('items', []) or data
                     
-                    if not users:
-                        log.info(f"✅ Geen klantgebruikers gevonden op pagina {page}")
+                    if not contacts:
+                        log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
                         break
                     
-                    new_users = []
-                    for user in users:
-                        # ✅ VOORKOMT DUBBELE GEBRUIKERS
-                        user_id = str(user.get('id', ''))
-                        if user_id and user_id not in processed_ids:
-                            processed_ids.add(user_id)
-                            new_users.append(user)
+                    new_contacts = []
+                    for contact in contacts:
+                        # ✅ VOORKOMT DUBBELE CONTACTEN
+                        contact_id = str(contact.get('id', ''))
+                        if contact_id and contact_id not in processed_ids:
+                            processed_ids.add(contact_id)
+                            new_contacts.append(contact)
                             
                             # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING
                             email_fields = [
-                                user.get("EmailAddress", ""),
-                                user.get("emailaddress", ""),
-                                user.get("PrimaryEmail", ""),
-                                user.get("username", "")
+                                contact.get("EmailAddress", ""),
+                                contact.get("emailaddress", ""),
+                                contact.get("PrimaryEmail", ""),
+                                contact.get("username", "")
                             ]
                             log.info(
-                                f"👤 Unieke klantgebruiker gevonden - "
-                                f"ID: {user_id}, "
-                                f"Naam: {user.get('name', 'N/A')}, "
+                                f"👤 Uniek klantcontact gevonden - "
+                                f"ID: {contact_id}, "
+                                f"Naam: {contact.get('name', 'N/A')}, "
                                 f"Emails: {', '.join([e for e in email_fields if e])}"
                             )
                     
-                    if not new_users:
-                        log.warning("⚠️ Geen nieuwe gebruikers gevonden - mogelijke oneindige lus")
+                    if not new_contacts:
+                        log.warning("⚠️ Geen nieuwe contacten gevonden - mogelijke oneindige lus")
                         break
                         
-                    all_users.extend(new_users)
-                    log.info(f"📥 Pagina {page} opgehaald: {len(new_users)} nieuwe klantgebruikers (Totaal: {len(all_users)})")
+                    all_contacts.extend(new_contacts)
+                    log.info(f"📥 Pagina {page} opgehaald: {len(new_contacts)} nieuwe klantcontacten (Totaal: {len(all_contacts)})")
                     
-                    if len(new_users) < 50:
+                    if len(new_contacts) < 50:
                         log.info("✅ Einde bereikt (minder dan page_size)")
                         break
                         
@@ -188,44 +188,44 @@ def fetch_all_site_users(client_id: str, site_id: str, max_pages=20):
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
             
-    log.info(f"👥 SUCCES: {len(all_users)} unieke klantgebruikers opgehaald voor klant {client_id} en locatie {site_id}")
-    return all_users
+    log.info(f"👥 SUCCES: {len(all_contacts)} unieke klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")
+    return all_contacts
 
-def get_main_users():
-    """24-UURS CACHE VOOR KLANTGEBRUIKERS"""
+def get_main_contacts():
+    """24-UURS CACHE VOOR KLANTCONTACTEN"""
     current_time = time.time()
     # Controleer of cache geldig is
-    if USER_CACHE["users"] and (current_time - USER_CACHE["timestamp"] < CACHE_DURATION):
-        log.info(f"✅ Cache gebruikt (vernieuwd {int((current_time - USER_CACHE['timestamp'])/60)} minuten geleden)")
-        return USER_CACHE["users"]
+    if CONTACT_CACHE["contacts"] and (current_time - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
+        log.info(f"✅ Cache gebruikt (vernieuwd {int((current_time - CONTACT_CACHE['timestamp'])/60)} minuten geleden)")
+        return CONTACT_CACHE["contacts"]
     
-    log.warning("🔄 Cache verlopen, vernieuwen Bossers & Cnossen klantgebruikers…")
-    log.info("⏳ Start ophalen van alle klantgebruikers...")
+    log.warning("🔄 Cache verlopen, vernieuwen Bossers & Cnossen klantcontacten…")
+    log.info("⏳ Start ophalen van alle klantcontacten...")
     start_time = time.time()
-    users = fetch_all_site_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    contacts = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     duration = time.time() - start_time
-    log.info(f"⏱️  Klantgebruikers opgehaald in {duration:.2f} seconden")
+    log.info(f"⏱️  Klantcontacten opgehaald in {duration:.2f} seconden")
     
-    USER_CACHE["users"] = users
-    USER_CACHE["timestamp"] = time.time()
-    log.info(f"✅ {len(users)} UNIEKE KLANTGEBRUIKERS GECACHED")
-    return USER_CACHE["users"]
+    CONTACT_CACHE["contacts"] = contacts
+    CONTACT_CACHE["timestamp"] = time.time()
+    log.info(f"✅ {len(contacts)} UNIEKE KLANTCONTACTEN GECACHED")
+    return CONTACT_CACHE["contacts"]
 
-def get_halo_user_id(email: str):
-    """ZOEK KLANTGEBRUIKER OP EMAIL MET CASE-INSENSITIVE MATCHING"""
+def get_halo_contact_id(email: str):
+    """ZOEK KLANTCONTACT OP EMAIL MET CASE-INSENSITIVE MATCHING"""
     if not email:
         return None
     email = email.strip().lower()
-    log.debug(f"🔍 Zoeken naar klantgebruiker met email: {email}")
-    main_users = get_main_users()
+    log.debug(f"🔍 Zoeken naar klantcontact met email: {email}")
+    main_contacts = get_main_contacts()
     
-    for u in main_users:
+    for c in main_contacts:
         # Alle mogelijke email velden controleren
         email_fields = [
-            str(u.get("EmailAddress") or "").lower(),
-            str(u.get("emailaddress") or "").lower(),
-            str(u.get("PrimaryEmail") or "").lower(),
-            str(u.get("username") or "").lower()
+            str(c.get("EmailAddress") or "").lower(),
+            str(c.get("emailaddress") or "").lower(),
+            str(c.get("PrimaryEmail") or "").lower(),
+            str(c.get("username") or "").lower()
         ]
         
         # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING
@@ -234,44 +234,44 @@ def get_halo_user_id(email: str):
                 log.debug(f"🔍 Vergelijking: '{field}' vs '{email}'")
         
         if email in [e for e in email_fields if e]:
-            log.info(f"✅ Email match gevonden: {email} → Klantgebruiker ID={u.get('id')}")
-            return u.get("id")
+            log.info(f"✅ Email match gevonden: {email} → Klantcontact ID={c.get('id')}")
+            return c.get("id")
     
-    log.warning(f"⚠️ Geen klantgebruiker gevonden voor email: {email}")
+    log.warning(f"⚠️ Geen klantcontact gevonden voor email: {email}")
     return None
-log.info("✅ Klantgebruiker cache functies geregistreerd")
+log.info("✅ Klantcontact cache functies geregistreerd")
 # ------------------------------------------------------------------------------
-# Halo Tickets (GEFIXT VOOR UW SPECIFIEKE UAT)
+# Halo Tickets (DEFINITIEVE FIX VOOR UW SPECIFIEKE UAT)
 # ------------------------------------------------------------------------------
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                        watwerktniet, zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
     log.info(f"🎫 Ticket aanmaken: '{summary}' voor {email}")
     h = get_halo_headers()
-    user_id = get_halo_user_id(email)
+    contact_id = get_halo_contact_id(email)
     
-    # ✅ CRUCIALE FIX: ALLE ID'S ALS STRING (GEEN INTEGER) - UAT VEREIST STRINGS
+    # ✅ CRUCIALE FIX: ALLE ID'S ALS INTEGER (GEEN STRINGS VOOR UW UAT)
     body = {
         "Summary": str(summary),
         "Details": str(omschrijving),
-        "TypeID": str(HALO_TICKET_TYPE_ID),
-        "ClientID": str(HALO_CLIENT_ID_NUM),
-        "SiteID": str(HALO_SITE_ID),
-        "TeamID": str(HALO_TEAM_ID),
-        "ImpactID": str(impact_id),
-        "UrgencyID": str(urgency_id)
+        "TypeID": int(HALO_TICKET_TYPE_ID),
+        "ClientID": int(HALO_CLIENT_ID_NUM),
+        "SiteID": int(HALO_SITE_ID),
+        "TeamID": int(HALO_TEAM_ID),
+        "ImpactID": int(impact_id),
+        "UrgencyID": int(urgency_id)
     }
     
-    # ✅ USER VALIDATIE VOOR UAT
-    if not user_id:
-        log.critical("❌ FATALE FOUT: Geen klantgebruiker gevonden - Controleer klant/locatie ID's")
+    # ✅ CONTACT VALIDATIE VOOR UAT
+    if not contact_id:
+        log.critical("❌ FATALE FOUT: Geen klantcontact gevonden - Controleer klant/locatie ID's")
         if room_id:
-            send_message(room_id, "⚠️ Geen klantgebruiker gevonden in Halo. Controleer configuratie.")
+            send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer configuratie.")
         return None
     
-    # ✅ CRUCIALE FIX: GEBRUIK UserID VOOR UW SPECIFIEKE UAT
-    body["UserID"] = str(user_id)
-    log.info(f"👤 Ticket gekoppeld aan klantgebruiker ID: {user_id}")
+    # ✅ CRUCIALE FIX: GEBRUIK ContactID IN PLAATS VAN UserID VOOR UW UAT
+    body["ContactID"] = int(contact_id)
+    log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id}")
     log.debug(f"➡️ Volledige ticket payload: {body}")
 
     try:
@@ -282,7 +282,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         r = requests.post(
             f"{HALO_API_BASE}/Tickets",
             headers=h,
-            json=request_body,  # ✅ BELANGRIJK: Array in plaats van object
+            json=request_body,
             timeout=15
         )
         
@@ -358,17 +358,17 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     
     body = {
         "Details": str(public_output),
-        "ActionTypeID": str(HALO_ACTIONTYPE_PUBLIC),
+        "ActionTypeID": int(HALO_ACTIONTYPE_PUBLIC),
         "IsPrivate": False,
         "TimeSpent": "00:00:00"
     }
     
-    # Koppel de note aan de gebruiker
+    # Koppel de note aan het klantcontact
     if email:
-        user_id = get_halo_user_id(email)
-        if user_id:
-            body["UserID"] = str(user_id)
-            log.info(f"📎 Note gekoppeld aan klantgebruiker ID: {user_id}")
+        contact_id = get_halo_contact_id(email)
+        if contact_id:
+            body["ContactID"] = int(contact_id)
+            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id}")
     
     try:
         r = requests.post(
@@ -420,7 +420,7 @@ def send_adaptive_card(room_id):
             "contentType":"application/vnd.microsoft.card.adaptive",
             "content":{
                 "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
-                "type":"AdaptiveCard","version":"1.2","body":[
+                "type":"AdaptiveCard","version":"12","body":[
                     {"type":"Input.Text","id":"name","placeholder":"Naam","isRequired":True},
                     {"type":"Input.Text","id":"email","placeholder":"E-mailadres","isRequired":True},
                     {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving","isRequired":True},
@@ -504,7 +504,7 @@ def process_webex_event(data):
                 inputs["name"],
                 inputs["email"],
                 inputs["omschrijving"],
-                sindswanneer,
+                sindswangen,
                 watwerktniet,
                 zelfgeprobeerd,
                 impacttoelichting,
@@ -539,8 +539,8 @@ def health():
         "message": "Bossers & Cnossen Webex Ticket Bot",
         "environment": "UAT",
         "cache_status": {
-            "user_cache_size": len(USER_CACHE["users"]),
-            "cache_age_minutes": int((time.time() - USER_CACHE["timestamp"])/60) if USER_CACHE["users"] else 0,
+            "contact_cache_size": len(CONTACT_CACHE["contacts"]),
+            "cache_age_minutes": int((time.time() - CONTACT_CACHE["timestamp"])/60) if CONTACT_CACHE["contacts"] else 0,
         },
         "endpoints": [
             "/webex (POST) - Webex webhook",
@@ -556,12 +556,12 @@ def initialize_cache():
     """Endpoint om de cache handmatig te initialiseren"""
     log.warning("⚠️ Handmatige cache initialisatie aangevraagd")
     start_time = time.time()
-    get_main_users()
+    get_main_contacts()
     duration = time.time() - start_time
     log.info(f"⏱️  Cache geinitialiseerd in {duration:.2f} seconden")
     
     # Extra validatie
-    if len(USER_CACHE['users']) == 0:
+    if len(CONTACT_CACHE['contacts']) == 0:
         log.critical("❌ CACHE IS LEEG! Mogelijke oorzaken:")
         log.critical("1. Verkeerde klant/locatie ID's (momenteel: Client=%s, Site=%s)", HALO_CLIENT_ID_NUM, HALO_SITE_ID)
         log.critical("2. Halo API token problemen")
@@ -569,9 +569,9 @@ def initialize_cache():
     
     return {
         "status": "initialized",
-        "user_cache_size": len(USER_CACHE["users"]),
+        "contact_cache_size": len(CONTACT_CACHE["contacts"]),
         "duration_seconds": duration,
-        "cache_timestamp": USER_CACHE["timestamp"],
+        "cache_timestamp": CONTACT_CACHE["timestamp"],
         "client_id": HALO_CLIENT_ID_NUM,
         "site_id": HALO_SITE_ID,
         "used_endpoint": "/Users or /Person"
@@ -584,36 +584,36 @@ def inspect_cache():
     
     # Maak een schone versie van de cache voor weergave
     clean_cache = []
-    for user in USER_CACHE["users"]:
-        clean_user = {
-            "id": user.get("id", "N/A"),
-            "name": user.get("name", "N/A"),
+    for contact in CONTACT_CACHE["contacts"]:
+        clean_contact = {
+            "id": contact.get("id", "N/A"),
+            "name": contact.get("name", "N/A"),
             "emails": []
         }
         
         # Verzamel alle emailvelden
         email_fields = [
-            user.get("EmailAddress", ""),
-            user.get("emailaddress", ""),
-            user.get("PrimaryEmail", ""),
-            user.get("username", "")
+            contact.get("EmailAddress", ""),
+            contact.get("emailaddress", ""),
+            contact.get("PrimaryEmail", ""),
+            contact.get("username", "")
         ]
         
         # Voeg alleen niet-lege emails toe
         for email in email_fields:
-            if email and email.lower() not in [e.lower() for e in clean_user["emails"]]:
-                clean_user["emails"].append(email)
+            if email and email.lower() not in [e.lower() for e in clean_contact["emails"]]:
+                clean_contact["emails"].append(email)
         
-        clean_cache.append(clean_user)
+        clean_cache.append(clean_contact)
     
-    log.info(f"📊 Cache inspectie: {len(clean_cache)} unieke gebruikers gevonden")
+    log.info(f"📊 Cache inspectie: {len(clean_cache)} unieke contacten gevonden")
     return jsonify({
         "status": "success",
         "cache_size": len(clean_cache),
-        "cache_timestamp": USER_CACHE["timestamp"],
-        "users": clean_cache[:20],  # Toon maximaal 20 gebruikers voor overzicht
+        "cache_timestamp": CONTACT_CACHE["timestamp"],
+        "contacts": clean_cache[:20],  # Toon maximaal 20 contacten voor overzicht
         "truncated": len(clean_cache) > 20,
-        "message": "Toon slechts 20 gebruikers voor overzicht - gebruik filters voor specifieke zoekopdrachten"
+        "message": "Toon slechts 20 contacten voor overzicht - gebruik filters voor specifieke zoekopdrachten"
     })
 log.info("✅ Webex event handler geregistreerd")
 # ------------------------------------------------------------------------------
@@ -627,25 +627,25 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTGEBRUIKERS")
-    log.info("✅ UserID GEBRUIKT VOOR KOPPELING (ALS STRING)")
-    log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN")
+    log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")
+    log.info("✅ ContactID GEBRUIKT VOOR KOPPELING (ALS INTEGER)")
+    log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")
     log.info("✅ FIX VOOR 'PLEASE SELECT A VALID CLIENT/SITE/USER' FOUT")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
-    log.warning("⏳ Initialiseren klantgebruikerscache bij opstarten...")
+    log.warning("⏳ Initialiseren klantcontactcache bij opstarten...")
     start_time = time.time()
     try:
-        get_main_users()
+        get_main_contacts()
         init_time = time.time() - start_time
-        log.info(f"✅ Klantgebruikerscache geïnitialiseerd in {init_time:.2f} seconden")
-        log.info(f"📊 Cache bevat nu {len(USER_CACHE['users'])} unieke klantgebruikers")
+        log.info(f"✅ Klantcontactcache geïnitialiseerd in {init_time:.2f} seconden")
+        log.info(f"📊 Cache bevat nu {len(CONTACT_CACHE['contacts'])} unieke klantcontacten")
         
         # Extra validatie
-        if len(USER_CACHE['users']) == 0:
+        if len(CONTACT_CACHE['contacts']) == 0:
             log.critical("❗️ WAARSCHUWING: Lege cache - Controleer Halo configuratie!")
     
     except Exception as e:
@@ -656,14 +656,14 @@ if __name__ == "__main__":
     log.info("1. Deploy deze code naar Render")
     log.info("2. Bezoek direct na deploy: /initialize")
     log.info("3. Controleer de logs op:")
-    log.info("   - '✅ Unieke klantgebruiker gevonden'")
-    log.info("   - '✅ {N} UNIEKE KLANTGEBRUIKERS GECACHED'")
-    log.info("4. Bezoek /cache endpoint om de gecachte gebruikers te inspecteren")
+    log.info("   - '✅ Uniek klantcontact gevonden'")
+    log.info("   - '✅ {N} UNIEKE KLANTCONTACTEN GECACHED'")
+    log.info("4. Bezoek /cache endpoint om de gecachte contacten te inspecteren")
     log.info("   Voorbeeld: https://uw-app-naam.onrender.com/cache")
     log.info("5. Typ in Webex: 'nieuwe melding' om het formulier te openen")
     log.info("6. Vul het formulier in en verstuur")
     log.info("7. Controleer logs op succesmeldingen:")
-    log.info("   - '👤 Ticket gekoppeld aan klantgebruiker ID: 1086'")
+    log.info("   - '👤 Ticket gekoppeld aan klantcontact ID: 1086'")
     log.info("   - '➡️ Halo API aanroep voor basis ticket: [{...}]'")
     log.info("   - '✅ Ticket succesvol aangemaakt'")
     log.info("   - '✅ Public note succesvol toegevoegd'")
