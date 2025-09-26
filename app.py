@@ -32,7 +32,7 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "appl
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
 if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
-    log.critical("❌ Halo credentials ontbreken in .env!")
+    log.critical("❌ Halo ClientID / Secret missen!")
 
 HALO_TICKET_TYPE_ID = 65
 HALO_TEAM_ID = 1
@@ -40,8 +40,12 @@ HALO_DEFAULT_IMPACT = 3
 HALO_DEFAULT_URGENCY = 3
 HALO_ACTIONTYPE_PUBLIC = 78
 
+# Default fallback IDs
+HALO_CLIENT_ID_NUM = 986
+HALO_SITE_ID = 992
+
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
-CACHE_DURATION = 24 * 60 * 60  # ✅ FIX
+CACHE_DURATION = 24 * 60 * 60
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -67,7 +71,8 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
     while page <= max_pages:
-        params = {"include":"site,client","client_id":client_id,"site_id":site_id,"type":"contact","page":page,"page_size":50}
+        params = {"include":"site,client","client_id":client_id,"site_id":site_id,"type":"contact",
+                  "page":page,"page_size":50}
         r = requests.get(f"{HALO_API_BASE}{endpoint}", headers=h, params=params, timeout=15)
         if r.status_code == 200:
             data = r.json()
@@ -80,16 +85,17 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
                     all_contacts.append(contact)
             if len(contacts) < 50: break
             page += 1
-        elif page == 1 and r.status_code == 404:  # ✅ FIX
+        elif page == 1 and r.status_code == 404:
             endpoint = "/Person"; page = 1
-        else: break
+        else:
+            break
     return all_contacts
 
 def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
         return CONTACT_CACHE["contacts"]
-    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(986, 992) # default fallback
+    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = now
     return CONTACT_CACHE["contacts"]
 
@@ -114,7 +120,7 @@ def get_contact_name(contact_id):
     return c.get("name","Onbekend") if c else "Onbekend"
 
 # --------------------------------------------------------------------------
-# CREATE TICKET (FIXED)
+# CREATE TICKET (FIXED met fallback client/site)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                       zelfgeprobeerd, impacttoelichting, impact_id, urgency_id,
@@ -127,23 +133,21 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         return None
 
     contact = get_contact_by_id(contact_id)
-    if not contact:
-        if room_id: send_message(room_id,"⚠️ Geen contactrecord gevonden.")
-        return None
+    contact_name = contact.get("name","Onbekend") if contact else "Onbekend"
+    contact_client = contact.get("clientid") if contact else None
+    contact_site   = contact.get("siteid") if contact else None
 
-    contact_client = contact.get("clientid")
-    contact_site = contact.get("siteid")
-    contact_name = contact.get("name","Onbekend")
-
+    # ✅ Fallback naar defaults
     if not contact_client or not contact_site:
-        log.error("❌ Contact mist client/site koppeling")
-        return None
+        log.warning("⚠️ Contact mist client/site → gebruik fallback configuratie")
+        contact_client = HALO_CLIENT_ID_NUM
+        contact_site   = HALO_SITE_ID
 
     body = {
-        "summary": str(omschrijving)[:100],  # ✅ STRING
+        "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": int(contact_client),   # ✅ Dynamisch van contact
+        "clientId": int(contact_client),
         "siteId": int(contact_site),
         "teamId": HALO_TEAM_ID,
         "impactId": impact_id,
@@ -152,8 +156,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "requesterEmail": email
     }
 
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)  # ✅ ARRAY
-    log.info(f"⬅️ Halo ticket status {r.status_code}")
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+    log.info(f"⬅️ Halo status {r.status_code}")
     if r.status_code in (200,201):
         resp = r.json()
         ticket = resp[0] if isinstance(resp,list) else resp
@@ -169,8 +173,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         add_note_to_ticket(ticket_id,note,contact_name,email,room_id,contact_id)
         return {"ID": ticket_id,"Ref":f"BC-{ticket_id}","contact_id":contact_id}
     else:
-        log.error(f"❌ Halo error {r.text}")
-        if room_id: send_message(room_id,f"⚠️ Ticket create error: {r.text[:200]}")
+        log.error(f"❌ Halo fout {r.text}")
+        if room_id: send_message(room_id,f"⚠️ Ticket error: {r.text[:200]}")
         return None
 
 # --------------------------------------------------------------------------
@@ -270,7 +274,7 @@ def health():
     return {"status":"ok","contacts_cached":len(CONTACT_CACHE["contacts"])}
 
 @app.route("/initialize", methods=["GET"])
-def initialize_cache_route():
+def initialize_cache():
     get_main_contacts()
     return {"status":"initialized","cache_size":len(CONTACT_CACHE["contacts"])}
 
@@ -283,4 +287,4 @@ def inspect_cache():
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT",5000))
-    app.run(host="0.0.0.0",port=port,debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False)
