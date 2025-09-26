@@ -43,7 +43,7 @@ else:
     log.info(f"✅ Halo credentials gevonden (Client ID: {HALO_CLIENT_ID})")
 
 # Halo ticket instellingen - ✅ ALLEEN STRINGS (GEEN INTEGERS)
-HALO_TICKET_TYPE_ID = "65"  # STRINGS VOOR UAT
+HALO_TICKET_TYPE_ID = "65"
 HALO_TEAM_ID = "1"
 HALO_DEFAULT_IMPACT = "3"
 HALO_DEFAULT_URGENCY = "3"
@@ -58,7 +58,7 @@ log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main site)")
 
 # Globale cache variabele
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
-CACHE_DURATION = 24 * 60 * 60  # 24 uur (correcte Python syntax)
+CACHE_DURATION = 24 * 60 * 60  # 24 uur
 log.info("✅ Cache systeem geïnitialiseerd (24-uurs cache)")
 
 # Globale ticket kamer mapping
@@ -93,11 +93,15 @@ def get_halo_headers():
         raise
 
 def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
-    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN"""
+    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN - SPECIAAL VOOR UW UAT"""
     log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")
     h = get_halo_headers()
     all_contacts = []
     page = 1
+    
+    # ✅ PROBEER EERST /Users ENDPOINT (GEVALSPECIFIEK VOOR UW UAT)
+    endpoint = "/Users"
+    log.info(f"ℹ️ Probeer eerste endpoint: {HALO_API_BASE}{endpoint}")
     
     while page <= max_pages:
         log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")
@@ -113,45 +117,55 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
         try:
             log.debug(f"➡️ API aanvraag met parameters: {params}")
             r = requests.get(
-                f"{HALO_API_BASE}/People",  # ✅ CORRECTE ENDPOINT VOOR UAT
+                f"{HALO_API_BASE}{endpoint}",
                 headers=h,
                 params=params,
                 timeout=15
             )
             
-            if r.status_code != 200:
-                log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
-                log.error(f"➡️ Response: {r.text}")
-                break
-                
-            try:
-                data = r.json()
-                contacts = data.get('people', []) or data
-                
-                if not contacts:
-                    log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
+            if r.status_code == 200:
+                log.info(f"✅ Succesvol verbonden met {endpoint} endpoint")
+                try:
+                    data = r.json()
+                    # ✅ PROBEER VERSCHILLENDE RESPONSE STRUCTUREN
+                    contacts = data.get('users', []) or data.get('items', []) or data
+                    
+                    if not contacts:
+                        log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
+                        break
+                    
+                    # Log voor debugging
+                    for contact in contacts[:3]:
+                        log.info(
+                            f"👤 Klantcontact gevonden - "
+                            f"ID: {contact.get('id', 'N/A')}, "
+                            f"Naam: {contact.get('name', 'N/A')}, "
+                            f"Email: {contact.get('EmailAddress', 'N/A')}"
+                        )
+                    
+                    all_contacts.extend(contacts)
+                    log.info(f"📥 Pagina {page} opgehaald: {len(contacts)} klantcontacten (Totaal: {len(all_contacts)})")
+                    
+                    if len(contacts) < 50:
+                        log.info("✅ Einde bereikt (minder dan page_size)")
+                        break
+                        
+                    page += 1
+                except Exception as e:
+                    log.exception(f"❌ Fout bij verwerken API response: {str(e)}")
                     break
-                
-                # Log voor debugging
-                for contact in contacts[:3]:
-                    log.info(
-                        f"👤 Klantcontact gevonden - "
-                        f"ID: {contact.get('id', 'N/A')}, "
-                        f"Naam: {contact.get('name', 'N/A')}, "
-                        f"Email: {contact.get('EmailAddress', 'N/A')}"
-                    )
-                
-                all_contacts.extend(contacts)
-                log.info(f"📥 Pagina {page} opgehaald: {len(contacts)} klantcontacten (Totaal: {len(all_contacts)})")
-                
-                if len(contacts) < 50:
-                    log.info("✅ Einde bereikt (minder dan page_size)")
+            else:
+                # ✅ ALS /Users MISLUKT, PROBEER DAN /Person ENDPOINT
+                if page == 1 and r.status_code == 404:
+                    log.warning(f"⚠️ /Users endpoint niet gevonden (HTTP 404), probeer /Person endpoint...")
+                    endpoint = "/Person"
+                    log.info(f"ℹ️ Probeer alternatief endpoint: {HALO_API_BASE}{endpoint}")
+                    page = 1  # Reset paginering voor nieuw endpoint
+                else:
+                    log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
+                    log.error(f"➡️ Response: {r.text}")
                     break
                     
-                page += 1
-            except Exception as e:
-                log.exception(f"❌ Fout bij verwerken API response: {str(e)}")
-                break
         except Exception as e:
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
@@ -180,7 +194,7 @@ def get_main_contacts():
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact_id(email: str):
-    """ZOEK KLANTCONTACT OP EMAIL"""
+    """ZOEK KLANTCONTACT OP EMAIL MET CASE-INSENSITIVE MATCHING"""
     if not email:
         return None
     email = email.strip().lower()
@@ -232,7 +246,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer configuratie.")
         return None
     
-    body["ContactID"] = str(contact_id)  # ✅ CONTACTID INSTEAD OF USERID
+    body["ContactID"] = str(contact_id)
     log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id}")
     log.debug(f"➡️ Volledige ticket payload: {body}")
 
@@ -251,14 +265,6 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")
             log.error(f"➡️ Response body: {r.text}")
             
-            # Specifieke UAT foutanalyse
-            if r.status_code == 400:
-                log.critical("❌ Mogelijk ongeldige waarden in ticket payload - Controleer ID's")
-            elif r.status_code == 401:
-                log.critical("❌ Ongeautoriseerd - Controleer Halo credentials")
-            elif r.status_code == 404:
-                log.critical("❌ Endpoint niet gevonden - Zeker weten dat UAT geen /v1 gebruikt?")
-                
             if room_id:
                 send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")
             return None
@@ -453,7 +459,7 @@ def process_webex_event(data):
                 return
             
             # Standaardwaarden voor optionele velden
-            sindswanneer = inputs.get("sindswanneer", "Niet opgegeven")
+            sindswanneer = inputs.get("sindswangen", "Niet opgegeven")
             watwerktniet = inputs.get("watwerktniet", "Niet opgegeven")
             zelfgeprobeerd = inputs.get("zelfgeprobeerd", "Niet opgegeven")
             impacttoelichting = inputs.get("impacttoelichting", "Niet opgegeven")
@@ -524,7 +530,7 @@ def initialize_cache():
         log.critical("❌ CACHE IS LEEG! Mogelijke oorzaken:")
         log.critical("1. Verkeerde klant/locatie ID's (momenteel: Client=%s, Site=%s)", HALO_CLIENT_ID_NUM, HALO_SITE_ID)
         log.critical("2. Halo API token problemen")
-        log.critical("3. Verkeerd API-endpoint (UAT gebruikt GEEN /v1)")
+        log.critical("3. Verkeerd API-endpoint (gebruikte endpoint: %s)", "/Users of /Person")
     
     return {
         "status": "initialized",
@@ -532,7 +538,8 @@ def initialize_cache():
         "duration_seconds": duration,
         "cache_timestamp": CONTACT_CACHE["timestamp"],
         "client_id": HALO_CLIENT_ID_NUM,
-        "site_id": HALO_SITE_ID
+        "site_id": HALO_SITE_ID,
+        "used_endpoint": "/Users or /Person"
     }
 # ------------------------------------------------------------------------------
 # INITIELE CACHE LOADING BIJ OPSTARTEN
@@ -545,7 +552,7 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ GEBRUIKT /api/People ENDPOINT VOOR KLANTCONTACTEN")
+    log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")
     log.info("✅ ContactID GEBRUIKT VOOR KOPPELING (ALS STRING)")
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN")
     log.info("-"*70)
@@ -573,8 +580,8 @@ if __name__ == "__main__":
     log.info("3. Typ in Webex: 'nieuwe melding' om het formulier te openen")
     log.info("4. Vul het formulier in en verstuur")
     log.info("5. Controleer logs op succesmeldingen:")
+    log.info("   - '✅ Succesvol verbonden met /Users endpoint'")
     log.info("   - '✅ Email match gevonden'")
     log.info("   - '✅ Ticket succesvol aangemaakt'")
-    log.info("   - '✅ Public note succesvol toegevoegd'")
     log.info("="*70)
     app.run(host="0.0.0.0", port=port, debug=False)
