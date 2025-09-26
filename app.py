@@ -121,7 +121,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN (nu altijd requestUserId)
+# TICKET AANMAKEN
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -136,6 +136,15 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     contact_id = contact.get("id")
     contact_name = contact.get("name", "Onbekend")
 
+    # Check of dit een agent is (linked to staff)
+    if contact.get("linked_agent_id", 0) > 0:
+        log.warning(f"⚠️ Email {email} hoort bij een interne medewerker (agent_id={contact['linked_agent_id']})")
+        if room_id:
+            send_message(room_id, f"⚠️ Het adres **{email}** hoort bij een interne medewerker. "
+                                  f"Gebruik een klantcontactadres voor tickets.")
+        return None
+
+    # Klantcontact → gebruik contactId
     body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
@@ -145,12 +154,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "requestUserId": int(contact_id),   # ✅ juiste veld!
+        "contactId": int(contact_id),      # ✅ juiste veld voor klanten
         "emailAddress": email
     }
 
-    log.info(f"➡️ Ticket body (requestUserId):\n{json.dumps(body, indent=2)}")
-
+    log.info(f"➡️ Ticket body naar Halo:\n{json.dumps(body, indent=2)}")
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
     log.info(f"⬅️ Halo status {r.status_code}")
 
@@ -184,7 +192,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         "actionTypeId": HALO_ACTIONTYPE_PUBLIC,
         "isPrivate": False,
         "timeSpent": "00:00:00",
-        "userId": contact_id   # degene die de note aanmaakt
+        "userId": contact_id
     }
     r = requests.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions",
                       headers=h, json=body, timeout=10)
