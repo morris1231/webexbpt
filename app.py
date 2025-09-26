@@ -210,14 +210,22 @@ def get_halo_contact_id(email: str):
                 return c.get("id")  
     log.warning(f"⚠️ Geen klantcontact gevonden voor email: {email}")  
     return None  
+def get_contact_name(contact_id):
+    """Haal de contactnaam op uit de cache"""
+    for contact in get_main_contacts():
+        if str(contact.get('id')) == str(contact_id):
+            name = contact.get('name', 'Onbekend')
+            log.info(f"👤 Contactnaam opgehaald: {name} (ID: {contact_id})")
+            return name
+    return "Onbekend"
 log.info("✅ Klantcontact cache functies geregistreerd")
 # **------------------------------------------------------------------------------**
 # **Halo Tickets (DEFINITIEVE FIX VOOR UW SPECIFIEKE UAT)**
 # **------------------------------------------------------------------------------**
-def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,  
+def create_halo_ticket(omschrijving, email, sindswanneer,  
                       watwerktniet, zelfgeprobeerd, impacttoelichting,  
                       impact_id, urgency_id, room_id=None):  
-    log.info(f"🎫 Ticket aanmaken: '{summary}' voor {email} (AGENT GEBRUIKT)")  
+    log.info(f"🎫 Ticket aanmaken voor {email} (AGENT GEBRUIKT)")  
     h = get_halo_headers()  
     # ✅ ABSOLUUT VERPLICHTE STAP VOOR UW UAT: HAAL CONTACT ID OP
     contact_id = get_halo_contact_id(email)
@@ -226,9 +234,13 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         if room_id:  
             send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer e-mailadres.")  
         return None
-    # ✅ CRUCIALE FIX VOOR UW UAT: ZET SUMMARY OM IN EEN ARRAY (GEVRAAGD DOOR HALO API)
+    
+    # ✅ HAAL CONTACTNAAM OP UIT DE CACHE (GEEN NAME PARAMETER MEER NODIG)
+    contact_name = get_contact_name(contact_id)
+    
+    # ✅ CORRECTE FIX: Gebruik 'subject' i.p.v. 'summary' (Halo PSA standaard)
     body = {  
-        "summary": [str(summary)],  # FIX: String omgezet naar array - dit lost de deserialisatiefout op
+        "subject": str(omschrijving)[:100],  # Halo heeft limiet op subject lengte
         "details": str(omschrijving),  
         "typeId": int(HALO_TICKET_TYPE_ID),  
         "clientId": int(HALO_CLIENT_ID_NUM),  
@@ -239,14 +251,13 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "requesterId": int(contact_id),  
         "requesterEmail": str(email)  
     }  
-    log.debug(f"➡️ Volledige ticket payload (summary is nu een array): {body}")  
+    log.debug(f"➡️ Volledige ticket payload (gebruikt 'subject'): {body}")  
     try:  
-        # ✅ GEEN ARRAY WRAP VOOR DEZE UAT INSTANTIE
-        log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")  
+        log.debug(f"➡️ Halo API aanroep voor basis ticket")  
         r = requests.post(  
             f"{HALO_API_BASE}/Tickets",  
             headers=h,  
-            json=body,  # GEEN ARRAY - GEWONE OBJECT
+            json=body,  
             timeout=15  
         )  
         log.info(f"⬅️ API response status: {r.status_code}")  
@@ -259,7 +270,6 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             return None  
         try:  
             response_data = r.json()
-            # ✅ FIX: HANDEL ZOWEL ARRAY ALS ENKEL OBJECT
             if isinstance(response_data, list) and response_data:
                 ticket = response_data[0]
             else:
@@ -273,7 +283,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             # ✅ PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE  
             log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")  
             public_note = (  
-                f"**Naam:** {name}\n"  
+                f"**Naam:** {contact_name}\n"  
                 f"**E-mail:** {email}\n"  
                 f"**Probleemomschrijving:** {omschrijving}\n\n"  
                 f"**Sinds wanneer:** {sindswanneer}\n"  
@@ -282,14 +292,13 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                 f"**Impact toelichting:** {impacttoelichting}\n\n"  
                 f"Ticket aangemaakt via Webex bot"  
             )  
-            # ✅ USET EXACT DEZELFDE CONTACT ID VOOR NOTITIES
             note_added = add_note_to_ticket(  
                 ticket_id,  
                 public_output=public_note,  
-                sender=name,  
+                sender=contact_name,  
                 email=email,  
                 room_id=room_id,
-                contact_id=contact_id  # Pass the same contact ID used for ticket
+                contact_id=contact_id
             )  
             if note_added:  
                 log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")  
@@ -375,8 +384,6 @@ def send_adaptive_card(room_id):
                 "type":"AdaptiveCard",  
                 "version":"1.0", # ✅ WEBEX VEREIST VERSIE 1.0  
                 "body":[  
-                    {"type":"TextBlock","text":"Naam","weight":"Bolder","wrap":True},  
-                    {"type":"Input.Text","id":"name","placeholder":"Naam","isRequired":True,"wrap":True},  
                     {"type":"TextBlock","text":"E-mailadres","weight":"Bolder","wrap":True},  
                     {"type":"Input.Text","id":"email","placeholder":"E-mailadres","isRequired":True,"wrap":True},  
                     {"type":"TextBlock","text":"Probleemomschrijving","weight":"Bolder","wrap":True},  
@@ -456,7 +463,7 @@ def process_webex_event(data):
             ).json().get("inputs",{})  
             log.info(f"➡️ Formulier inputs ontvangen: {inputs}")  
             # Controleer verplichte velden  
-            required_fields = ["name", "email", "omschrijving"]  
+            required_fields = ["email", "omschrijving"]  
             missing = [field for field in required_fields if not inputs.get(field)]  
             if missing:  
                 log.warning(f"❌ Verplichte velden ontbreken: {', '.join(missing)}")  
@@ -470,10 +477,8 @@ def process_webex_event(data):
             impacttoelichting = inputs.get("impacttoelichting", "Niet opgegeven")  
             log.info(f"🚀 Ticket aanmaken voor {inputs['email']}")  
             ticket = create_halo_ticket(  
-                inputs.get("omschrijving", "Melding via Webex"),  
-                inputs["name"],  
-                inputs["email"],  
                 inputs["omschrijving"],  
+                inputs["email"],  
                 sindswanneer,  
                 watwerktniet,  
                 zelfgeprobeerd,  
