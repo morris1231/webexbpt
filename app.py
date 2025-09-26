@@ -25,20 +25,20 @@ HALO_AUTH_URL = "https://bncuat.halopsa.com/auth/token"
 HALO_API_BASE = "https://bncuat.halopsa.com/api"
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
-if not WEBEX_TOKEN:
-    log.critical("❌ WEBEX_BOT_TOKEN ontbreekt!")
-WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"}
+WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID", "").strip()
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET", "").strip()
-if not HALO_CLIENT_ID or not HALO_CLIENT_SECRET:
-    log.critical("❌ Halo credentials ontbreken!")
 
 HALO_TICKET_TYPE_ID = 65
 HALO_TEAM_ID = 1
 HALO_DEFAULT_IMPACT = 3
 HALO_DEFAULT_URGENCY = 3
 HALO_ACTIONTYPE_PUBLIC = 78
+
+# 🚩 Altijd deze gebruiken
+HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen
+HALO_SITE_ID = 992          # Main site
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60
@@ -65,7 +65,6 @@ def get_halo_headers():
 # CONTACTS
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
-    """Cache basis contactgegevens"""
     h = get_halo_headers()
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
@@ -100,28 +99,30 @@ def get_halo_contact_id(email: str):
     if not email: return None
     email = email.strip().lower()
     for c in get_main_contacts():
-        fields = [c.get("EmailAddress",""), c.get("emailaddress",""), c.get("PrimaryEmail",""), c.get("username","")]
+        fields = [
+            c.get("EmailAddress",""), c.get("emailaddress",""),
+            c.get("PrimaryEmail",""), c.get("username",""),
+            c.get("login",""), c.get("email2",""), c.get("email3","")
+        ]
         for f in fields:
             if f and email == f.lower():
+                log.info(f"✅ Email match: {email} → ID {c.get('id')}")
                 return c.get("id")
+    log.warning(f"⚠️ Geen match gevonden voor {email}")
     return None
 
-# ✅ Nieuw: contactdetails ophalen incl. client/site
-def get_contact_with_details(contact_id):
-    h = get_halo_headers()
-    r = requests.get(f"{HALO_API_BASE}/Users/{contact_id}?include=client,site", headers=h, timeout=10)
-    if r.status_code == 200:
-        return r.json()
-    else:
-        log.error(f"❌ Kan contactdetails niet ophalen: {r.status_code} {r.text}")
-        return {}
+def get_contact_name(contact_id):
+    for c in get_main_contacts():
+        if str(c.get("id")) == str(contact_id):
+            return c.get("name", "Onbekend")
+    return "Onbekend"
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN
+# TICKET AANMAKEN (ALTIJD 986/992)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
-                      zelfgeprobeerd, impacttoelichting, impact_id, urgency_id,
-                      room_id=None):
+                      zelfgeprobeerd, impacttoelichting,
+                      impact_id, urgency_id, room_id=None):
     log.info(f"🎫 Ticket maken voor {email}")
     h = get_halo_headers()
     contact_id = get_halo_contact_id(email)
@@ -129,23 +130,14 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         if room_id: send_message(room_id,"⚠️ Geen matchend contact in Halo.")
         return None
 
-    # Haal dynamisch naam, client, site op
-    contact = get_contact_with_details(contact_id)
-    contact_name = contact.get("name","Onbekend")
-    contact_client = contact.get("clientid")
-    contact_site = contact.get("siteid")
-
-    if not contact_client or not contact_site:
-        log.error("❌ Geen client/site koppeling bij contact.")
-        if room_id: send_message(room_id,"⚠️ Contact heeft geen Client/Site koppeling in Halo.")
-        return None
+    contact_name = get_contact_name(contact_id)
 
     body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": int(contact_client),
-        "siteId": int(contact_site),
+        "clientId": HALO_CLIENT_ID_NUM,  # 🚩 Altijd vaste klant = 986
+        "siteId": HALO_SITE_ID,          # 🚩 Altijd vaste site = 992
         "teamId": HALO_TEAM_ID,
         "impactId": impact_id,
         "urgencyId": urgency_id,
@@ -157,10 +149,9 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     log.info(f"⬅️ Halo status {r.status_code}")
     if r.status_code in (200,201):
         resp = r.json()
-        ticket = resp[0] if isinstance(resp, list) else resp
+        ticket = resp[0] if isinstance(resp,list) else resp
         ticket_id = ticket.get("id") or ticket.get("ID")
         log.info(f"✅ Ticket ID {ticket_id}")
-
         note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
                 f"**Probleem:** {omschrijving}\n\n"
                 f"**Sinds:** {sindswanneer}\n"
@@ -170,8 +161,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         add_note_to_ticket(ticket_id,note,contact_name,email,room_id,contact_id)
         return {"ID": ticket_id,"Ref":f"BC-{ticket_id}","contact_id":contact_id}
     else:
-        log.error(f"❌ Halo error {r.text}")
-        if room_id: send_message(room_id,f"⚠️ Ticket error: {r.text[:200]}")
+        log.error(f"❌ Halo fout {r.text}")
+        if room_id: send_message(room_id,f"⚠️ Ticket fout: {r.text[:200]}")
         return None
 
 # --------------------------------------------------------------------------
@@ -278,11 +269,6 @@ def initialize_cache():
 @app.route("/cache", methods=["GET"])
 def inspect_cache():
     return jsonify(CONTACT_CACHE)
-
-# ✅ Nieuw debug endpoint
-@app.route("/contact/<cid>", methods=["GET"])
-def debug_contact(cid):
-    return get_contact_with_details(cid)
 
 # --------------------------------------------------------------------------
 # START
