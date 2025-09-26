@@ -249,13 +249,14 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     log.debug(f"➡️ Volledige ticket payload: {body}")  
     
     try:  
-        # ✅ GEEN ARRAY WRAP VOOR UW UAT - DIRECT OBJECT VERZENDEN  
-        log.debug(f"➡️ Halo API aanroep voor basis ticket: {body}")  
+        # ✅ CRUCIALE FIX: WRAP TICKET IN ARRAY VOOR HALO API  
+        request_body = [body]  
+        log.debug(f"➡️ Halo API aanroep voor basis ticket: {request_body}")  
         
         r = requests.post(  
             f"{HALO_API_BASE}/Tickets",  
             headers=h,  
-            json=body,  # GEEN ARRAY WRAP - DIRECT OBJECT  
+            json=request_body,  
             timeout=15  
         )  
         
@@ -270,14 +271,19 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                 send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")  
             return None  
     
-        # ✅ FIX: VERWERK ENKEL OBJECT IN PLAATS VAN ARRAY  
+        # ✅ FIX: Verwerk array response  
         try:  
-            ticket = r.json()  
-            ticket_id = ticket.get("ID") or ticket.get("id")  
-            if ticket_id:  
-                log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
+            response_data = r.json()  
+            if isinstance(response_data, list) and len(response_data) > 0:  
+                ticket = response_data[0] # Eerste ticket uit de array  
+                ticket_id = ticket.get("ID") or ticket.get("id")  
+                if ticket_id:  
+                    log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
+                else:  
+                    log.error("❌ Ticket ID niet gevonden in antwoord")  
+                    return None  
             else:  
-                log.error("❌ Ticket ID niet gevonden in antwoord")  
+                log.error("❌ Ongeldig antwoord van Halo API - geen ticket ontvangen")  
                 return None  
         except Exception as e:  
             log.exception("❌ Fout bij verwerken API response")  
@@ -603,7 +609,7 @@ if __name__ == "__main__":
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
     log.info("✅ FIX VOOR 'PLEASE SELECT A VALID CLIENT/SITE/USER' FOUT")  
-    log.info("✅ GEEN ARRAY WRAP VOOR TICKET AANMAAK")  
+    log.info("✅ ARRAY WRAP VOOR TICKET AANMAAK (VERPLICHT VOOR DEZE UAT-INSTANTIE)")  
     log.info("✅ FIX VOOR ADAPTIVE CARD VERSIE (1.0 IN PLAATS VAN 1.2)")  
     log.info("-"*70)  
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN  
@@ -632,7 +638,7 @@ if __name__ == "__main__":
     log.info("6. Vul het formulier in en verstuur")  
     log.info("7. Controleer logs op succesmeldingen:")  
     log.info("   - '👤 Ticket gekoppeld aan klantcontact ID: 1086 (gebruikt als RequesterID)'")  
-    log.info("   - '➡️ Halo API aanroep voor basis ticket: {...}'")  
+    log.info("   - '➡️ Halo API aanroep voor basis ticket: [{...}]'")  
     log.info("   - '✅ Ticket succesvol aangemaakt'")  
     log.info("   - '✅ Public note succesvol toegevoegd'")  
     log.info("="*70)  
