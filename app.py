@@ -81,13 +81,15 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
         if r.status_code == 200:
             data = r.json()
             contacts = data.get('users', []) or data.get('items', []) or data
-            if not contacts: break
+            if not contacts:
+                break
             for contact in contacts:
                 cid = str(contact.get('id', ''))
                 if cid and cid not in processed_ids:
                     processed_ids.add(cid)
                     all_contacts.append(contact)
-            if len(contacts) < 50: break
+            if len(contacts) < 50:
+                break
             page += 1
         else:
             log.error(f"❌ Halo fout {r.status_code}: {r.text}")
@@ -105,7 +107,8 @@ def get_main_contacts():
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact(email: str):
-    if not email: return None
+    if not email:
+        return None
     email = email.strip().lower()
     for c in get_main_contacts():
         fields = [
@@ -121,7 +124,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN
+# TICKET AANMAKEN (nu altijd requestContactId)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -130,21 +133,22 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     h = get_halo_headers()
     contact = get_halo_contact(email)
     if not contact:
-        if room_id: send_message(room_id, "⚠️ Geen matchend contact in Halo.")
+        if room_id:
+            send_message(room_id, "⚠️ Geen matchend contact in Halo.")
         return None
 
     contact_id = contact.get("id")
     contact_name = contact.get("name", "Onbekend")
 
-    # Check of dit een agent is (linked to staff)
+    # Als agent → blokkeren
     if contact.get("linked_agent_id", 0) > 0:
-        log.warning(f"⚠️ Email {email} hoort bij een interne medewerker (agent_id={contact['linked_agent_id']})")
+        log.warning(f"⚠️ {email} is een interne medewerker (agent_id={contact['linked_agent_id']}), niet bruikbaar als ticketrequester.")
         if room_id:
-            send_message(room_id, f"⚠️ Het adres **{email}** hoort bij een interne medewerker. "
-                                  f"Gebruik een klantcontactadres voor tickets.")
+            send_message(room_id, f"⚠️ {email} is een interne medewerker en kan niet als aanvrager worden gebruikt. "
+                                  f"Gebruik een klantcontactadres a.u.b.")
         return None
 
-    # Klantcontact → gebruik contactId
+    # ✅ Klantcontact → juiste veld is requestContactId
     body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
@@ -154,11 +158,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "contactId": int(contact_id),      # ✅ juiste veld voor klanten
+        "requestContactId": int(contact_id),   # <-- FIX
         "emailAddress": email
     }
 
-    log.info(f"➡️ Ticket body naar Halo:\n{json.dumps(body, indent=2)}")
+    log.info(f"➡️ Ticket body:\n{json.dumps(body, indent=2)}")
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
     log.info(f"⬅️ Halo status {r.status_code}")
 
@@ -179,7 +183,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         return {"ID": ticket_id, "Ref": f"BC-{ticket_id}", "contact_id": contact_id}
     else:
         log.error(f"❌ Halo error {r.text}")
-        if room_id: send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
+        if room_id:
+            send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
         return None
 
 # --------------------------------------------------------------------------
