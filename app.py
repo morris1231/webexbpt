@@ -233,8 +233,15 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
     log.info(f"🎫 Ticket aanmaken: '{summary}' voor {email} (AGENT GEBRUIKT)")  
     h = get_halo_headers()  
     
-    # ✅ CRUCIALE FIX: GEEN CONTACT VALIDATIE VOOR TICKET AANMAAK
-    # Halo vereist AGENT CREDENTIALS, niet customer contact
+    # ✅ ABSOLUUT VERPLICHTE STAP VOOR UW UAT: HAAL CONTACT ID OP
+    contact_id = get_halo_contact_id(email)
+    if not contact_id:
+        log.critical(f"❌ FATALE FOUT: Geen klantcontact gevonden voor {email} - Controleer klant/locatie ID's")
+        if room_id:  
+            send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer configuratie.")  
+        return None
+    
+    # ✅ CRUCIALE FIX VOOR UW UAT: MOET BEIDE VELDEN HEBBEN
     body = {  
         "Summary": str(summary),  
         "Details": str(omschrijving),  
@@ -244,7 +251,8 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "TeamID": int(HALO_TEAM_ID),  
         "ImpactID": int(impact_id),  
         "UrgencyID": int(urgency_id),
-        "RequesterEmail": str(email)  # ✅ CORRECTE MANIER VOOR KLANTKOPPELING
+        "UserId": int(contact_id),  # ✅ ABSOLUUT VERPLICHT VOOR UW UAT
+        "RequesterEmail": str(email)  # Voor extra validatie
     }  
     
     log.debug(f"➡️ Volledige ticket payload: {body}")  
@@ -261,10 +269,17 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         log.info(f"⬅️ API response status: {r.status_code}")  
         log.debug(f"⬅️ Volledige API response: {r.text}")  
         if r.status_code not in (200, 201):  
+            # ✅ SPECIFIEKE FOUTDIAGNOSE VOOR UW UAT
+            if "valid Client/Site/User" in r.text:
+                log.critical("❌ FATALE FOUT: INVALIDE USER KOPPELING - CONTROLEER:")
+                log.critical(f"1. Contact ID {contact_id} bestaat in Halo")
+                log.critical(f"2. Contact {contact_id} is gekoppeld aan Klant {HALO_CLIENT_ID_NUM} en Locatie {HALO_SITE_ID}")
+                log.critical(f"3. Gebruik INTEGER voor UserId (geen string)")
+            
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")  
             log.error(f"➡️ Response body: {r.text}")  
             if room_id:  
-                send_message(room_id, f"⚠️ Ticket aanmaken mislukt ({r.status_code})")  
+                send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.text[:100]}")  
             return None  
         
         # ✅ FIX: Verwerk array response  
@@ -275,50 +290,45 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
                 ticket_id = ticket.get("ID") or ticket.get("id")  
                 if ticket_id:  
                     log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
-                    
-                    # ✅ EXTRACT REQUESTER ID FROM RESPONSE FOR NOTES
-                    requester_id = ticket.get("UserId") or ticket.get("UserID")
-                    if requester_id:
-                        log.info(f"ℹ️ Gebruik klantcontact ID {requester_id} voor notities")
                 else:  
                     log.error("❌ Ticket ID niet gevonden in antwoord")  
                     return None  
             else:  
                 log.error("❌ Ongeldig antwoord van Halo API - geen ticket ontvangen")  
                 return None  
+            
+            # ✅ PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE  
+            log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")  
+            public_note = (  
+                f"**Naam:** {name}\n"  
+                f"**E-mail:** {email}\n"  
+                f"**Probleemomschrijving:** {omschrijving}\n\n"  
+                f"**Sinds wanneer:** {sindswanneer}\n"  
+                f"**Wat werkt niet:** {watwerktniet}\n"  
+                f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"  
+                f"**Impact toelichting:** {impacttoelichting}\n\n"  
+                f"Ticket aangemaakt via Webex bot"  
+            )  
+            
+            # ✅ USET EXACT DEZELFDE CONTACT ID VOOR NOTITIES
+            note_added = add_note_to_ticket(  
+                ticket_id,  
+                public_output=public_note,  
+                sender=name,  
+                email=email,  
+                room_id=room_id,
+                contact_id=contact_id  # Pass the same contact ID used for ticket
+            )  
+            
+            if note_added:  
+                log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")  
+                return {"ID": ticket_id, "Ref": f"BC-{ticket_id}", "contact_id": contact_id}  
+            else:  
+                log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")  
+                return {"ID": ticket_id, "contact_id": contact_id}  
         except Exception as e:  
             log.exception("❌ Fout bij verwerken API response")  
             return None  
-        
-        # ✅ PUBLIC NOTE TOEVOEGEN MET ALLE INFORMATIE  
-        log.info(f"📝 Public note toevoegen aan ticket {ticket_id}...")  
-        public_note = (  
-            f"**Naam:** {name}\n"  
-            f"**E-mail:** {email}\n"  
-            f"**Probleemomschrijving:** {omschrijving}\n\n"  
-            f"**Sinds wanneer:** {sindswanneer}\n"  
-            f"**Wat werkt niet:** {watwerktniet}\n"  
-            f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"  
-            f"**Impact toelichting:** {impacttoelichting}\n\n"  
-            f"Ticket aangemaakt via Webex bot"  
-        )  
-        
-        # ✅ USE EXTRACTED REQUESTER ID FOR NOTES
-        note_added = add_note_to_ticket(  
-            ticket_id,  
-            public_output=public_note,  
-            sender=name,  
-            email=email,  
-            room_id=room_id,
-            requester_id=requester_id  # Pass requester ID for notes
-        )  
-        
-        if note_added:  
-            log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")  
-            return {"ID": ticket_id, "Ref": f"BC-{ticket_id}"}  
-        else:  
-            log.warning(f"⚠️ Public note kon niet worden toegevoegd aan ticket {ticket_id}")  
-            return {"ID": ticket_id}  
     except Exception as e:  
         log.exception(f"❌ Fout bij ticket aanmaken: {str(e)}")  
         if room_id:  
@@ -329,26 +339,26 @@ log.info("✅ Ticket aanmaak functie geregistreerd")
 # **------------------------------------------------------------------------------**
 # **Notes (GEFIXTE PUBLIC NOTES)**
 # **------------------------------------------------------------------------------**
-def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=None, requester_id=None):  
+def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=None, contact_id=None):  
     log.info(f"📎 Note toevoegen aan ticket {ticket_id}")  
     h = get_halo_headers()  
+    
+    # ✅ ABSOLUUT VERPLICHTE STAP: CONTACT ID MOET ZIJN
+    if not contact_id:
+        log.error("❌ Geen contact ID beschikbaar voor notitie")
+        if room_id:
+            send_message(room_id, "⚠️ Technische fout bij notitie toevoegen")
+        return False
     
     body = {  
         "Details": str(public_output),  
         "ActionTypeID": int(HALO_ACTIONTYPE_PUBLIC),  
         "IsPrivate": False,  
-        "TimeSpent": "00:00:00"  
+        "TimeSpent": "00:00:00",
+        "UserId": int(contact_id)  # ✅ ABSOLUUT VERPLICHT VOOR UW UAT
     }  
     
-    # ✅ USE REQUESTER ID IF AVAILABLE
-    if requester_id:
-        body["UserId"] = int(requester_id)
-        log.info(f"📎 Note gekoppeld aan klantcontact ID: {requester_id} (gebruikt als UserId)")
-    elif email:
-        contact_id = get_halo_contact_id(email)
-        if contact_id:
-            body["UserId"] = int(contact_id)
-            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")
+    log.debug(f"➡️ Note payload: {body}")
     
     try:  
         r = requests.post(  
@@ -461,10 +471,19 @@ def process_webex_event(data):
                 send_adaptive_card(room_id)  
                 send_message(room_id,"📋 Vul formulier in om ticket te starten.")  
             else:  
-                for t_id, rid in ticket_room_map.items():  
-                    if rid == room_id:  
-                        log.info(f"💬 Webex bericht naar ticket {t_id}")  
-                        add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id)  
+                # Check if this room is linked to a ticket
+                for t_id, room_info in ticket_room_map.items():
+                    if isinstance(room_info, dict) and room_info.get("room_id") == room_id:
+                        log.info(f"💬 Webex bericht naar ticket {t_id}")
+                        add_note_to_ticket(
+                            t_id, 
+                            text, 
+                            sender, 
+                            email=sender, 
+                            room_id=room_id,
+                            contact_id=room_info.get("contact_id")
+                        )
+                        break
         elif res == "attachmentActions":  
             act_id = data["data"]["id"]  
             inputs = requests.get(  
@@ -502,9 +521,13 @@ def process_webex_event(data):
                 room_id=data["data"]["roomId"]  
             )  
             if ticket:  
-                ticket_id = ticket.get("ID") or ticket.get("id")  
+                ticket_id = ticket.get("ID")  
                 if ticket_id:  
-                    ticket_room_map[ticket_id] = data["data"]["roomId"]  
+                    # ✅ BEWAAR ZOWEL ROOM ID ALS CONTACT ID
+                    ticket_room_map[ticket_id] = {
+                        "room_id": data["data"]["roomId"],
+                        "contact_id": ticket.get("contact_id")
+                    }
                     ref = ticket.get('Ref', f"BC-{ticket_id}")  
                     log.info(f"🎫 Ticket {ref} succesvol aangemaakt (ID: {ticket_id})")  
                     send_message(data["data"]["roomId"],  
@@ -613,7 +636,7 @@ if __name__ == "__main__":
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
     log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
     log.info("✅ AGENT CREDENTIALS GEBRUIKT VOOR API TOEGANG")  
-    log.info("✅ REQUESTEREMAIL GEBRUIKT VOOR KLANTKOPPELING (GEEN USERID)")  
+    log.info("✅ USERID + REQUESTEREMAIL GEBRUIKT VOOR KLANTKOPPELING")  
     log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
@@ -646,6 +669,7 @@ if __name__ == "__main__":
     log.info("5. Typ in Webex: 'nieuwe melding' om het formulier te openen")  
     log.info("6. Vul het formulier in en verstuur")  
     log.info("7. Controleer logs op succesmeldingen:")  
+    log.info(" - '👤 Uniek klantcontact gevonden - ID: 1086...'")  
     log.info(" - '✅ Ticket succesvol aangemaakt met ID: 12345'")  
     log.info(" - '✅ Public note succesvol toegevoegd aan ticket 12345'")  
     log.info("="*70)  
