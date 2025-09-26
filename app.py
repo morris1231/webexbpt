@@ -41,7 +41,7 @@ HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen
 HALO_SITE_ID = 992          # Main site
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
-CACHE_DURATION = 24 * 60 * 60  # 24 uur cache
+CACHE_DURATION = 24 * 60 * 60  # 24 uur
 
 ticket_room_map = {}
 
@@ -66,7 +66,6 @@ def get_halo_headers():
 # CONTACTS
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
-    """Haal contacten van specifieke client/site op"""
     h = get_halo_headers()
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
@@ -83,15 +82,13 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
         if r.status_code == 200:
             data = r.json()
             contacts = data.get('users', []) or data.get('items', []) or data
-            if not contacts:
-                break
+            if not contacts: break
             for contact in contacts:
                 cid = str(contact.get('id', ''))
                 if cid and cid not in processed_ids:
                     processed_ids.add(cid)
                     all_contacts.append(contact)
-            if len(contacts) < 50:
-                break
+            if len(contacts) < 50: break
             page += 1
         else:
             log.error(f"❌ Halo fout {r.status_code}: {r.text}")
@@ -109,8 +106,7 @@ def get_main_contacts():
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact_id(email: str):
-    if not email:
-        return None
+    if not email: return None
     email = email.strip().lower()
     for c in get_main_contacts():
         fields = [
@@ -132,7 +128,7 @@ def get_contact_name(contact_id):
     return "Onbekend"
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN (FIXED BODY met contactId)
+# TICKET AANMAKEN met fallback
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -140,30 +136,36 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     h = get_halo_headers()
     contact_id = get_halo_contact_id(email)
     if not contact_id:
-        if room_id:
-            send_message(room_id, "⚠️ Geen matchend contact in Halo.")
+        if room_id: send_message(room_id, "⚠️ Geen matchend contact in Halo.")
         return None
 
     contact_name = get_contact_name(contact_id)
 
-    body = {
+    base_body = {
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": HALO_CLIENT_ID_NUM,    # 986
-        "siteId": HALO_SITE_ID,            # 992
+        "clientId": HALO_CLIENT_ID_NUM,
+        "siteId": HALO_SITE_ID,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "contactId": int(contact_id),      # ✅ juiste veld!
         "emailAddress": email
     }
 
-    log.info(f"➡️ Ticket body naar Halo:\n{json.dumps(body, indent=2)}")
+    # Probeer contactId
+    body = base_body | {"contactId": int(contact_id)}
+    log.info(f"➡️ Ticket body (contactId):\n{json.dumps(body, indent=2)}")
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
 
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+    # Als 400 => probeer opnieuw met endUserId
+    if r.status_code == 400:
+        log.warning("⚠️ Halo 400 bij contactId → proberen met endUserId")
+        body = base_body | {"endUserId": int(contact_id)}
+        log.info(f"➡️ Ticket body (endUserId):\n{json.dumps(body, indent=2)}")
+        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
+
     log.info(f"⬅️ Halo status {r.status_code}")
-
     if r.status_code in (200, 201):
         resp = r.json()
         ticket = resp[0] if isinstance(resp, list) else resp
@@ -181,8 +183,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         return {"ID": ticket_id, "Ref": f"BC-{ticket_id}", "contact_id": contact_id}
     else:
         log.error(f"❌ Halo error {r.text}")
-        if room_id:
-            send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
+        if room_id: send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
         return None
 
 # --------------------------------------------------------------------------
@@ -247,15 +248,15 @@ def process_webex_event(data):
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
-        if sender.endswith("@webex.bot"):
-            return
+        if sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
             send_message(room_id, "📋 Vul formulier in.")
         else:
             for t_id, ri in ticket_room_map.items():
                 if ri.get("room_id") == room_id:
-                    add_note_to_ticket(t_id, text, sender, email=sender, room_id=room_id, contact_id=ri.get("contact_id"))
+                    add_note_to_ticket(t_id, text, sender, email=sender,
+                                       room_id=room_id, contact_id=ri.get("contact_id"))
 
     elif res == "attachmentActions":
         act_id = data["data"]["id"]
@@ -274,7 +275,8 @@ def process_webex_event(data):
                                     room_id=data["data"]["roomId"])
         if ticket:
             ticket_id = ticket.get("ID")
-            ticket_room_map[ticket_id] = {"room_id": data["data"]["roomId"], "contact_id": ticket.get("contact_id")}
+            ticket_room_map[ticket_id] = {"room_id": data["data"]["roomId"],
+                                          "contact_id": ticket.get("contact_id")}
             ref = ticket.get("Ref", f"BC-{ticket_id}")
             send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ref}**\n🔢 ID: {ticket_id}")
 
@@ -302,7 +304,7 @@ def inspect_cache():
 # --------------------------------------------------------------------------
 # START
 # --------------------------------------------------------------------------
-if __name__ == "__main__":   # ✅ fixed
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
