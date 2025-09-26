@@ -37,7 +37,7 @@ HALO_DEFAULT_URGENCY = 3
 HALO_ACTIONTYPE_PUBLIC = 78
 
 # 🚩 Altijd deze gebruiken
-HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen
+HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen B.V.
 HALO_SITE_ID = 992          # Main site
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
@@ -65,11 +65,21 @@ def get_halo_headers():
 # CONTACTS
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
+    """Haal alle site contacts voor client/site op"""
     h = get_halo_headers()
     all_contacts, processed_ids = [], set()
     page, endpoint = 1, "/Users"
+
     while page <= max_pages:
-        params = {"page": page, "page_size": 50}
+        params = {
+            "include": "site,client",
+            "client_id": client_id,
+            "site_id": site_id,
+            "type": "contact",
+            "page": page,
+            "page_size": 50
+        }
+        log.info(f"📡 Ophalen contacten: client={client_id} site={site_id} page={page}")
         r = requests.get(f"{HALO_API_BASE}{endpoint}", headers=h, params=params, timeout=15)
         if r.status_code == 200:
             data = r.json()
@@ -80,19 +90,24 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
                 if cid and cid not in processed_ids:
                     processed_ids.add(cid)
                     all_contacts.append(contact)
+                    log.debug(f"👤 Contact: {contact.get('name')} id={cid} email={contact.get('emailaddress')}")
             if len(contacts) < 50: break
             page += 1
-        elif page == 1 and r.status_code == 404:
-            endpoint = "/Person"; page = 1
-        else: break
+        else:
+            log.error(f"❌ Halo fout {r.status_code}: {r.text}")
+            break
     return all_contacts
 
 def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
+        log.info("✅ Cache gebruikt")
         return CONTACT_CACHE["contacts"]
-    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(0, 0)
+
+    log.info("🔄 Cache leeg of verlopen – ophalen...")
+    CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = time.time()
+    log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecached")
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact_id(email: str):
@@ -136,8 +151,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": HALO_CLIENT_ID_NUM,  # 🚩 Altijd vaste klant = 986
-        "siteId": HALO_SITE_ID,          # 🚩 Altijd vaste site = 992
+        "clientId": HALO_CLIENT_ID_NUM,  # 🚩 Altijd 986
+        "siteId": HALO_SITE_ID,          # 🚩 Altijd 992
         "teamId": HALO_TEAM_ID,
         "impactId": impact_id,
         "urgencyId": urgency_id,
@@ -152,6 +167,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         ticket = resp[0] if isinstance(resp,list) else resp
         ticket_id = ticket.get("id") or ticket.get("ID")
         log.info(f"✅ Ticket ID {ticket_id}")
+
         note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
                 f"**Probleem:** {omschrijving}\n\n"
                 f"**Sinds:** {sindswanneer}\n"
@@ -161,7 +177,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         add_note_to_ticket(ticket_id,note,contact_name,email,room_id,contact_id)
         return {"ID": ticket_id,"Ref":f"BC-{ticket_id}","contact_id":contact_id}
     else:
-        log.error(f"❌ Halo fout {r.text}")
+        log.error(f"❌ Halo error {r.text}")
         if room_id: send_message(room_id,f"⚠️ Ticket fout: {r.text[:200]}")
         return None
 
