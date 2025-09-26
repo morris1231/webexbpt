@@ -66,7 +66,7 @@ ticket_room_map = {}
 log.info("✅ Ticket kamer mapping systeem geïnitialiseerd")
 
 # **------------------------------------------------------------------------------**
-# **Contact Cache (VERBETERDE OPHAALMETHODE VOOR UW UAT)**
+# **Contact Cache (BEHOUDE DE OPRINTELIJKE WERKENDE CACHE)**
 # **------------------------------------------------------------------------------**
 def get_halo_headers():  
     """Haal Halo API headers met token - USES AGENT CREDENTIALS"""  
@@ -94,80 +94,93 @@ def get_halo_headers():
         raise  
 
 def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):  
-    """GEEN /Users OF /Person - HAAL CONTACTEN VIA KLANTGEGEVENS (UAT SPECIFIEK)"""  
-    log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id} (UAT SPECIFIEK)")  
+    """GEFIXTE OPHAALFUNCTIE VOOR KLANTCONTACTEN MET ONEINDIGE LUS FIX"""  
+    log.info(f"🔍 Start ophalen klantcontacten voor klant {client_id} en locatie {site_id}")  
     h = get_halo_headers()  
     all_contacts = []  
-    processed_ids = set()  
+    page = 1  
+    processed_ids = set() # ✅ VOORKOMT ONEINDIGE LUS  
     
-    # ✅ ABSOLUUT CRUCIAAL VOOR UW UAT: HAAL KLANTGEGEVENS EERST OP
-    try:
-        log.info(f"📞 Ophalen klantgegevens voor client {client_id}...")
-        r = requests.get(
-            f"{HALO_API_BASE}/Clients/{client_id}",
-            headers=h,
-            params={"include": "sites,contacts"},
-            timeout=15
-        )
-        
-        if r.status_code != 200:
-            log.critical(f"❌ Fout bij ophalen klantgegevens: HTTP {r.status_code}")
-            log.critical(f"➡️ Response: {r.text}")
-            return []
-            
-        client_data = r.json()
-        log.info(f"📊 Klantgegevens ontvangen: {client_data.get('name', 'Onbekend')} (ID: {client_id})")
-        
-        # ✅ HAAL CONTACTEN DIRECT UIT KLANTGEGEVENS
-        contacts = client_data.get('contacts', [])
-        if not contacts:
-            log.warning("⚠️ Geen contacten gevonden in klantgegevens")
-            return []
-            
-        log.info(f"📥 {len(contacts)} contacten gevonden in klantgegevens")
-        
-        for contact in contacts:
-            contact_id = str(contact.get('id', ''))
-            if not contact_id or contact_id in processed_ids:
-                continue
-                
-            # ✅ FILTER OP LOCATIE ID
-            site_id_match = False
-            site_ids = contact.get('siteids', [])
-            if isinstance(site_ids, list) and str(site_id) in [str(sid) for sid in site_ids]:
-                site_id_match = True
-            elif str(contact.get('siteid', '')) == str(site_id):
-                site_id_match = True
-                
-            if not site_id_match:
-                log.debug(f"⏭️ Contact {contact_id} overgeslagen - niet gekoppeld aan site {site_id}")
-                continue
-                
-            processed_ids.add(contact_id)
-            all_contacts.append(contact)
-            
-            # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING  
-            email_fields = [  
-                contact.get("EmailAddress", ""),  
-                contact.get("emailaddress", ""),  
-                contact.get("PrimaryEmail", ""),  
-                contact.get("username", "")  
-            ]  
-            log.info(  
-                f"👤 Uniek klantcontact gevonden - "  
-                f"ID: {contact_id}, "  
-                f"ClientID: {client_id}, "  
-                f"SiteID: {site_id}, "  
-                f"Naam: {contact.get('name', 'N/A')}, "  
-                f"Emails: {', '.join([e for e in email_fields if e])}"  
-            )
-            
-        log.info(f"👥 SUCCES: {len(all_contacts)} unieke klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")  
-        return all_contacts
-        
-    except Exception as e:
-        log.exception("❌ Fout bij ophalen klantgegevens")
-        return []
+    # ✅ PROBEER EERST /Users ENDPOINT  
+    endpoint = "/Users"  
+    log.info(f"ℹ️ Probeer eerste endpoint: {HALO_API_BASE}{endpoint}")  
+    while page <= max_pages:  
+        log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")  
+        params = {  
+            "include": "site,client",  
+            "client_id": client_id,  
+            "site_id": site_id,  
+            "type": "contact",  
+            "page": page,  
+            "page_size": 50  
+        }  
+        try:  
+            log.debug(f"➡️ API aanvraag met parameters: {params}")  
+            r = requests.get(  
+                f"{HALO_API_BASE}{endpoint}",  
+                headers=h,  
+                params=params,  
+                timeout=15  
+            )  
+            if r.status_code == 200:  
+                log.info(f"✅ Succesvol verbonden met {endpoint} endpoint")  
+                try:  
+                    data = r.json()  
+                    # ✅ VERWERK VERSCHILLENDE RESPONSE STRUCTUREN  
+                    contacts = data.get('users', []) or data.get('items', []) or data  
+                    if not contacts:  
+                        log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")  
+                        break  
+                    new_contacts = []  
+                    for contact in contacts:  
+                        # ✅ VOORKOMT DUBBELE CONTACTEN  
+                        contact_id = str(contact.get('id', ''))  
+                        if contact_id and contact_id not in processed_ids:  
+                            processed_ids.add(contact_id)  
+                            new_contacts.append(contact)  
+                            # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING  
+                            email_fields = [  
+                                contact.get("EmailAddress", ""),  
+                                contact.get("emailaddress", ""),  
+                                contact.get("PrimaryEmail", ""),  
+                                contact.get("username", "")  
+                            ]  
+                            log.info(  
+                                f"👤 Uniek klantcontact gevonden - "  
+                                f"ID: {contact_id}, "  
+                                f"ClientID: {contact.get('clientid', 'N/A')}, "  
+                                f"SiteID: {contact.get('siteid', 'N/A')}, "  
+                                f"Naam: {contact.get('name', 'N/A')}, "  
+                                f"Emails: {', '.join([e for e in email_fields if e])}"  
+                            )  
+                    if not new_contacts:  
+                        log.warning("⚠️ Geen nieuwe contacten gevonden - mogelijke oneindige lus")  
+                        break  
+                    all_contacts.extend(new_contacts)  
+                    log.info(f"📥 Pagina {page} opgehaald: {len(new_contacts)} nieuwe klantcontacten (Totaal: {len(all_contacts)})")  
+                    if len(new_contacts) < 50:  
+                        log.info("✅ Einde bereikt (minder dan page_size)")  
+                        break  
+                    page += 1  
+                except Exception as e:  
+                    log.exception(f"❌ Fout bij verwerken API response: {str(e)}")  
+                    break  
+            else:  
+                # ✅ ALS /Users MISLUKT, PROBEER DAN /Person ENDPOINT  
+                if page == 1 and r.status_code == 404:  
+                    log.warning(f"⚠️ /Users endpoint niet gevonden (HTTP 404), probeer /Person endpoint...")  
+                    endpoint = "/Person"  
+                    log.info(f"ℹ️ Probeer alternatief endpoint: {HALO_API_BASE}{endpoint}")  
+                    page = 1 # Reset paginering voor nieuw endpoint  
+                else:  
+                    log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")  
+                    log.error(f"➡️ Response: {r.text}")  
+                    break  
+        except Exception as e:  
+            log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")  
+            break  
+    log.info(f"👥 SUCCES: {len(all_contacts)} unieke klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")  
+    return all_contacts  
 
 def get_main_contacts():  
     """24-UURS CACHE VOOR KLANTCONTACTEN"""  
@@ -212,7 +225,7 @@ def get_halo_contact_id(email: str):
 log.info("✅ Klantcontact cache functies geregistreerd")
 
 # **------------------------------------------------------------------------------**
-# **Halo Tickets (DEFINITIEVE FIX VOOR UW SPECIFIEKE UAT)**
+# **Halo Tickets (CRUCIALE FIX VOOR UW SPECIFIEKE UAT)**
 # **------------------------------------------------------------------------------**
 def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,  
                       watwerktniet, zelfgeprobeerd, impacttoelichting,  
@@ -274,7 +287,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         try:  
             response_data = r.json()  
             if isinstance(response_data, list) and len(response_data) > 0:  
-                ticket = response_data[0] # Eerste ticket uit de array  
+                ticket = response__data[0] # Eerste ticket uit de array  
                 ticket_id = ticket.get("ID") or ticket.get("id")  
                 if ticket_id:  
                     log.info(f"✅ Ticket succesvol aangemaakt met ID: {ticket_id}")  
@@ -563,7 +576,7 @@ def initialize_cache():
         log.critical("❌ CACHE IS LEEG! Mogelijke oorzaken:")  
         log.critical("1. Verkeerde klant/locatie ID's (momenteel: Client=%s, Site=%s)", HALO_CLIENT_ID_NUM, HALO_SITE_ID)  
         log.critical("2. Halo API token problemen")  
-        log.critical("3. Klantgegevens niet toegankelijk via API")  
+        log.critical("3. Verkeerd API-endpoint (gebruikte endpoint: %s)", "/Users of /Person")  
     return {  
         "status": "initialized",  
         "contact_cache_size": len(CONTACT_CACHE["contacts"]),  
@@ -571,7 +584,7 @@ def initialize_cache():
         "cache_timestamp": CONTACT_CACHE["timestamp"],  
         "client_id": HALO_CLIENT_ID_NUM,  
         "site_id": HALO_SITE_ID,  
-        "halo_client_name": "Bossers & Cnossen B.V."  
+        "used_endpoint": "/Users or /Person"  
     }  
 
 @app.route("/cache", methods=["GET"])  
@@ -584,8 +597,8 @@ def inspect_cache():
         clean_contact = {  
             "id": contact.get("id", "N/A"),  
             "name": contact.get("name", "N/A"),  
-            "client_id": HALO_CLIENT_ID_NUM,  
-            "site_id": HALO_SITE_ID,  
+            "client_id": contact.get("clientid", "N/A"),  
+            "site_id": contact.get("siteid", "N/A"),  
             "emails": []  
         }  
         # Verzamel alle emailvelden  
@@ -622,7 +635,7 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")  
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")  
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
-    log.info("✅ GEBRUIKT KLANTGEGEVENS VOOR CONTACTEN (GEEN /Users OF /Person)")  
+    log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
     log.info("✅ AGENT CREDENTIALS GEBRUIKT VOOR API TOEGANG")  
     log.info("✅ USERID + REQUESTEREMAIL GEBRUIKT VOOR KLANTKOPPELING")  
     log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")  
