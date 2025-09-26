@@ -100,16 +100,18 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
     page = 1
     processed_ids = set()  # ✅ VOORKOMT ONEINDIGE LUS
     
-    # ✅ CORRECTE ENDPOINT VOOR UW UAT: /Contacts IN PLAATS VAN /Users
-    endpoint = "/Contacts"
+    # ✅ CORRECTE ENDPOINT VOOR UW UAT: GEBRUIK /Users IN PLAATS VAN /Contacts
+    endpoint = "/Users"
     log.info(f"ℹ️ Gebruik endpoint: {HALO_API_BASE}{endpoint}")
     
     while page <= max_pages:
         log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")
         params = {
             "include": "site,client",
-            "client_id": client_id,
-            "site_id": site_id,
+            # ✅ UAT VEREIST clientid (zonder underscore) IN PLAATS VAN client_id
+            "clientid": client_id,
+            # ✅ UAT VEREIST siteid (zonder underscore) IN PLAATS VAN site_id
+            "siteid": site_id,
             "type": "contact",
             "page": page,
             "page_size": 50
@@ -129,7 +131,7 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                 try:
                     data = r.json()
                     # ✅ VERWERK VERSCHILLENDE RESPONSE STRUCTUREN
-                    contacts = data.get('contacts', []) or data.get('items', []) or data
+                    contacts = data.get('users', []) or data.get('items', []) or data
                     
                     if not contacts:
                         log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")
@@ -141,7 +143,8 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                         contact_id = str(contact.get('id', ''))
                         if contact_id and contact_id not in processed_ids:
                             # ✅ EXTRA VALIDATIE: ALLEEN CONTACTEN MET JUISTE CLIENT/SITE
-                            if str(contact.get('client_id', '')) == client_id and str(contact.get('site_id', '')) == site_id:
+                            # ✅ UAT GEBRUIKT clientid/siteid IN PLAATS VAN client_id/site_id
+                            if str(contact.get('clientid', '')) == client_id and str(contact.get('siteid', '')) == site_id:
                                 processed_ids.add(contact_id)
                                 new_contacts.append(contact)
                                 
@@ -155,8 +158,8 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                                 log.info(
                                     f"👤 Uniek klantcontact gevonden - "
                                     f"ID: {contact_id}, "
-                                    f"ClientID: {contact.get('client_id', 'N/A')}, "
-                                    f"SiteID: {contact.get('site_id', 'N/A')}, "
+                                    f"ClientID: {contact.get('clientid', 'N/A')}, "
+                                    f"SiteID: {contact.get('siteid', 'N/A')}, "
                                     f"Naam: {contact.get('name', 'N/A')}, "
                                     f"Emails: {', '.join([e for e in email_fields if e])}"
                                 )
@@ -164,14 +167,14 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                     if not new_contacts:
                         log.warning("⚠️ Geen nieuwe contacten gevonden - mogelijke oneindige lus")
                         break
-                        
+                    
                     all_contacts.extend(new_contacts)
                     log.info(f"📥 Pagina {page} opgehaald: {len(new_contacts)} nieuwe klantcontacten (Totaal: {len(all_contacts)})")
                     
                     if len(new_contacts) < 50:
                         log.info("✅ Einde bereikt (minder dan page_size)")
                         break
-                        
+                    
                     page += 1
                 except Exception as e:
                     log.exception(f"❌ Fout bij verwerken API response: {str(e)}")
@@ -180,7 +183,7 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                 log.error(f"❌ Fout bij ophalen pagina {page}: HTTP {r.status_code}")
                 log.error(f"➡️ Response: {r.text}")
                 break
-                    
+                
         except Exception as e:
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")
             break
@@ -572,7 +575,7 @@ def initialize_cache():
         log.critical("❌ CACHE IS LEEG! Mogelijke oorzaken:")
         log.critical("1. Verkeerde klant/locatie ID's (momenteel: Client=%s, Site=%s)", HALO_CLIENT_ID_NUM, HALO_SITE_ID)
         log.critical("2. Halo API token problemen")
-        log.critical("3. Verkeerd API-endpoint (gebruikte endpoint: %s)", "/Contacts")
+        log.critical("3. Verkeerd API-endpoint (gebruikte endpoint: %s)", "/Users")
     
     return {
         "status": "initialized",
@@ -581,7 +584,7 @@ def initialize_cache():
         "cache_timestamp": CONTACT_CACHE["timestamp"],
         "client_id": HALO_CLIENT_ID_NUM,
         "site_id": HALO_SITE_ID,
-        "used_endpoint": "/Contacts"
+        "used_endpoint": "/Users"
     }
 
 @app.route("/cache", methods=["GET"])
@@ -595,8 +598,8 @@ def inspect_cache():
         clean_contact = {
             "id": contact.get("id", "N/A"),
             "name": contact.get("name", "N/A"),
-            "client_id": contact.get("client_id", "N/A"),
-            "site_id": contact.get("site_id", "N/A"),
+            "client_id": contact.get("clientid", "N/A"),  # ✅ UAT GEBRUIKT clientid
+            "site_id": contact.get("siteid", "N/A"),      # ✅ UAT GEBRUIKT siteid
             "emails": []
         }
         
@@ -636,8 +639,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")
-    log.info("✅ GEBRUIKT /Contacts ENDPOINT VOOR KLANTCONTACTEN")
-    log.info("✅ RequesterID GEBRUIKT VOOR KOPPELING (ALS STRING)")
+    log.info("✅ GEBRUIKT /Users ENDPOINT VOOR KLANTCONTACTEN")  # ✅ Correctie
+    log.info("✅ clientid/siteid GEBRUIKT VOOR KOPPELING (ZONDER UNDERSCORE)")  # ✅ Correctie
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN")
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")
@@ -658,6 +661,7 @@ if __name__ == "__main__":
         if len(CONTACT_CACHE['contacts']) == 0:
             log.critical("❗️ WAARSCHUWING: Lege cache - Controleer Halo configuratie!")
     
+
     except Exception as e:
         log.exception(f"❌ Fout bij initialiseren cache: {str(e)}")
     
