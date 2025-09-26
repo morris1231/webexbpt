@@ -42,7 +42,6 @@ HALO_SITE_ID = 992          # Main site
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
-
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -128,7 +127,7 @@ def get_contact_name(contact_id):
     return "Onbekend"
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN met fallback
+# TICKET AANMAKEN met fallback (contactId → endUserId)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -153,19 +152,20 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "emailAddress": email
     }
 
-    # Probeer contactId
+    # ---- Eerste poging: contactId
     body = base_body | {"contactId": int(contact_id)}
     log.info(f"➡️ Ticket body (contactId):\n{json.dumps(body, indent=2)}")
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
 
-    # Als 400 => probeer opnieuw met endUserId
+    # ---- Tweede poging: endUserId als eerste fout is 400
     if r.status_code == 400:
-        log.warning("⚠️ Halo 400 bij contactId → proberen met endUserId")
+        log.warning("⚠️ Halo 400 bij contactId → probeer opnieuw met endUserId")
         body = base_body | {"endUserId": int(contact_id)}
         log.info(f"➡️ Ticket body (endUserId):\n{json.dumps(body, indent=2)}")
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
+        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
 
     log.info(f"⬅️ Halo status {r.status_code}")
+
     if r.status_code in (200, 201):
         resp = r.json()
         ticket = resp[0] if isinstance(resp, list) else resp
