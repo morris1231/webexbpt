@@ -126,7 +126,7 @@ def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
                 log.info(f"✅ Succesvol verbonden met {endpoint} endpoint")  
                 try:  
                     data = r.json()  
-                    # ✅ VERWERK VERSCHILDENDE RESPONSE STRUCTUREN  
+                    # ✅ VERWERK VERSCHILLENDE RESPONSE STRUCTUREN  
                     contacts = data.get('users', []) or data.get('items', []) or data  
                     if not contacts:  
                         log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")  
@@ -242,12 +242,12 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         return None
     
     # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
+    # SiteID is CONFLICTUEUS met RequesterId in jouw UAT-configuratie
     body = {  
         "Summary": str(summary),  
         "Details": str(omschrijving),  
         "TypeID": int(HALO_TICKET_TYPE_ID),  
         "ClientID": int(HALO_CLIENT_ID_NUM),  
-        "SiteID": int(HALO_SITE_ID),  
         "TeamID": int(HALO_TEAM_ID),  
         "ImpactID": int(impact_id),  
         "UrgencyID": int(urgency_id),
@@ -255,7 +255,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         "RequesterEmail": str(email)  # Voor extra validatie
     }  
     
-    log.debug(f"➡️ Volledige ticket payload: {body}")  
+    log.debug(f"➡️ Volledige ticket payload (ZONDER SiteID): {body}")  
     try:  
         # ✅ CRUCIALE FIX: WRAP TICKET IN ARRAY VOOR HALO API  
         request_body = [body]  
@@ -271,10 +271,11 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
         if r.status_code not in (200, 201):  
             # ✅ SPECIFIEKE FOUTDIAGNOSE VOOR UW UAT
             if "valid Client/Site/User" in r.text:
-                log.critical("❌ FATALE FOUT: INVALIDE KOPPELING - CONTROLEER:")
+                log.critical("❌ FATALE FOUT: SiteID MAG NIET WORDEN MEEGEGEVEN MET RequesterId")
+                log.critical("✅ OPLOSSING: Verwijder SiteID uit de ticket payload")
                 log.critical(f"1. Contact ID {contact_id} bestaat in Halo")
-                log.critical(f"2. Contact {contact_id} is gekoppeld aan Klant {HALO_CLIENT_ID_NUM} en Locatie {HALO_SITE_ID}")
-                log.critical(f"3. Gebruik 'RequesterId' in plaats van 'ContactId' of 'UserId'")
+                log.critical(f"2. Contact {contact_id} is gekoppeld aan Klant {HALO_CLIENT_ID_NUM}")
+                log.critical(f"3. Gebruik GEEN SiteID wanneer RequesterId wordt gebruikt")
                 log.critical(f"4. Zorg dat de contactpersoon ook in Halo UAT zichtbaar is via /customer?userid={contact_id}")
             
             log.error(f"❌ Basis ticket aanmaken mislukt: {r.status_code}")  
@@ -637,7 +638,8 @@ if __name__ == "__main__":
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
     log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
     log.info("✅ AGENT CREDENTIALS GEBRUIKT VOOR API TOEGANG")  
-    log.info("✅ REQUESTERID GEBRUIKT VOOR KLANTKOPPELING (GEEN CONTACTID OF USERID)")  
+    log.info("✅ REQUESTERID GEBRUIKT VOOR KLANTKOPPELING")  
+    log.info("✅ GEEN SITEID MEEGEGEVEN BIJ TICKET AANMAAK")  
     log.info("✅ ALLE ID'S WORDEN ALS INTEGER VERZONDEN")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
