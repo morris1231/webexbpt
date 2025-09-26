@@ -420,16 +420,31 @@ def send_adaptive_card(room_id):
             "contentType":"application/vnd.microsoft.card.adaptive",
             "content":{
                 "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
-                "type":"AdaptiveCard","version":"12","body":[
-                    {"type":"Input.Text","id":"name","placeholder":"Naam","isRequired":True},
-                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres","isRequired":True},
-                    {"type":"Input.Text","id":"omschrijving","isMultiline":True,"placeholder":"Probleemomschrijving","isRequired":True},
-                    {"type":"Input.Text","id":"sindswanneer","placeholder":"Sinds wanneer?"},
-                    {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?"},
-                    {"type":"Input.Text","id":"zelfgeprobeerd","isMultiline":True,"placeholder":"Zelf geprobeerd?"},
-                    {"type":"Input.Text","id":"impacttoelichting","isMultiline":True,"placeholder":"Impact toelichting"}
+                "type":"AdaptiveCard",
+                "version":"1.0",  # ✅ WEBEX VEREIST VERSIE 1.0
+                "body":[
+                    {"type":"TextBlock","text":"Naam","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"name","placeholder":"Naam","isRequired":True,"wrap":True},
+                    {"type":"TextBlock","text":"E-mailadres","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"email","placeholder":"E-mailadres","isRequired":True,"wrap":True},
+                    {"type":"TextBlock","text":"Probleemomschrijving","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"omschrijving","placeholder":"Probleemomschrijving","isRequired":True,"isMultiline":True,"wrap":True},
+                    {"type":"TextBlock","text":"Sinds wanneer?","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"sindswanneer","placeholder":"Sinds wanneer?","wrap":True},
+                    {"type":"TextBlock","text":"Wat werkt niet?","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"watwerktniet","placeholder":"Wat werkt niet?","wrap":True},
+                    {"type":"TextBlock","text":"Zelf geprobeerd?","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"zelfgeprobeerd","placeholder":"Zelf geprobeerd?","isMultiline":True,"wrap":True},
+                    {"type":"TextBlock","text":"Impact toelichting","weight":"Bolder","wrap":True},
+                    {"type":"Input.Text","id":"impacttoelichting","placeholder":"Impact toelichting","isMultiline":True,"wrap":True}
                 ],
-                "actions":[{"type":"Action.Submit","title":"Versturen"}]
+                "actions":[
+                    {
+                        "type":"Action.Submit",
+                        "title":"Versturen",
+                        "data": {}
+                    }
+                ]
             }
         }]
     }
@@ -504,7 +519,7 @@ def process_webex_event(data):
                 inputs["name"],
                 inputs["email"],
                 inputs["omschrijving"],
-                sindswangen,
+                sindswanneer,
                 watwerktniet,
                 zelfgeprobeerd,
                 impacttoelichting,
@@ -633,6 +648,7 @@ if __name__ == "__main__":
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")
     log.info("✅ FIX VOOR 'PLEASE SELECT A VALID CLIENT/SITE/USER' FOUT")
+    log.info("✅ FIX VOOR ADAPTIVE CARD VERSIE (1.0 IN PLAATS VAN 1.2)")
     log.info("-"*70)
     
     # ✅ INITIELE CACHE LOADING BIJ OPSTARTEN
