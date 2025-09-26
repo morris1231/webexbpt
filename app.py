@@ -92,19 +92,23 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
     all_contacts = []  
     page = 1  
     processed_ids = set() # ✅ VOORKOMT ONEINDIGE LUS  
+    
     # ✅ PROBEER EERST /Users ENDPOINT  
     endpoint = "/Users"  
     log.info(f"ℹ️ Probeer eerste endpoint: {HALO_API_BASE}{endpoint}")  
+    
     while page <= max_pages:  
         log.info(f"📄 Ophalen pagina {page} (klantcontacten)...")  
         params = {  
             "include": "site,client",  
-            "clientid": client_id,  
-            "siteid": site_id,  
+            # ✅ CRUCIALE FIX: GEBRUIK client_id EN site_id MET UNDERSCORE (GEEN clientid/siteid)  
+            "client_id": client_id,  
+            "site_id": site_id,  
             "type": "contact",  
             "page": page,  
             "page_size": 50  
         }  
+        
         try:  
             log.debug(f"➡️ API aanvraag met parameters: {params}")  
             r = requests.get(  
@@ -113,24 +117,28 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                 params=params,  
                 timeout=15  
             )  
+            
             if r.status_code == 200:  
                 log.info(f"✅ Succesvol verbonden met {endpoint} endpoint")  
                 try:  
                     data = r.json()  
                     # ✅ VERWERK VERSCHILLENDE RESPONSE STRUCTUREN  
                     contacts = data.get('users', []) or data.get('items', []) or data  
+                    
                     if not contacts:  
                         log.info(f"✅ Geen klantcontacten gevonden op pagina {page}")  
                         break  
+                    
                     new_contacts = []  
                     for contact in contacts:  
                         # ✅ VOORKOMT DUBBELE CONTACTEN  
                         contact_id = str(contact.get('id', ''))  
                         if contact_id and contact_id not in processed_ids:  
-                            # ✅ EXTRA VALIDATIE: ALLEEN CONTACTEN MET JUISTE CLIENT/SITE  
-                            if str(contact.get('clientid', '')) == client_id and str(contact.get('siteid', '')) == site_id:  
+                            # ✅ CRUCIALE FIX: GEBRUIK client_id EN site_id MET UNDERSCORE  
+                            if str(contact.get('client_id', '')) == client_id and str(contact.get('site_id', '')) == site_id:  
                                 processed_ids.add(contact_id)  
                                 new_contacts.append(contact)  
+                                
                                 # ✅ UITGEBREIDE LOGGING VOOR DEBUGGING  
                                 email_fields = [  
                                     contact.get("EmailAddress", ""),  
@@ -141,19 +149,23 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
                                 log.info(  
                                     f"👤 Uniek klantcontact gevonden - "  
                                     f"ID: {contact_id}, "  
-                                    f"ClientID: {contact.get('clientid', 'N/A')}, "  
-                                    f"SiteID: {contact.get('siteid', 'N/A')}, "  
+                                    f"ClientID: {contact.get('client_id', 'N/A')}, "  
+                                    f"SiteID: {contact.get('site_id', 'N/A')}, "  
                                     f"Naam: {contact.get('name', 'N/A')}, "  
                                     f"Emails: {', '.join([e for e in email_fields if e])}"  
                                 )  
+                    
                     if not new_contacts:  
                         log.warning("⚠️ Geen nieuwe contacten gevonden - mogelijke oneindige lus")  
                         break  
+                    
                     all_contacts.extend(new_contacts)  
                     log.info(f"📥 Pagina {page} opgehaald: {len(new_contacts)} nieuwe klantcontacten (Totaal: {len(all_contacts)})")  
+                    
                     if len(new_contacts) < 50:  
                         log.info("✅ Einde bereikt (minder dan page_size)")  
                         break  
+                    
                     page += 1  
                 except Exception as e:  
                     log.exception(f"❌ Fout bij verwerken API response: {str(e)}")  
@@ -172,6 +184,7 @@ def fetch_all_site_contacts(client_id: str, site_id: str, max_pages=20):
         except Exception as e:  
             log.exception(f"❌ Fout tijdens API-aanroep: {str(e)}")  
             break  
+            
     log.info(f"👥 SUCCES: {len(all_contacts)} unieke klantcontacten opgehaald voor klant {client_id} en locatie {site_id}")  
     return all_contacts  
         
@@ -346,7 +359,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         contact_id = get_halo_contact_id(email)  
         if contact_id:  
             # ✅ CRUCIALE FIX: GEBRUIK UserId VOOR UW UAT  
-            body["UserId"] = str(contact__id)  
+            body["UserId"] = str(contact_id)  
             log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")  
     
     try:  
@@ -572,8 +585,8 @@ def inspect_cache():
         clean_contact = {  
             "id": contact.get("id", "N/A"),  
             "name": contact.get("name", "N/A"),  
-            "client_id": contact.get("clientid", "N/A"),  
-            "site_id": contact.get("siteid", "N/A"),  
+            "client_id": contact.get("client_id", "N/A"),  
+            "site_id": contact.get("site_id", "N/A"),  
             "emails": []  
         }  
         # Verzamel alle emailvelden  
@@ -609,7 +622,8 @@ if __name__ == "__main__":
     log.info(f"✅ Gebruikt klant ID: {HALO_CLIENT_ID_NUM} (Bossers & Cnossen B.V.)")  
     log.info(f"✅ Gebruikt locatie ID: {HALO_SITE_ID} (Main)")  
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
-    log.info("✅ GEBRUIKT /Users OF /Person ENDPOINT VOOR KLANTCONTACTEN")  
+    log.info("✅ GEBRUIKT /Users ENDPOINT VOOR KLANTCONTACTEN")  
+    log.info("✅ client_id/site_id GEBRUIKT VOOR KOPPELING (MET UNDERSCORE)")  
     log.info("✅ UserId GEBRUIKT VOOR KOPPELING (ALS STRING) - VERPLICHT VOOR DEZE UAT-INSTANTIE")  
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN - CRUCIAAL VOOR DEZE UAT-INSTANTIE")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
