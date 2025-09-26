@@ -104,7 +104,7 @@ def get_main_contacts():
     log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecached")
     return CONTACT_CACHE["contacts"]
 
-def get_halo_contact_id(email: str):
+def get_halo_contact(email: str):
     if not email: return None
     email = email.strip().lower()
     for c in get_main_contacts():
@@ -116,29 +116,26 @@ def get_halo_contact_id(email: str):
         for f in fields:
             if f and email == f.lower():
                 log.info(f"✅ Email match {email} → ID {c.get('id')}")
-                return c.get("id")
+                return c
     log.warning(f"⚠️ Geen match voor {email}")
     return None
 
-def get_contact_name(contact_id):
-    for c in get_main_contacts():
-        if str(c.get("id")) == str(contact_id):
-            return c.get("name", "Onbekend")
-    return "Onbekend"
-
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN met fallback (contactId → endUserId)
+# TICKET AANMAKEN met auto-detectie (agent vs klantcontact)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
+
     h = get_halo_headers()
-    contact_id = get_halo_contact_id(email)
-    if not contact_id:
+    contact = get_halo_contact(email)
+    if not contact:
         if room_id: send_message(room_id, "⚠️ Geen matchend contact in Halo.")
         return None
 
-    contact_name = get_contact_name(contact_id)
+    contact_id = contact.get("id")
+    contact_name = contact.get("name", "Onbekend")
+    is_agent = contact.get("linked_agent_id", 0) > 0   # 👈 check
 
     base_body = {
         "summary": str(omschrijving)[:100],
@@ -152,17 +149,23 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "emailAddress": email
     }
 
-    # ---- Eerste poging: contactId
-    body = base_body | {"contactId": int(contact_id)}
-    log.info(f"➡️ Ticket body (contactId):\n{json.dumps(body, indent=2)}")
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-
-    # ---- Tweede poging: endUserId als eerste fout is 400
-    if r.status_code == 400:
-        log.warning("⚠️ Halo 400 bij contactId → probeer opnieuw met endUserId")
-        body = base_body | {"endUserId": int(contact_id)}
-        log.info(f"➡️ Ticket body (endUserId):\n{json.dumps(body, indent=2)}")
+    # ------ Agent → use userId
+    if is_agent:
+        body = base_body | {"userId": int(contact_id)}
+        log.info(f"➡️ Ticket body (userId):\n{json.dumps(body, indent=2)}")
         r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+
+    # ------ Klantcontact → use contactId with fallback endUserId
+    else:
+        body = base_body | {"contactId": int(contact_id)}
+        log.info(f"➡️ Ticket body (contactId):\n{json.dumps(body, indent=2)}")
+        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+
+        if r.status_code == 400:
+            log.warning("⚠️ Halo 400 bij contactId → probeer met endUserId")
+            body = base_body | {"endUserId": int(contact_id)}
+            log.info(f"➡️ Ticket body (endUserId):\n{json.dumps(body, indent=2)}")
+            r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
 
     log.info(f"⬅️ Halo status {r.status_code}")
 
