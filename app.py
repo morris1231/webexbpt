@@ -228,7 +228,7 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo.")  
         return None
     
-    # ✅ CRUCIALE FIX: CORRECTE VELDNAME VOLGENS HALO API
+    # ✅ CRUCIALE FIX: CORRECTE VELDNAME VOLGENS HALO API (camelCase)
     body = {  
         "summary": str(summary),  
         "details": str(omschrijving),  
@@ -421,9 +421,9 @@ def process_webex_event(data):
                         )
                         break
         elif res == "attachmentActions":  
-            act_id = data["data"]["id"]  
+            act_id = data["data"]["id"]  # ✅ CORRECTE VARIABELENAAM (één underscore)
             inputs = requests.get(  
-                f"https://webexapis.com/v1/attachment/actions/{act__id}",  
+                f"https://webexapis.com/v1/attachment/actions/{act_id}",  # ✅ GEEN EXTRA UNDERSCORE
                 headers=WEBEX_HEADERS,  
                 timeout=10  
             ).json().get("inputs",{})  
