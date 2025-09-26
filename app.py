@@ -1,4 +1,4 @@
-import os, urllib.parse, logging, sys, time, threading
+import os, urllib.parse, logging, sys, time, threading, json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
@@ -132,7 +132,7 @@ def get_contact_name(contact_id):
     return "Onbekend"
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN (FIXED BODY)
+# TICKET AANMAKEN (FIXED BODY met requestUserId)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -150,14 +150,16 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "summary": str(omschrijving)[:100],
         "details": str(omschrijving),
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": HALO_CLIENT_ID_NUM,   # 🚩 altijd 986
-        "siteId": HALO_SITE_ID,           # 🚩 altijd 992
+        "clientId": HALO_CLIENT_ID_NUM,    # 986
+        "siteId": HALO_SITE_ID,            # 992
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "userId": int(contact_id),        # ✅ fixed
-        "emailAddress": email             # ✅ fixed
+        "requestUserId": int(contact_id),  # ✅ juiste veld voor contact
+        "emailAddress": email
     }
+
+    log.info(f"➡️ Ticket body naar Halo:\n{json.dumps(body, indent=2)}")
 
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
     log.info(f"⬅️ Halo status {r.status_code}")
@@ -200,7 +202,7 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     return r.status_code in (200, 201)
 
 # --------------------------------------------------------------------------
-# WEBEX HELPERS (ongewijzigd)
+# WEBEX HELPERS
 # --------------------------------------------------------------------------
 def send_message(room_id, text):
     requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
