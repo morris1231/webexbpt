@@ -260,9 +260,11 @@ def create_halo_ticket(summary, name, email, omschrijving, sindswanneer,
             send_message(room_id, "⚠️ Geen klantcontact gevonden in Halo. Controleer configuratie.")  
         return None  
     
-    # ✅ CRUCIALE FIX: GEBRUIK UserId IN PLAATS VAN ContactID VOOR UW UAT  
-    body["UserId"] = str(contact_id)  
-    log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")  
+    # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
+    # Wanneer gebruikers ook agents zijn, MOET ContactID worden gebruikt
+    body["ContactID"] = str(contact_id)
+    
+    log.info(f"👤 Ticket gekoppeld aan klantcontact ID: {contact_id} (gebruikt als ContactID)")  
     log.debug(f"➡️ Volledige ticket payload: {body}")  
     
     try:  
@@ -358,9 +360,10 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
     if email:  
         contact_id = get_halo_contact_id(email)  
         if contact_id:  
-            # ✅ CRUCIALE FIX: GEBRUIK UserId VOOR UW UAT  
-            body["UserId"] = str(contact_id)  
-            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id} (gebruikt als UserId)")  
+            # ✅ ULTRA-CRUCIALE FIX VOOR UW SPECIFIEKE UAT INSTANTIE
+            # Wanneer gebruikers ook agents zijn, MOET ContactID worden gebruikt
+            body["ContactID"] = str(contact_id)
+            log.info(f"📎 Note gekoppeld aan klantcontact ID: {contact_id} (gebruikt als ContactID)")  
     
     try:  
         r = requests.post(  
@@ -624,11 +627,11 @@ if __name__ == "__main__":
     log.info("✅ CACHE WORDT DIRECT BIJ OPSTARTEN GEVULD")  
     log.info("✅ GEBRUIKT /Users ENDPOINT VOOR KLANTCONTACTEN")  
     log.info("✅ client_id/site_id GEBRUIKT VOOR KOPPELING (MET UNDERSCORE)")  
-    log.info("✅ UserId GEBRUIKT VOOR KOPPELING (ALS STRING) - VERPLICHT VOOR DEZE UAT-INSTANTIE")  
+    log.info("✅ ContactID GEBRUIKT VOOR KOPPELING (ALS STRING) - VERPLICHT VOOR DEZE UAT-INSTANTIE")  
     log.info("✅ ALLE ID'S WORDEN ALS STRING VERZONDEN - CRUCIAAL VOOR DEZE UAT-INSTANTIE")  
     log.info("✅ ONEINDIGE LUS VOORKOMEN MET UNIEKE ID CHECK")  
     log.info("✅ NIEUW /cache ENDPOINT VOOR CACHE INSPECTIE")  
-    log.info("✅ FIX VOOR 'PLEASE SELECT A VALID CLIENT/SITE/USER' FOUT")  
+    log.info("✅ FIX VOOR 'PLEASE SELECT A VALID CLIENT/SITE/USER' FOUT DOOR GEBRUIK VAN ContactID")  
     log.info("✅ ARRAY WRAP VOOR TICKET AANMAAK")  
     log.info("✅ FIX VOOR ADAPTIVE CARD VERSIE (1.0 IN PLAATS VAN 1.2)")  
     log.info("-"*70)  
@@ -657,7 +660,7 @@ if __name__ == "__main__":
     log.info("5. Typ in Webex: 'nieuwe melding' om het formulier te openen")  
     log.info("6. Vul het formulier in en verstuur")  
     log.info("7. Controleer logs op succesmeldingen:")  
-    log.info("   - '👤 Ticket gekoppeld aan klantcontact ID: 1086 (gebruikt als UserId)'")  
+    log.info("   - '👤 Ticket gekoppeld aan klantcontact ID: 1086 (gebruikt als ContactID)'")  
     log.info("   - '➡️ Halo API aanroep voor basis ticket: [{...}]'")  
     log.info("   - '✅ Ticket succesvol aangemaakt'")  
     log.info("   - '✅ Public note succesvol toegevoegd'")  
