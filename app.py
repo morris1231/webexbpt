@@ -41,7 +41,7 @@ HALO_CLIENT_ID_NUM = 986    # Bossers & Cnossen
 HALO_SITE_ID = 992          # Main site
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
-CACHE_DURATION = 24 * 60 * 60  # ✅ fixed
+CACHE_DURATION = 24 * 60 * 60  # 24 uur cache
 
 ticket_room_map = {}
 
@@ -132,7 +132,7 @@ def get_contact_name(contact_id):
     return "Onbekend"
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN (FIXED BODY met requestUserId)
+# TICKET AANMAKEN (FIXED BODY met contactId)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -155,7 +155,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "requestUserId": int(contact_id),  # ✅ juiste veld voor contact
+        "contactId": int(contact_id),      # ✅ juiste veld!
         "emailAddress": email
     }
 
