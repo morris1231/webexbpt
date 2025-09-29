@@ -199,6 +199,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card_payload = {
         "roomId": room_id,
+        "text": "✍ Vul dit formulier in:",   # ✅ verplicht veld naast attachments
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
@@ -207,7 +208,7 @@ def send_adaptive_card(room_id):
                     "type": "AdaptiveCard",
                     "version": "1.0",   # ✅ Webex ondersteunt alleen v1.0
                     "body": [
-                        {"type": "TextBlock", "text": "✍ Vul het formulier in:", "weight": "bolder", "size": "medium"},
+                        {"type": "TextBlock", "text": "Formulier invullen:", "weight": "bolder"},
                         {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres", "isRequired": True},
                         {"type": "Input.Text", "id": "omschrijving", "placeholder": "Probleemomschrijving", "isRequired": True, "isMultiline": True},
                         {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
