@@ -32,14 +32,9 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", 3))
 HALO_DEFAULT_URGENCY= int(os.getenv("HALO_URGENCY", 3))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", 78))
 
+# 🚩 Altijd deze klant en site
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
-HALO_CUSTOMER_ID    = HALO_CLIENT_ID_NUM
-
-# extra optionele velden
-HALO_CATEGORY_ID    = int(os.getenv("HALO_CATEGORY_ID", 0))
-HALO_SERVICE_ID     = int(os.getenv("HALO_SERVICE_ID", 0))
-HALO_SLA_ID         = int(os.getenv("HALO_SLA_ID", 0))
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
@@ -113,25 +108,13 @@ def get_halo_contact(email: str):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Email match: {email} → ID {c.get('id')}")
-                # 🔍 Debug: toon belangrijke velden van de user
-                debug_info = {
-                    "id": c.get("id"),
-                    "name": c.get("name"),
-                    "client_id": c.get("client_id"),
-                    "site_id": c.get("site_id"),
-                    "linked_agent_id": c.get("linked_agent_id"),
-                    "inactive": c.get("inactive"),
-                    "is_agent": True if c.get("linked_agent_id", 0) > 0 else False,
-                    "email": f
-                }
-                log.info(f"🔍 Halo user record: {json.dumps(debug_info, indent=2)}")
+                log.info(f"✅ Email match: {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
                 return c
     log.warning(f"⚠️ Geen match gevonden voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION met full fallback matrix
+# TICKET CREATION - juiste combinatie
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -145,63 +128,41 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     contact_id = int(contact.get("id"))
     contact_name = contact.get("name", "Onbekend")
 
-    base_body = {
+    body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
         "typeId": HALO_TICKET_TYPE_ID,
+        "clientId": HALO_CLIENT_ID_NUM,   # ✅ klant 986
+        "siteId": HALO_SITE_ID,           # ✅ site 992
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
+        "requestContactId": contact_id,   # ✅ de requester
         "emailAddress": email
     }
 
-    requester_variants = ["requestContactId", "contactId", "requestUserId", "userId"]
-    client_variants = [
-        {"customerId": HALO_CUSTOMER_ID},
-        {"clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID}
-    ]
+    log.info(f"➡️ Ticket body: {json.dumps(body)}")
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+    log.info(f"⬅️ Halo status {r.status_code}")
 
-    extra_variants = [ {} ]
-    if HALO_CATEGORY_ID: extra_variants.append({"categoryId": HALO_CATEGORY_ID})
-    if HALO_SERVICE_ID:  extra_variants.append({"serviceId": HALO_SERVICE_ID})
-    if HALO_SLA_ID:      extra_variants.append({"slaId": HALO_SLA_ID})
+    if r.status_code in (200, 201):
+        resp = r.json()
+        ticket = resp[0] if isinstance(resp, list) else resp
+        ticket_id = ticket.get("id") or ticket.get("ID") or "?"
+        log.info(f"✅ Ticket aangemaakt ID={ticket_id} voor {email}")
 
-    for client_block in client_variants:
-        for req_field in requester_variants:
-            for extra in extra_variants:
-                body = base_body.copy()
-                body.update(client_block)
-                body[req_field] = contact_id
-                body.update(extra)
-
-                log.info(f"➡️ Try: {json.dumps(body)}")
-                try:
-                    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-                except Exception as e:
-                    log.error(f"❌ Exception Halo call: {e}")
-                    continue
-
-                log.info(f"⬅️ Halo status {r.status_code} ({req_field}, {list(client_block.keys())}, extra={extra})")
-                if r.status_code in (200, 201):
-                    resp = r.json()
-                    ticket = resp[0] if isinstance(resp, list) else resp
-                    ticket_id = ticket.get("id") or ticket.get("ID") or "?"
-                    log.info(f"✅ SUCCESS with {req_field} + {list(client_block.keys())} + {extra}, Ticket ID={ticket_id}")
-
-                    note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
-                            f"**Probleem:** {omschrijving}\n\n"
-                            f"**Sinds:** {sindswanneer}\n"
-                            f"**Wat werkt niet:** {watwerktniet}\n"
-                            f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
-                            f"**Impact:** {impacttoelichting}")
-                    add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
-                    return {"ID": ticket_id, "contact_id": contact_id}
-                else:
-                    log.warning(f"❌ Fail {req_field} + {list(client_block.keys())} + {extra} → {r.text[:250]}")
-
-    if room_id:
-        send_message(room_id, "⚠️ Ticket kon niet aangemaakt worden. Zie logs.")
-    return None
+        note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
+                f"**Probleem:** {omschrijving}\n\n"
+                f"**Sinds:** {sindswanneer}\n"
+                f"**Wat werkt niet:** {watwerktniet}\n"
+                f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
+                f"**Impact:** {impacttoelichting}")
+        add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
+        return {"ID": ticket_id, "contact_id": contact_id}
+    else:
+        log.error(f"❌ Halo error {r.text}")
+        if room_id: send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
+        return None
 
 # --------------------------------------------------------------------------
 # NOTES
@@ -248,7 +209,7 @@ def process_webex_event(data):
         act_id = data["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
         if not inputs.get("email") or not inputs.get("omschrijving"):
-            send_message(data["data"]["roomId"], "⚠️ Email en omschrijving verplicht.")
+            send_message(data["data"]["roomId"], "⚠️ E-mail en omschrijving verplicht.")
             return
         ticket = create_halo_ticket(inputs["omschrijving"], inputs["email"],
                                     inputs.get("sindswanneer", "Niet opgegeven"),
@@ -278,7 +239,7 @@ def health():
 @app.route("/initialize", methods=["GET"])
 def initialize():
     get_main_contacts()
-    return {"status": "initialized", "cache_size": len(CONTACT_CACHE["contacts"])}
+    return {"status": "initialized", "cache_size": len(CONTACT_CACHE['contacts'])}
 
 @app.route("/cache", methods=["GET"])
 def inspect_cache():
