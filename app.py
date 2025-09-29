@@ -32,7 +32,7 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", 3))
 HALO_DEFAULT_URGENCY= int(os.getenv("HALO_URGENCY", 3))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", 78))
 
-# 🚩 Alleen deze klant/site
+# 🚩 Altijd deze klant en site
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 
@@ -67,7 +67,7 @@ def get_halo_headers():
     }
 
 # --------------------------------------------------------------------------
-# CONTACTS (CACHE)
+# CONTACTS
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int, max_pages=20):
     h = get_halo_headers()
@@ -116,7 +116,7 @@ def get_halo_contact(email: str):
                   c.get("PrimaryEmail"),
                   c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Email match voor {email} → ID {c.get('id')} (client={c.get('client_id')}, site={c.get('site_id')})")
+                log.info(f"✅ Email match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
                 return c
     log.warning(f"⚠️ Geen match voor {email}")
     return None
@@ -131,7 +131,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     h = get_halo_headers()
     contact = get_halo_contact(email)
     if not contact:
-        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
+        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden voor {email}")
         return None
 
     contact_id = int(contact.get("id"))
@@ -170,7 +170,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         return {"ID": ticket_id, "contact_id": contact_id}
     else:
         log.error(f"❌ Ticket fout: {r.text}")
-        if room_id: send_message(room_id, f"⚠️ Halo error: {r.text[:200]}")
+        if room_id: send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
         return None
 
 # --------------------------------------------------------------------------
@@ -206,9 +206,9 @@ def send_adaptive_card(room_id):
                 "content": {
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "type": "AdaptiveCard",
-                    "version": "1.2",
+                    "version": "1.4",
                     "body": [
-                        {"type": "TextBlock", "text": "✍ Vul onderstaand formulier in:", "weight": "bolder", "size": "medium"},
+                        {"type": "TextBlock", "text": "✍ Vul het formulier in:", "weight": "bolder", "size": "medium"},
                         {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres", "isRequired": True},
                         {"type": "Input.Text", "id": "omschrijving", "placeholder": "Probleemomschrijving", "isRequired": True, "isMultiline": True},
                         {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
@@ -225,7 +225,8 @@ def send_adaptive_card(room_id):
     }
 
     log.info("➡️ Adaptive Card verzenden ...")
-    resp = requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card_payload, timeout=10)
+    resp = requests.post("https://webexapis.com/v1/messages",
+                         headers=WEBEX_HEADERS, json=card_payload, timeout=10)
     log.info(f"⬅️ Webex response: {resp.status_code} {resp.text}")
 
 # --------------------------------------------------------------------------
@@ -263,8 +264,12 @@ def process_webex_event(data):
                                     room_id=data["data"]["roomId"])
         if ticket:
             ticket_id = ticket.get("ID")
-            ticket_room_map[ticket_id] = {"room_id": data["data"]["roomId"], "contact_id": ticket.get("contact_id")}
-            send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt ID: {ticket_id}")
+            ticket_room_map[ticket_id] = {
+                "room_id": data["data"]["roomId"],
+                "contact_id": ticket.get("contact_id")
+            }
+            send_message(data["data"]["roomId"],
+                         f"✅ Ticket aangemaakt: **{ticket_id}**")
 
 # --------------------------------------------------------------------------
 # ROUTES
