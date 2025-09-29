@@ -114,7 +114,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - juiste combinatie
+# TICKET CREATION
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -122,7 +122,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     h = get_halo_headers()
     contact = get_halo_contact(email)
     if not contact:
-        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
+        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden voor {email}")
         return None
 
     contact_id = int(contact.get("id"))
@@ -132,24 +132,24 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "summary": omschrijving[:100],
         "details": omschrijving,
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": HALO_CLIENT_ID_NUM,   # ✅ klant 986
-        "siteId": HALO_SITE_ID,           # ✅ site 992
+        "clientId": HALO_CLIENT_ID_NUM,
+        "siteId": HALO_SITE_ID,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "requestContactId": contact_id,   # ✅ de requester
+        "requestContactId": contact_id,
         "emailAddress": email
     }
 
-    log.info(f"➡️ Ticket body: {json.dumps(body)}")
+    log.info(f"➡️ Halo ticket body: {json.dumps(body)}")
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-    log.info(f"⬅️ Halo status {r.status_code}")
+    log.info(f"⬅️ Halo antwoord: {r.status_code}")
 
     if r.status_code in (200, 201):
         resp = r.json()
         ticket = resp[0] if isinstance(resp, list) else resp
         ticket_id = ticket.get("id") or ticket.get("ID") or "?"
-        log.info(f"✅ Ticket aangemaakt ID={ticket_id} voor {email}")
+        log.info(f"✅ Ticket aangemaakt ID={ticket_id}")
 
         note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
                 f"**Probleem:** {omschrijving}\n\n"
@@ -187,6 +187,42 @@ def send_message(room_id, text):
         requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
                       json={"roomId": room_id, "markdown": text}, timeout=10)
 
+def send_adaptive_card(room_id):
+    # 📋 Stuur begeleidende tekst
+    send_message(room_id, "✍ Vul het formulier in:")
+
+    # Daarna de Adaptive Card zonder markdown
+    card = {
+        "roomId": room_id,
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                    {"type": "TextBlock", "text": "E-mailadres", "weight": "Bolder"},
+                    {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres", "isRequired": True},
+                    {"type": "TextBlock", "text": "Probleemomschrijving", "weight": "Bolder"},
+                    {"type": "Input.Text", "id": "omschrijving", "placeholder": "Probleemomschrijving", "isRequired": True, "isMultiline": True},
+                    {"type": "TextBlock", "text": "Sinds wanneer?"},
+                    {"type": "Input.Text", "id": "sindswanneer"},
+                    {"type": "TextBlock", "text": "Wat werkt niet?"},
+                    {"type": "Input.Text", "id": "watwerktniet"},
+                    {"type": "TextBlock", "text": "Zelf geprobeerd?"},
+                    {"type": "Input.Text", "id": "zelfgeprobeerd", "isMultiline": True},
+                    {"type": "TextBlock", "text": "Impact toelichting"},
+                    {"type": "Input.Text", "id": "impacttoelichting", "isMultiline": True}
+                ],
+                "actions": [
+                    {"type": "Action.Submit", "title": "Versturen"}
+                ]
+            }
+        }]
+    }
+    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
+                  json=card, timeout=10)
+
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
 # --------------------------------------------------------------------------
@@ -198,7 +234,7 @@ def process_webex_event(data):
         text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
         if sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
-            send_message(room_id, "📋 Vul formulier in (adaptive card kan hier)")
+            send_adaptive_card(room_id)
         else:
             for t_id, ri in ticket_room_map.items():
                 if ri.get("room_id") == room_id:
