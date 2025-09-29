@@ -32,7 +32,6 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", 3))
 HALO_DEFAULT_URGENCY= int(os.getenv("HALO_URGENCY", 3))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", 78))
 
-# 🚩 Altijd deze klant en site
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 
@@ -116,7 +115,7 @@ def get_halo_contact(email: str):
                   c.get("PrimaryEmail"),
                   c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Email match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
+                log.info(f"✅ Email match {email} → ID {c.get('id')} (client={c.get('client_id')}, site={c.get('site_id')})")
                 return c
     log.warning(f"⚠️ Geen match voor {email}")
     return None
@@ -131,7 +130,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     h = get_halo_headers()
     contact = get_halo_contact(email)
     if not contact:
-        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden voor {email}")
+        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
         return None
 
     contact_id = int(contact.get("id"))
@@ -206,7 +205,7 @@ def send_adaptive_card(room_id):
                 "content": {
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "type": "AdaptiveCard",
-                    "version": "1.0",
+                    "version": "1.0",   # ✅ Webex ondersteunt alleen v1.0
                     "body": [
                         {"type": "TextBlock", "text": "✍ Vul het formulier in:", "weight": "bolder", "size": "medium"},
                         {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres", "isRequired": True},
@@ -299,4 +298,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
-
