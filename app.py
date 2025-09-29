@@ -36,7 +36,7 @@ HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 HALO_CUSTOMER_ID    = HALO_CLIENT_ID_NUM
 
-# extra optionele velden (ticket type config)
+# extra optionele velden
 HALO_CATEGORY_ID    = int(os.getenv("HALO_CATEGORY_ID", 0))
 HALO_SERVICE_ID     = int(os.getenv("HALO_SERVICE_ID", 0))
 HALO_SLA_ID         = int(os.getenv("HALO_SLA_ID", 0))
@@ -113,7 +113,21 @@ def get_halo_contact(email: str):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
+                log.info(f"✅ Email match: {email} → ID {c.get('id')}")
+                # 🔍 Debug: toon belangrijke velden van de user
+                debug_info = {
+                    "id": c.get("id"),
+                    "name": c.get("name"),
+                    "client_id": c.get("client_id"),
+                    "site_id": c.get("site_id"),
+                    "linked_agent_id": c.get("linked_agent_id"),
+                    "inactive": c.get("inactive"),
+                    "is_agent": True if c.get("linked_agent_id", 0) > 0 else False,
+                    "email": f
+                }
+                log.info(f"🔍 Halo user record: {json.dumps(debug_info, indent=2)}")
                 return c
+    log.warning(f"⚠️ Geen match gevonden voor {email}")
     return None
 
 # --------------------------------------------------------------------------
@@ -147,7 +161,6 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         {"clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID}
     ]
 
-    # extra velden varianten
     extra_variants = [ {} ]
     if HALO_CATEGORY_ID: extra_variants.append({"categoryId": HALO_CATEGORY_ID})
     if HALO_SERVICE_ID:  extra_variants.append({"serviceId": HALO_SERVICE_ID})
@@ -209,8 +222,9 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
 # WEBEX HELPERS
 # --------------------------------------------------------------------------
 def send_message(room_id, text):
-    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
-                  json={"roomId": room_id, "markdown": text}, timeout=10)
+    if WEBEX_HEADERS:
+        requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
+                      json={"roomId": room_id, "markdown": text}, timeout=10)
 
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
