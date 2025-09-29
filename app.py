@@ -105,7 +105,7 @@ def get_halo_contact(email: str):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                # Cast IDs naar int (geen floats)
+                # Cast IDs naar int (geen floats!)
                 client_id = int(c.get("client_id") or HALO_CLIENT_ID_NUM)
                 site_id   = int(float(c.get("site_id") or HALO_SITE_ID))
                 c["client_id"] = client_id
@@ -142,12 +142,14 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "emailAddress": email
     }
 
-    # 🚩 Varianten: soms accepteert Halo een andere combinatie
+    # Extra varianten toegevoegd
     variants = [
         ("requestContactId", {**base_body, "clientId": client_id, "siteId": site_id, "requestContactId": contact_id}),
         ("requestUserId",    {**base_body, "clientId": client_id, "siteId": site_id, "requestUserId": contact_id}),
         ("customerId",       {**base_body, "customerId": client_id, "requestContactId": contact_id}),
-        ("emailOnly",        {**base_body, "clientId": client_id, "siteId": site_id})
+        ("emailOnly",        {**base_body, "clientId": client_id, "siteId": site_id}),
+        ("clientOnly",       {**base_body, "clientId": client_id, "requestContactId": contact_id}),
+        ("contactOnly",      {**base_body, "requestContactId": contact_id})
     ]
 
     for name, body in variants:
@@ -211,12 +213,12 @@ def send_adaptive_card(room_id):
                     "version": "1.0",
                     "body": [
                         {"type": "TextBlock", "text": "Formulier invullen:", "weight": "bolder"},
-                        {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres", "isRequired": True},
-                        {"type": "Input.Text", "id": "omschrijving", "placeholder": "Probleemomschrijving", "isRequired": True, "isMultiline": True},
+                        {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
+                        {"type": "Input.Text", "id": "omschrijving", "placeholder": "Probleemomschrijving", "style": "text"},
                         {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
                         {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
-                        {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Zelf geprobeerd?", "isMultiline": True},
-                        {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Impact toelichting", "isMultiline": True}
+                        {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Zelf geprobeerd?", "style": "text"},
+                        {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Impact toelichting", "style": "text"}
                     ],
                     "actions": [
                         {"type": "Action.Submit", "title": "Versturen"}
