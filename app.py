@@ -32,9 +32,14 @@ HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", 3))
 HALO_DEFAULT_URGENCY= int(os.getenv("HALO_URGENCY", 3))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", 78))
 
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))  
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))        
-HALO_CUSTOMER_ID    = HALO_CLIENT_ID_NUM                         
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
+HALO_CUSTOMER_ID    = HALO_CLIENT_ID_NUM
+
+# extra optionele velden (ticket type config)
+HALO_CATEGORY_ID    = int(os.getenv("HALO_CATEGORY_ID", 0))
+HALO_SERVICE_ID     = int(os.getenv("HALO_SERVICE_ID", 0))
+HALO_SLA_ID         = int(os.getenv("HALO_SLA_ID", 0))
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
@@ -97,7 +102,6 @@ def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
         return CONTACT_CACHE["contacts"]
-    log.info("🔄 Ophalen contacten uit Halo")
     CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = now
     log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten in cache")
@@ -113,7 +117,7 @@ def get_halo_contact(email: str):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION met alle fallbacks
+# TICKET CREATION met full fallback matrix
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -139,19 +143,23 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
 
     requester_variants = ["requestContactId", "contactId", "requestUserId", "userId"]
     client_variants = [
-        {"customerId": HALO_CUSTOMER_ID},              # alleen customerId
-        {"clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID}  # clientId + siteId
+        {"customerId": HALO_CUSTOMER_ID},
+        {"clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID}
     ]
-    category_variants = [None, 1]   # geen categoryId, of categoryId=1
+
+    # extra velden varianten
+    extra_variants = [ {} ]
+    if HALO_CATEGORY_ID: extra_variants.append({"categoryId": HALO_CATEGORY_ID})
+    if HALO_SERVICE_ID:  extra_variants.append({"serviceId": HALO_SERVICE_ID})
+    if HALO_SLA_ID:      extra_variants.append({"slaId": HALO_SLA_ID})
 
     for client_block in client_variants:
         for req_field in requester_variants:
-            for cat in category_variants:
+            for extra in extra_variants:
                 body = base_body.copy()
                 body.update(client_block)
                 body[req_field] = contact_id
-                if cat:
-                    body["categoryId"] = cat
+                body.update(extra)
 
                 log.info(f"➡️ Try: {json.dumps(body)}")
                 try:
@@ -160,15 +168,23 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                     log.error(f"❌ Exception Halo call: {e}")
                     continue
 
-                log.info(f"⬅️ Halo status {r.status_code} ({req_field}, {list(client_block.keys())}, category={cat})")
+                log.info(f"⬅️ Halo status {r.status_code} ({req_field}, {list(client_block.keys())}, extra={extra})")
                 if r.status_code in (200, 201):
                     resp = r.json()
                     ticket = resp[0] if isinstance(resp, list) else resp
                     ticket_id = ticket.get("id") or ticket.get("ID") or "?"
-                    log.info(f"✅ Success with {req_field} + {list(client_block.keys())} + category={cat}")
+                    log.info(f"✅ SUCCESS with {req_field} + {list(client_block.keys())} + {extra}, Ticket ID={ticket_id}")
+
+                    note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
+                            f"**Probleem:** {omschrijving}\n\n"
+                            f"**Sinds:** {sindswanneer}\n"
+                            f"**Wat werkt niet:** {watwerktniet}\n"
+                            f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
+                            f"**Impact:** {impacttoelichting}")
+                    add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
                     return {"ID": ticket_id, "contact_id": contact_id}
                 else:
-                    log.warning(f"❌ Fail {req_field} + {list(client_block.keys())} + category={cat} → {r.text[:200]}")
+                    log.warning(f"❌ Fail {req_field} + {list(client_block.keys())} + {extra} → {r.text[:250]}")
 
     if room_id:
         send_message(room_id, "⚠️ Ticket kon niet aangemaakt worden. Zie logs.")
@@ -186,9 +202,8 @@ def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=Non
         "timeSpent": "00:00:00",
         "userId": contact_id
     }
-    r = requests.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions",
-                      headers=h, json=body, timeout=10)
-    return r.status_code in (200, 201)
+    requests.post(f"{HALO_API_BASE}/Tickets/{ticket_id}/Actions",
+                  headers=h, json=body, timeout=10)
 
 # --------------------------------------------------------------------------
 # WEBEX HELPERS
@@ -208,12 +223,13 @@ def process_webex_event(data):
         text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
         if sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
-            send_message(room_id, "📋 Vul formulier in (Adaptive Card werkt hier ook).")
+            send_message(room_id, "📋 Vul formulier in (adaptive card kan hier)")
         else:
             for t_id, ri in ticket_room_map.items():
                 if ri.get("room_id") == room_id:
                     add_note_to_ticket(t_id, text, sender, email=sender,
                                        room_id=room_id, contact_id=ri.get("contact_id"))
+
     elif res == "attachmentActions":
         act_id = data["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
