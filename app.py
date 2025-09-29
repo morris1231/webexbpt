@@ -36,10 +36,7 @@ HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
-WEBEX_HEADERS = {
-    "Authorization": f"Bearer {WEBEX_TOKEN}",
-    "Content-Type": "application/json"
-} if WEBEX_TOKEN else {}
+WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60
@@ -60,10 +57,7 @@ def get_halo_headers():
                       data=urllib.parse.urlencode(payload),
                       timeout=10)
     r.raise_for_status()
-    return {
-        "Authorization": f"Bearer {r.json()['access_token']}",
-        "Content-Type": "application/json"
-    }
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
 # CONTACTS
@@ -110,18 +104,15 @@ def get_halo_contact(email: str):
     if not email: return None
     email = email.lower().strip()
     for c in get_main_contacts():
-        for f in [c.get("EmailAddress"),
-                  c.get("emailaddress"),
-                  c.get("PrimaryEmail"),
-                  c.get("login")]:
+        for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Email match {email} → ID {c.get('id')} (client={c.get('client_id')}, site={c.get('site_id')})")
+                log.info(f"✅ Email match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
                 return c
     log.warning(f"⚠️ Geen match voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION
+# TICKET CREATION met varianten
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -136,41 +127,48 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     contact_id = int(contact.get("id"))
     contact_name = contact.get("name", "Onbekend")
 
-    body = {
+    base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
         "typeId": HALO_TICKET_TYPE_ID,
-        "clientId": HALO_CLIENT_ID_NUM,
-        "siteId": HALO_SITE_ID,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "requestContactId": contact_id,
         "emailAddress": email
     }
 
-    log.info(f"➡️ Payload naar Halo:\n{json.dumps(body, indent=2)}")
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-    log.info(f"⬅️ Halo response: {r.status_code}")
+    # 🚩 Varianten laten testen
+    variants = [
+        ("requestContactId", {**base_body, "clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID, "requestContactId": contact_id}),
+        ("requestUserId",    {**base_body, "clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID, "requestUserId": contact_id}),
+        ("customerId",       {**base_body, "customerId": HALO_CLIENT_ID_NUM, "requestContactId": contact_id}),
+        ("emailOnly",        {**base_body, "clientId": HALO_CLIENT_ID_NUM, "siteId": HALO_SITE_ID}) # alleen email
+    ]
 
-    if r.status_code in (200, 201):
-        resp = r.json()
-        ticket = resp[0] if isinstance(resp, list) else resp
-        ticket_id = ticket.get("id") or ticket.get("ID") or "?"
-        log.info(f"✅ Ticket aangemaakt via API ID={ticket_id}")
+    for name, body in variants:
+        log.info(f"➡️ Try {name} variant: {json.dumps(body)}")
+        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
+        log.info(f"⬅️ Halo response {r.status_code} using {name}")
+        if r.status_code in (200, 201):
+            resp = r.json()
+            ticket = resp[0] if isinstance(resp, list) else resp
+            ticket_id = ticket.get("id") or ticket.get("ID") or "?"
+            log.info(f"✅ Ticket aangemaakt using {name}, ID={ticket_id}")
 
-        note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
-                f"**Probleem:** {omschrijving}\n\n"
-                f"**Sinds:** {sindswanneer}\n"
-                f"**Wat werkt niet:** {watwerktniet}\n"
-                f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
-                f"**Impact:** {impacttoelichting}")
-        add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
-        return {"ID": ticket_id, "contact_id": contact_id}
-    else:
-        log.error(f"❌ Ticket fout: {r.text}")
-        if room_id: send_message(room_id, f"⚠️ Ticket fout: {r.text[:200]}")
-        return None
+            note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
+                    f"**Probleem:** {omschrijving}\n\n"
+                    f"**Sinds:** {sindswanneer}\n"
+                    f"**Wat werkt niet:** {watwerktniet}\n"
+                    f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
+                    f"**Impact:** {impacttoelichting}")
+            add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
+            return {"ID": ticket_id, "contact_id": contact_id}
+        else:
+            log.warning(f"❌ Failed with {name}, error={r.text[:200]}")
+
+    if room_id:
+        send_message(room_id, "⚠️ Ticket kon niet aangemaakt worden. Zie logs.")
+    return None
 
 # --------------------------------------------------------------------------
 # NOTES
@@ -199,7 +197,7 @@ def send_message(room_id, text):
 def send_adaptive_card(room_id):
     card_payload = {
         "roomId": room_id,
-        "text": "✍ Vul dit formulier in:",   # ✅ verplicht veld naast attachments
+        "text": "✍ Vul dit formulier in:",   # ✅ verplicht naast attachments
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
