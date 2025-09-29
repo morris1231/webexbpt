@@ -38,7 +38,6 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "appl
 
 CONTACT_CACHE = {"contacts": [], "timestamp": 0}
 CACHE_DURATION = 24 * 60 * 60   # 1 dag
-
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -105,7 +104,7 @@ def get_halo_contact(email: str):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                # Cast IDs naar int (geen floats!)
+                # Cast IDs naar int
                 client_id = int(c.get("client_id") or HALO_CLIENT_ID_NUM)
                 site_id   = int(float(c.get("site_id") or HALO_SITE_ID))
                 c["client_id"] = client_id
@@ -142,14 +141,16 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "emailAddress": email
     }
 
-    # Extra varianten toegevoegd
+    # ✅ alle varianten incl. minimal
     variants = [
         ("requestContactId", {**base_body, "clientId": client_id, "siteId": site_id, "requestContactId": contact_id}),
         ("requestUserId",    {**base_body, "clientId": client_id, "siteId": site_id, "requestUserId": contact_id}),
         ("customerId",       {**base_body, "customerId": client_id, "requestContactId": contact_id}),
         ("emailOnly",        {**base_body, "clientId": client_id, "siteId": site_id}),
         ("clientOnly",       {**base_body, "clientId": client_id, "requestContactId": contact_id}),
-        ("contactOnly",      {**base_body, "requestContactId": contact_id})
+        ("contactOnly",      {**base_body, "requestContactId": contact_id}),
+        ("minimalContact",   {**base_body, "requestUserId": contact_id}),
+        ("minimalContact2",  {**base_body, "requestContactId": contact_id})
     ]
 
     for name, body in variants:
