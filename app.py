@@ -206,7 +206,7 @@ def send_adaptive_card(room_id):
                 "content": {
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "type": "AdaptiveCard",
-                    "version": "1.4",
+                    "version": "1.0",
                     "body": [
                         {"type": "TextBlock", "text": "✍ Vul het formulier in:", "weight": "bolder", "size": "medium"},
                         {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres", "isRequired": True},
@@ -299,3 +299,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
