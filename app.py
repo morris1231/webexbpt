@@ -2,7 +2,6 @@ import os, urllib.parse, logging, sys, time, threading, json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
-import time
 
 # --------------------------------------------------------------------------
 # LOGGING
@@ -85,7 +84,7 @@ def fetch_all_site_contacts(client_id: int, site_id: int):
             if cid and cid not in processed_ids:
                 processed_ids.add(cid)
                 c["client_id"] = int(c.get("client_id") or client_id)
-                c["site_id"]   = int(float(c.get("site_id") or site_id))
+                c["site_id"] = int(float(c.get("site_id") or site_id))
                 all_contacts.append(c)
         if len(contacts) < 50:
             break
@@ -134,7 +133,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     contact_id = int(contact.get("id"))
     contact_name = contact.get("name", "Onbekend")
     client_id = int(contact.get("client_id") or HALO_CLIENT_ID_NUM)
-    site_id   = int(contact.get("site_id") or HALO_SITE_ID)
+    site_id = int(contact.get("site_id") or HALO_SITE_ID)
 
     body = [{
         "summary": omschrijving[:100],
@@ -145,7 +144,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgencyId": int(urgency_id),
         "clientId": client_id,
         "siteId": site_id,
-        "userId": contact_id,
+        "users": [{"id": contact_id}],   # ✅ BELANGRIJKE FIX
         "emailAddress": email
     }]
 
@@ -171,7 +170,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     return None
 
 # --------------------------------------------------------------------------
-# NOTES
+# NOTE
 # --------------------------------------------------------------------------
 def add_note_to_ticket(ticket_id, public_output, sender, email=None, room_id=None, contact_id=None):
     h = get_halo_headers()
@@ -231,7 +230,8 @@ def process_webex_event(data):
         msg_id = data["data"]["id"]
         msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
         text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
-        if sender.endswith("@webex.bot"): return
+        if sender.endswith("@webex.bot"):
+            return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
     elif res == "attachmentActions":
