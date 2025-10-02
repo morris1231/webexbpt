@@ -161,8 +161,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "details": omschrijving,
         "typeId": str(HALO_TICKET_TYPE_ID),   # ✅ string
         "teamId": str(HALO_TEAM_ID),          # ✅ string
-        "impactId": str(impact_id),           # ✅ CRUCIAAL: string (1=Gehele bedrijf, 2=Meerdere, 3=Eén gebruiker)
-        "urgencyId": str(urgency_id),         # ✅ CRUCIAAL: string (1=High, 2=Medium, 3=Low)
+        "impactId": int(impact_id),           # ✅ CRUCIAAL: string (1=Gehele bedrijf, 2=Meerdere, 3=Eén gebruiker)
+        "urgencyId": int(urgency_id),         # ✅ CRUCIAAL: string (1=High, 2=Medium, 3=Low)
         "client_id": client_id,               # ✅ snake_case
         "site_id": site_id,                   # ✅ snake_case
         "email_address": email                # ✅ snake_case
@@ -338,3 +338,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
