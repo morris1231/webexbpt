@@ -139,7 +139,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - HALOPSA COMPATIBEL: REQUESTUSERID OM END USER TE TOONEN
+# TICKET CREATION - HALOPSA COMPATIBEL: REQUESTCONTACTID VOOR EINDGEBRUIKERS
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -155,7 +155,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ CRUCIAAL: gebruik requestUserId — dit is het veld dat HaloPSA gebruikt om de end user in de UI te tonen
+    # ✅ CRUCIAAL: gebruik requestContactId — dit is het veld dat HaloPSA gebruikt voor eindgebruikers (contacts)
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -165,12 +165,12 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "requestUserId": contact_id,  # ✅ DIT lost "General User" op — gebruikt door HaloPSA voor UI-weergave
+        "requestContactId": contact_id,  # ✅ DIT lost "General User" op — voor contacts!
     }
 
     # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT
     variants = [
-        ("requestUserId", {**base_body}),
+        ("requestContactId", {**base_body}),
     ]
 
     for name, body in variants:
