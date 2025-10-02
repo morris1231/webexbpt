@@ -136,7 +136,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION — LAATSTE GEGARANDEERDE OPLOSSING: ALLE VELDEN TE ZAMEN
+# TICKET CREATION — LAATSTE GEGARANDEERDE OPLOSSING VOOR `use: "user"`
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -152,7 +152,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ CRUCIAAL: STUUR ALLE VELDEN TE ZAMEN — HOE DAN OOK — ZODAT HALOPSA KAN KIEZEN
+    # ✅ CRUCIAAL: Gebruik requestUserId — en contactId — maar GEEN emailAddress!
+    # Dit werkt zelfs als "use": "user" — want HaloPSA koppelt het aan de ID
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -160,16 +161,14 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "client_id": client_id,
-        "site_id": site_id,
-        "requestContactId": contact_id,
-        "requestUserId": contact_id,
-        "contactId": contact_id,
-        "emailAddress": email.lower().strip(),
+        "requestUserId": contact_id,    # ✅ Gebruik dit voor "user"-type contacten
+        "contactId": contact_id,        # ✅ Bevestig het contact
+        "client_id": client_id,         # ✅ Help HaloPSA bij context
+        "site_id": site_id,             # ✅ Help HaloPSA bij context
     }
 
     variants = [
-        ("all-fields", {**base_body}),
+        ("requestUserId+contactId", {**base_body}),
     ]
 
     for name, body in variants:
