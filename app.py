@@ -34,9 +34,6 @@ HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET  = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 65))
 HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 1))
-HALO_DEFAULT_IMPACT = int(os.getenv("HALO_IMPACT", 3))
-HALO_DEFAULT_URGENCY= int(os.getenv("HALO_URGENCY", 3))
-HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", 78))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
@@ -142,7 +139,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - HALOPSA COMPATIBEL: MIXED CASE — ZIE UITLEG
+# TICKET CREATION - HALOPSA COMPATIBEL: STRINGS + CORRECTE VELDEN
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -158,21 +155,22 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
+    # ✅ JOUW WAARDEN: Impact en Urgency als STRINGS (HaloPSA vereist dit)
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
-        "typeId": HALO_TICKET_TYPE_ID,      # ✅ camelCase — vereist door HaloPSA
-        "teamId": HALO_TEAM_ID,             # ✅ camelCase
-        "impactId": int(impact_id),         # ✅ camelCase — CRUCIAAL! (was impact_id → fout)
-        "urgencyId": int(urgency_id),       # ✅ camelCase — CRUCIAAL! (was urgency_id → fout)
-        "client_id": client_id,             # ✅ snake_case
-        "site_id": site_id,                 # ✅ snake_case
-        "email_address": email              # ✅ snake_case
+        "typeId": str(HALO_TICKET_TYPE_ID),   # ✅ string
+        "teamId": str(HALO_TEAM_ID),          # ✅ string
+        "impactId": str(impact_id),           # ✅ CRUCIAAL: string (1=Gehele bedrijf, 2=Meerdere, 3=Eén gebruiker)
+        "urgencyId": str(urgency_id),         # ✅ CRUCIAAL: string (1=High, 2=Medium, 3=Low)
+        "client_id": client_id,               # ✅ snake_case
+        "site_id": site_id,                   # ✅ snake_case
+        "email_address": email                # ✅ snake_case
     }
 
-    # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — ALLEEN contact_id werkt (snake_case)
+    # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — contact_id als snake_case
     variants = [
-        ("contact_id", {**base_body, "contact_id": contact_id}),  # ✅ snake_case
+        ("contact_id", {**base_body, "contact_id": contact_id}),
     ]
 
     for name, body in variants:
@@ -216,15 +214,39 @@ def send_adaptive_card(room_id):
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard", "version": "1.0",
                 "body": [
-                    {"type": "TextBlock", "text": "Nieuwe melding", "weight": "bolder"},
-                    {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres"},
-                    {"type": "Input.Text", "id": "omschrijving", "placeholder": "Probleemomschrijving", "style": "text"},
-                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
-                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
-                    {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Zelf geprobeerd?", "style": "text"},
-                    {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Impact toelichting", "style": "text"}
+                    {"type": "TextBlock", "text": "🆕 Nieuwe melding", "weight": "bolder"},
+                    {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres van gebruiker", "required": True},
+                    {"type": "Input.Text", "id": "omschrijving", "placeholder": "Korte omschrijving van het probleem", "required": True},
+                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer is het probleem aanwezig?"},
+                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt precies niet?"},
+                    {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Wat heb je zelf al geprobeerd?"},
+                    {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Toelichting op impact (optioneel)"},
+                    {
+                        "type": "Input.ChoiceSet",
+                        "id": "impact",
+                        "label": "Impact",
+                        "choices": [
+                            {"title": "Gehele bedrijf (1)", "value": "1"},
+                            {"title": "Meerdere gebruikers (2)", "value": "2"},
+                            {"title": "Één gebruiker (3)", "value": "3"}
+                        ],
+                        "value": "3",  # standaard: één gebruiker
+                        "required": True
+                    },
+                    {
+                        "type": "Input.ChoiceSet",
+                        "id": "urgency",
+                        "label": "Urgency",
+                        "choices": [
+                            {"title": "High (1)", "value": "1"},
+                            {"title": "Medium (2)", "value": "2"},
+                            {"title": "Low (3)", "value": "3"}
+                        ],
+                        "value": "3",  # standaard: Low
+                        "required": True
+                    }
                 ],
-                "actions": [{"type": "Action.Submit", "title": "Versturen"}]
+                "actions": [{"type": "Action.Submit", "title": "✅ Ticket aanmaken"}]
             }
         }]
     }
@@ -255,14 +277,19 @@ def process_webex_event(data):
             if not inputs.get("email") or not inputs.get("omschrijving"):
                 send_message(data["data"]["roomId"], "⚠️ E-mail en omschrijving zijn verplicht.")
                 return
+
+            # ✅ Haal impact en urgency op als string (zoals gekozen in dropdown)
+            impact_id = inputs.get("impact", "3")   # default: 3 = één gebruiker
+            urgency_id = inputs.get("urgency", "3") # default: 3 = low
+
             ticket = create_halo_ticket(
                 inputs["omschrijving"], inputs["email"],
                 inputs.get("sindswanneer", "Niet opgegeven"),
                 inputs.get("watwerktniet", "Niet opgegeven"),
                 inputs.get("zelfgeprobeerd", "Niet opgegeven"),
                 inputs.get("impacttoelichting", "Niet opgegeven"),
-                inputs.get("impact", HALO_DEFAULT_IMPACT),
-                inputs.get("urgency", HALO_DEFAULT_URGENCY),
+                impact_id,  # ✅ string (1,2,3)
+                urgency_id, # ✅ string (1,2,3)
                 room_id=data["data"]["roomId"]
             )
             if ticket:
