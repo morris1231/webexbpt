@@ -58,7 +58,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# CONTACTS (alleen eindgebruikers ophalen!)
+# CONTACTS
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -69,7 +69,7 @@ def fetch_all_site_contacts(client_id: int, site_id: int):
             "include": "site,client",
             "client_id": client_id,
             "site_id": site_id,
-            "type": "contact",   # 🔥 alleen echte eindgebruikers (Contacts)
+            "type": "contact",   # alleen echte eindgebruikers
             "page": page,
             "page_size": 50
         }
@@ -116,14 +116,11 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATIE -> probeer ALLE mogelijke varianten
+# TICKET CREATIE -> ALLE VARIANTEN
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
-    """
-    Probeert ALLE mogelijke payload-varianten om een ticket aan te maken.
-    """
     h = get_halo_headers()
     contact = get_halo_contact(email, room_id=room_id)
     if not contact:
@@ -144,7 +141,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "emailAddress": email
     }
 
-    # 🚀 Alle mogelijke varianten (API is hier inconsistent, dus we proberen ALLES)
+    # ✅ alle mogelijke payload combinaties
     variants = [
         ("requestContactId+client+site", {**base_body, "clientId": client_id, "siteId": site_id, "requestContactId": contact_id}),
         ("requestContactId-only",        {**base_body, "requestContactId": contact_id}),
@@ -155,9 +152,10 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         ("users-array+client+site",      {**base_body, "clientId": client_id, "siteId": site_id, "users": [{"id": contact_id}]}),
         ("users-array-only",             {**base_body, "users": [{"id": contact_id}]}),
         ("customerId+reqContact",        {**base_body, "customerId": client_id, "requestContactId": contact_id}),
+        ("endUserId+client+site",        {**base_body, "clientId": client_id, "siteId": site_id, "endUserId": contact_id}),
+        ("endUserId-only",               {**base_body, "endUserId": contact_id}),
     ]
 
-    # Probeer ze allemaal tot er eentje werkt
     for name, body in variants:
         log.info(f"➡️ Probeer variant {name}: {json.dumps(body)}")
         r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
@@ -181,14 +179,12 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                 f"**Impact:** {impacttoelichting}"
             )
             add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
+
             return {"ID": ticket_id, "contact_id": contact_id}
         else:
             log.warning(f"❌ Variant {name} gefaald: {r.text[:200]}")
 
-    # Geen enkele versie werkte
-    fail_msg = "❌ Geen enkele payload werkte, zie logs!"
-    log.error(fail_msg)
-    if room_id: send_message(room_id, fail_msg)
+    if room_id: send_message(room_id, "❌ Geen enkele payload werkte, zie logs!")
     return None
 
 # --------------------------------------------------------------------------
