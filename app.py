@@ -58,7 +58,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# CONTACTS
+# CONTACTS (alleen eindgebruikers ophalen!)
 # --------------------------------------------------------------------------
 def fetch_all_site_contacts(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -69,7 +69,7 @@ def fetch_all_site_contacts(client_id: int, site_id: int):
             "include": "site,client",
             "client_id": client_id,
             "site_id": site_id,
-            "type": "contact",
+            "type": "contact",   # <-- alleen contacts (niet agents!)
             "page": page,
             "page_size": 50
         }
@@ -97,7 +97,7 @@ def get_main_contacts():
         return CONTACT_CACHE["contacts"]
     CONTACT_CACHE["contacts"] = fetch_all_site_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = now
-    log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecachet")
+    log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecachet (alleen eindgebruikers)")
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact(email: str, room_id=None):
@@ -106,19 +106,16 @@ def get_halo_contact(email: str, room_id=None):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
+                log.info(f"✅ Eindgebruiker match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
                 if room_id:
-                    send_message(
-                        room_id,
-                        f"✅ Gebruiker {c.get('name')} gevonden · Client={c.get('client_id')}, Site={c.get('site_id')}"
-                    )
+                    send_message(room_id, f"✅ Eindgebruiker {c.get('name')} gevonden (ID={c.get('id')})")
                 return c
     log.warning(f"⚠️ Geen match voor {email}")
     if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION
+# TICKET CREATION -> altijd met requestContactId
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -138,19 +135,19 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        # Alleen de gebruiker! Client & Site pakt Halo automatisch
-        "requestUserId": contact_id,
+        # ✅ juiste veld voor eindgebruiker
+        "requestContactId": contact_id,
         "emailAddress": email
     }]
 
-    log.info(f"➡️ Ticket-payload: {json.dumps(body)}")
+    log.info(f"➡️ Ticket-payload (requestContactId): {json.dumps(body)}")
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
     if r.status_code in (200, 201):
         resp = r.json()
         ticket = resp[0] if isinstance(resp, list) else resp
         ticket_id = ticket.get("id") or ticket.get("ID") or "?"
         log.info(f"✅ Ticket aangemaakt, ID={ticket_id}")
-        if room_id: send_message(room_id, f"✅ Ticket aangemaakt in Halo, ID: **{ticket_id}**")
+        if room_id: send_message(room_id, f"✅ Ticket aangemaakt: **{ticket_id}**")
         note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
                 f"**Probleem:** {omschrijving}\n\n"
                 f"**Sinds:** {sindswanneer}\n"
