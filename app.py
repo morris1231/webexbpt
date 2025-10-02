@@ -60,28 +60,6 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# MAAK ClientContactLink AAN ALS NODIG
-# --------------------------------------------------------------------------
-def create_client_contact_link(contact_id, client_id, site_id):
-    h = get_halo_headers()
-    payload = {
-        "contactId": contact_id,
-        "clientId": client_id,
-        "siteId": site_id
-    }
-    try:
-        r = requests.post(f"{HALO_API_BASE}/ClientContactLinks", headers=h, json=payload, timeout=10)
-        if r.status_code in (200, 201):
-            log.info(f"✅ ClientContactLink aangemaakt: contact_id={contact_id}, client_id={client_id}, site_id={site_id}")
-            return True
-        else:
-            log.warning(f"⚠️ Kon ClientContactLink niet aanmaken: {r.status_code} → {r.text}")
-            return False
-    except Exception as e:
-        log.error(f"❌ Fout bij aanmaken ClientContactLink: {e}")
-        return False
-
-# --------------------------------------------------------------------------
 # CONTACTS ophalen - eerst ClientContactLinks proberen, dan Users?type=contact
 # --------------------------------------------------------------------------
 def fetch_contacts(client_id: int, site_id: int):
@@ -161,7 +139,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - LAATSTE FIX: EMAILADDRESS IN CAMELCASE
+# TICKET CREATION - LAATSTE OPLOSSING: REQUESTUSERID + EMAILADDRESS
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -177,10 +155,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ Zorg dat er een ClientContactLink bestaat
-    create_client_contact_link(contact_id, client_id, site_id)
-
-    # ✅ CRUCIAAL: gebruik emailAddress (camelCase) — dit koppelt de naam
+    # ✅ CRUCIAAL: Gebruik requestUserId — niet requestContactId — als ClientContactLink niet werkt
+    # Dit werkt bij HaloPSA als het contact een "user" is — als je emailAddress meestuurt
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -190,12 +166,12 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "requestContactId": contact_id,
-        "emailAddress": email,  # ✅ DIT IS DE LAATSTE SLEUTEL — camelCase, exact als in contact
+        "requestUserId": contact_id,  # ✅ Gebruik requestUserId — zelfs als het een "user" is
+        "emailAddress": email,        # ✅ CRUCIAAL: camelCase — exact zoals in contact
     }
 
     variants = [
-        ("requestContactId+emailAddress", {**base_body}),
+        ("requestUserId+emailAddress", {**base_body}),
     ]
 
     for name, body in variants:
