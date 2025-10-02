@@ -2,6 +2,7 @@ import os, urllib.parse, logging, sys, time, threading, json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
+import time
 
 # --------------------------------------------------------------------------
 # LOGGING
@@ -100,15 +101,23 @@ def get_main_contacts():
     log.info(f"✅ {len(CONTACT_CACHE['contacts'])} contacten gecachet")
     return CONTACT_CACHE["contacts"]
 
-def get_halo_contact(email: str):
+def get_halo_contact(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
+                client_id = int(c.get("client_id") or 0)
+                site_id   = int(c.get("site_id") or 0)
+                log.info(f"✅ Match {email} → ID {c.get('id')}, client={client_id}, site={site_id}")
+                if room_id:
+                    if client_id == HALO_CLIENT_ID_NUM and site_id == HALO_SITE_ID:
+                        send_message(room_id, f"✅ Gebruiker gevonden: **{c.get('name')}** · Client={client_id}, Site={site_id}")
+                    else:
+                        send_message(room_id, f"⚠️ Gebruiker gevonden, maar gekoppeld aan **Client={client_id}, Site={site_id}** (verwacht Client={HALO_CLIENT_ID_NUM}, Site={HALO_SITE_ID})")
                 return c
     log.warning(f"⚠️ Geen match voor {email}")
+    if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
     return None
 
 # --------------------------------------------------------------------------
@@ -118,9 +127,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
                        impact_id, urgency_id, room_id=None):
     h = get_halo_headers()
-    contact = get_halo_contact(email)
+    contact = get_halo_contact(email, room_id=room_id)
     if not contact:
-        if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
         return None
 
     contact_id = int(contact.get("id"))
@@ -148,6 +156,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         ticket = resp[0] if isinstance(resp, list) else resp
         ticket_id = ticket.get("id") or ticket.get("ID") or "?"
         log.info(f"✅ Ticket aangemaakt, ID={ticket_id}")
+        if room_id: send_message(room_id, f"✅ Ticket aangemaakt in Halo, ID: **{ticket_id}**")
         note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
                 f"**Probleem:** {omschrijving}\n\n"
                 f"**Sinds:** {sindswanneer}\n"
@@ -225,12 +234,6 @@ def process_webex_event(data):
         if sender.endswith("@webex.bot"): return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
-        else:
-            for t_id, ri in ticket_room_map.items():
-                if ri.get("room_id") == room_id:
-                    add_note_to_ticket(t_id, text, sender, email=sender,
-                                       room_id=room_id, contact_id=ri.get("contact_id"))
-
     elif res == "attachmentActions":
         act_id = data["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}",
@@ -252,7 +255,6 @@ def process_webex_event(data):
                 "room_id": data["data"]["roomId"],
                 "contact_id": ticket.get("contact_id")
             }
-            send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket_id}**")
 
 # --------------------------------------------------------------------------
 # ROUTES
