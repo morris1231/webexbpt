@@ -58,7 +58,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# FETCH CONTACTS - Try all endpoints
+# CONTACTS ophalen (super debug fallback)
 # --------------------------------------------------------------------------
 def fetch_all_contacts_with_fallback(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -111,16 +111,17 @@ def get_halo_contact(email: str, room_id=None):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                log.info(f"✅ Match {email} → ID {c.get('id')} client={c.get('client_id')} site={c.get('site_id')} via {CONTACT_CACHE['source']}")
+                log.info("👉 Hele contactrecord gevonden:")
+                log.info(json.dumps(c, indent=2))
                 if room_id:
-                    send_message(room_id, f"✅ Eindgebruiker {c.get('name')} gevonden (ID={c.get('id')}) · via {CONTACT_CACHE['source']}")
+                    send_message(room_id, f"✅ Eindgebruiker {c.get('name')} gevonden · ID={c.get('id')} · via {CONTACT_CACHE['source']}")
                 return c
     log.warning(f"⚠️ Geen eindgebruiker match voor {email}")
     if room_id: send_message(room_id, f"⚠️ Geen eindgebruiker gevonden in Halo voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# CREATE TICKET - test all variants
+# TICKET CREATION
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -141,44 +142,40 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "emailAddress": email
+        "emailAddress": email,
+        "clientId": client_id,
+        "siteId": site_id
     }
 
+    # test alle velden
     variants = [
-        ("requestContactId+client+site", {**base_body, "clientId": client_id, "siteId": site_id, "requestContactId": contact_id}),
-        ("requestContactId-only",        {**base_body, "requestContactId": contact_id}),
-        ("requestUserId+client+site",    {**base_body, "clientId": client_id, "siteId": site_id, "requestUserId": contact_id}),
-        ("requestUserId-only",           {**base_body, "requestUserId": contact_id}),
-        ("userId+client+site",           {**base_body, "clientId": client_id, "siteId": site_id, "userId": contact_id}),
-        ("userId-only",                  {**base_body, "userId": contact_id}),
-        ("users-array+client+site",      {**base_body, "clientId": client_id, "siteId": site_id, "users": [{"id": contact_id}]}),
-        ("users-array-only",             {**base_body, "users": [{"id": contact_id}]}),
-        ("customerId+reqContact",        {**base_body, "customerId": client_id, "requestContactId": contact_id}),
-        ("endUserId+client+site",        {**base_body, "clientId": client_id, "siteId": site_id, "endUserId": contact_id}),
-        ("endUserId-only",               {**base_body, "endUserId": contact_id}),
+        ("requestContactId", {**base_body, "requestContactId": contact_id}),
+        ("requestUserId",    {**base_body, "requestUserId": contact_id}),
+        ("userId",           {**base_body, "userId": contact_id}),
+        ("users-array",      {**base_body, "users": [{"id": contact_id}]}),
+        ("customerId+requestContactId", {**base_body, "customerId": client_id, "requestContactId": contact_id}),
+        ("endUserId",        {**base_body, "endUserId": contact_id}),
     ]
 
     for name, body in variants:
-        log.info(f"➡️ TEST variant {name}: {json.dumps(body)}")
+        log.info(f"➡️ Probeer variant {name}: {json.dumps(body)}")
         r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
-        log.info(f"⬅️ Halo {r.status_code} ({name})")
+        log.info(f"⬅️ Halo {r.status_code} ({name}) body={r.text[:250]}")
         if r.status_code in (200, 201):
             resp = r.json()
             ticket = resp[0] if isinstance(resp, list) else resp
             ticket_id = ticket.get("id") or ticket.get("ID")
-            msg = f"✅ Geslaagd met variant {name} → TicketID={ticket_id}"
+            msg = f"✅ Ticket aangemaakt met variant {name} → TicketID={ticket_id}"
             log.info(msg)
             if room_id: send_message(room_id, msg)
             return {"ID": ticket_id, "contact_id": contact_id}
-        else:
-            log.warning(f"❌ {name} gefaald met {r.text[:250]}")
 
     if room_id:
-        send_message(room_id, "❌ Geen enkele variant werkte. Gebruik /debug-halo en check logs!")
+        send_message(room_id, "❌ Geen enkele variant werkte. Gebruik /debug-halo en check logs.")
     return None
 
 # --------------------------------------------------------------------------
-# DEBUG ENDPOINT
+# DEBUG ROUTE
 # --------------------------------------------------------------------------
 @app.route("/debug-halo", methods=["GET"])
 def debug_halo():
@@ -269,11 +266,6 @@ def process_webex_event(data):
 # --------------------------------------------------------------------------
 # ROUTES
 # --------------------------------------------------------------------------
-@app.route("/webex", methods=["POST"])
-def webhook():
-    threading.Thread(target=process_webex_event, args=(request.json,)).start()
-    return {"status": "ok"}
-
 @app.route("/", methods=["GET"])
 def health():
     return {"status": "ok", "contacts_cached": len(CONTACT_CACHE["contacts"]), "source": CONTACT_CACHE["source"]}
@@ -286,6 +278,11 @@ def initialize():
 @app.route("/cache", methods=["GET"])
 def inspect_cache():
     return jsonify(CONTACT_CACHE)
+
+@app.route("/webex", methods=["POST"])
+def webhook():
+    threading.Thread(target=process_webex_event, args=(request.json,)).start()
+    return {"status": "ok"}
 
 # --------------------------------------------------------------------------
 # START
