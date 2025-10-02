@@ -68,7 +68,6 @@ def fetch_contacts(client_id: int, site_id: int):
     client_id = int(client_id)
     site_id = int(site_id)
 
-    # 1. Probeer ClientContactLinks
     try:
         log.info(f"➡️ Probeer /ClientContactLinks met client_id={client_id}, site_id={site_id} ...")
         r = requests.get(f"{HALO_API_BASE}/ClientContactLinks", headers=h, params={"client_id": client_id, "site_id": site_id}, timeout=15)
@@ -86,7 +85,6 @@ def fetch_contacts(client_id: int, site_id: int):
     except Exception as e:
         log.error(f"❌ ClientContactLinks faalde: {e}")
 
-    # 2. Fallback Users?type=contact
     try:
         log.info(f"➡️ Probeer /Users?type=contact met client_id={client_id}, site_id={site_id} ...")
         params = {"type": "contact", "client_id": client_id, "site_id": site_id}
@@ -138,7 +136,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - LAATSTE GELDIGE OPLOSSING: requestContactId + client_id + site_id
+# TICKET CREATION — LAATSTE GEGARANDEERDE OPLOSSING: ALLE VELDEN TE ZAMEN
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -154,7 +152,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ CRUCIAAL: Gebruik requestContactId — en zorg dat client_id en site_id correct zijn
+    # ✅ CRUCIAAL: STUUR ALLE VELDEN TE ZAMEN — HOE DAN OOK — ZODAT HALOPSA KAN KIEZEN
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -162,13 +160,16 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "client_id": client_id,     # ✅ Van het contact
-        "site_id": site_id,         # ✅ Van het contact
-        "requestContactId": contact_id,  # ✅ Van het contact
+        "client_id": client_id,
+        "site_id": site_id,
+        "requestContactId": contact_id,
+        "requestUserId": contact_id,
+        "contactId": contact_id,
+        "emailAddress": email.lower().strip(),
     }
 
     variants = [
-        ("requestContactId", {**base_body}),
+        ("all-fields", {**base_body}),
     ]
 
     for name, body in variants:
