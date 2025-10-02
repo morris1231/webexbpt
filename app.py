@@ -139,7 +139,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - LAATSTE OPLOSSING: REQUESTUSERID + EMAILADDRESS
+# TICKET CREATION - LAATSTE OPLOSSING: requesterEmail — ZONDER LINK OF ID
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -155,8 +155,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ CRUCIAAL: Gebruik requestUserId — niet requestContactId — als ClientContactLink niet werkt
-    # Dit werkt bij HaloPSA als het contact een "user" is — als je emailAddress meestuurt
+    # ✅ CRUCIAAL: Gebruik requesterEmail — HaloPSA zoekt zelf het contact op op basis van e-mail
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -166,12 +165,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "requestUserId": contact_id,  # ✅ Gebruik requestUserId — zelfs als het een "user" is
-        "emailAddress": email,        # ✅ CRUCIAAL: camelCase — exact zoals in contact
+        "requesterEmail": email.lower().strip(),  # ✅ DIT IS DE LAATSTE SLEUTEL — werkt zonder contact_id of link
     }
 
     variants = [
-        ("requestUserId+emailAddress", {**base_body}),
+        ("requesterEmail", {**base_body}),
     ]
 
     for name, body in variants:
