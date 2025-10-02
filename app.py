@@ -34,6 +34,8 @@ HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET  = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 65))
 HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 1))
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 CONTACT_CACHE = {"contacts": [], "timestamp": 0, "source": "none"}
@@ -58,7 +60,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# CONTACTS ophalen - eerst ClientContactLinks proberen, dan Users?type=contact
+# CONTACTS ophalen
 # --------------------------------------------------------------------------
 def fetch_contacts(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -111,10 +113,6 @@ def get_main_contacts():
         log.info(f"♻️ Cache gebruikt (source: {CONTACT_CACHE['source']}) - {len(CONTACT_CACHE['contacts'])} contacten")
         return CONTACT_CACHE["contacts"]
 
-    # ✅ Gebruik de vaste client_id en site_id om contacten op te halen — maar niet voor ticketaanmaak
-    HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
-    HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", 992))
-    
     log.info(f"🔄 Ophalen contacten voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID}")
     CONTACT_CACHE["contacts"] = fetch_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = now
@@ -125,8 +123,7 @@ def get_halo_contact(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for c in get_main_contacts():
-        # ✅ Alleen contacten van client 986 en site 992 accepteren
-        if int(c.get("client_id", 0)) != int(os.getenv("HALO_CLIENT_ID_NUM", 986)) or int(c.get("site_id", 0)) != int(os.getenv("HALO_SITE_ID", 992)):
+        if int(c.get("client_id", 0)) != HALO_CLIENT_ID_NUM or int(c.get("site_id", 0)) != HALO_SITE_ID:
             continue
         flds = [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login"), c.get("email"), c.get("email1")]
         for f in flds:
@@ -141,7 +138,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - LAATSTE TRUC: ZONDER client_id OF site_id — ALLEEN requesterEmail
+# TICKET CREATION - LAATSTE GELDIGE OPLOSSING: requestContactId + client_id + site_id
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -153,7 +150,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             send_message(room_id, "❌ Geen contact gevonden in Halo. Controleer e-mail en client/site-id.")
         return None
 
-    # ✅ CRUCIAAL: STUUR GEEN client_id OF site_id — ALLEEN requesterEmail
+    contact_id  = int(contact.get("id"))
+    client_id   = int(contact.get("client_id", 0))
+    site_id     = int(contact.get("site_id", 0))
+
+    # ✅ CRUCIAAL: Gebruik requestContactId — en zorg dat client_id en site_id correct zijn
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -161,11 +162,13 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "requesterEmail": email.lower().strip(),  # ✅ DIT IS DE ENIGE VELD DIE HIER TELT
+        "client_id": client_id,     # ✅ Van het contact
+        "site_id": site_id,         # ✅ Van het contact
+        "requestContactId": contact_id,  # ✅ Van het contact
     }
 
     variants = [
-        ("requesterEmail-only", {**base_body}),
+        ("requestContactId", {**base_body}),
     ]
 
     for name, body in variants:
@@ -180,7 +183,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                 msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id}"
                 log.info(msg)
                 if room_id: send_message(room_id, msg)
-                return {"ID": ticket_id, "contact_id": contact.get("id")}
+                return {"ID": ticket_id, "contact_id": contact_id}
         except Exception as e:
             log.error(f"❌ Request faalde bij {name}: {e}")
 
@@ -301,8 +304,8 @@ def debug_halo():
     h = get_halo_headers()
     out = {}
     for name, url in {
-        "/ClientContactLinks": f"{HALO_API_BASE}/ClientContactLinks?client_id={os.getenv('HALO_CLIENT_ID_NUM', 986)}&site_id={os.getenv('HALO_SITE_ID', 992)}",
-        "/Users?type=contact": f"{HALO_API_BASE}/Users?type=contact&client_id={os.getenv('HALO_CLIENT_ID_NUM', 986)}&site_id={os.getenv('HALO_SITE_ID', 992)}"
+        "/ClientContactLinks": f"{HALO_API_BASE}/ClientContactLinks?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}",
+        "/Users?type=contact": f"{HALO_API_BASE}/Users?type=contact&client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}"
     }.items():
         try:
             r = requests.get(url, headers=h, timeout=10)
