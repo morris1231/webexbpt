@@ -42,7 +42,7 @@ HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 CONTACT_CACHE = {"contacts": [], "timestamp": 0, "source": "none"}
-CACHE_DURATION = 24 * 60 * 60  # ✅ GEFIXT: was 24 _60_ 60 → SYNTAXERROR
+CACHE_DURATION = 24 * 60 * 60
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -142,7 +142,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - HALOPSA COMPATIBEL: GEEN requestContactId, GEEN endUserId — ALLEEN contactId
+# TICKET CREATION - HALOPSA COMPATIBEL: GEEN requestContactId, GEEN endUserId — ALLEEN contactId + INT
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -154,9 +154,10 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             send_message(room_id, "❌ Geen contact gevonden in Halo. Controleer e-mail en client/site-id.")
         return None
 
+    # ✅ CRUCIALE FIX: forceer naar int — zelfs als API float teruggeeft
     contact_id  = int(contact.get("id"))
-    client_id   = int(contact.get("client_id") or HALO_CLIENT_ID_NUM)
-    site_id     = int(contact.get("site_id") or HALO_SITE_ID)
+    client_id   = int(contact.get("client_id", 0))   # ✅ Was: int(contact.get("client_id") or HALO_CLIENT_ID_NUM)
+    site_id     = int(contact.get("site_id", 0))     # ✅ Was: int(contact.get("site_id") or HALO_SITE_ID)
 
     base_body = {
         "summary": omschrijving[:100],
@@ -307,7 +308,7 @@ def webhook():
 # --------------------------------------------------------------------------
 # START
 # --------------------------------------------------------------------------
-if __name__ == "__main__":  # ✅ GEFIXT: was **name** → __name__
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
