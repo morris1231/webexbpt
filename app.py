@@ -142,7 +142,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - HALOPSA COMPATIBEL: GEEN requestContactId, GEEN endUserId — ALLEEN contactId + INT
+# TICKET CREATION - HALOPSA COMPATIBEL: ALLE VELDEN IN SNAKE_CASE + contactId
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -154,26 +154,25 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             send_message(room_id, "❌ Geen contact gevonden in Halo. Controleer e-mail en client/site-id.")
         return None
 
-    # ✅ CRUCIALE FIX: forceer naar int — zelfs als API float teruggeeft
     contact_id  = int(contact.get("id"))
-    client_id   = int(contact.get("client_id", 0))   # ✅ Was: int(contact.get("client_id") or HALO_CLIENT_ID_NUM)
-    site_id     = int(contact.get("site_id", 0))     # ✅ Was: int(contact.get("site_id") or HALO_SITE_ID)
+    client_id   = int(contact.get("client_id", 0))
+    site_id     = int(contact.get("site_id", 0))
 
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
-        "typeId": HALO_TICKET_TYPE_ID,
-        "teamId": HALO_TEAM_ID,
-        "impactId": int(impact_id),
-        "urgencyId": int(urgency_id),
-        "clientId": client_id,
-        "siteId": site_id,
-        "emailAddress": email
+        "type_id": HALO_TICKET_TYPE_ID,     # ✅ snake_case
+        "team_id": HALO_TEAM_ID,            # ✅ snake_case
+        "impact_id": int(impact_id),        # ✅ snake_case
+        "urgency_id": int(urgency_id),      # ✅ snake_case
+        "client_id": client_id,             # ✅ snake_case
+        "site_id": site_id,                 # ✅ snake_case
+        "email_address": email              # ✅ snake_case
     }
 
     # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — ALLEEN contactId werkt!
     variants = [
-        ("contactId", {**base_body, "contactId": contact_id}),
+        ("contactId", {**base_body, "contact_id": contact_id}),  # ✅ contact_id, niet contactId
     ]
 
     for name, body in variants:
