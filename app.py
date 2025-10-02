@@ -106,21 +106,19 @@ def get_halo_contact(email: str, room_id=None):
     for c in get_main_contacts():
         for f in [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login")]:
             if f and f.lower() == email:
-                client_id = int(c.get("client_id") or 0)
-                site_id   = int(c.get("site_id") or 0)
-                log.info(f"✅ Match {email} → ID {c.get('id')}, client={client_id}, site={site_id}")
+                log.info(f"✅ Match {email} → ID {c.get('id')}, client={c.get('client_id')}, site={c.get('site_id')}")
                 if room_id:
-                    if client_id == HALO_CLIENT_ID_NUM and site_id == HALO_SITE_ID:
-                        send_message(room_id, f"✅ Gebruiker gevonden: **{c.get('name')}** · Client={client_id}, Site={site_id}")
-                    else:
-                        send_message(room_id, f"⚠️ Gebruiker gevonden, maar gekoppeld aan **Client={client_id}, Site={site_id}** (verwacht Client={HALO_CLIENT_ID_NUM}, Site={HALO_SITE_ID})")
+                    send_message(
+                        room_id,
+                        f"✅ Gebruiker {c.get('name')} gevonden · Client={c.get('client_id')}, Site={c.get('site_id')}"
+                    )
                 return c
     log.warning(f"⚠️ Geen match voor {email}")
     if room_id: send_message(room_id, f"⚠️ Geen contact gevonden in Halo voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION (met fallbacks)
+# TICKET CREATION
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -132,52 +130,38 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
 
     contact_id = int(contact.get("id"))
     contact_name = contact.get("name", "Onbekend")
-    client_id = int(contact.get("client_id") or HALO_CLIENT_ID_NUM)
-    site_id   = int(contact.get("site_id") or HALO_SITE_ID)
 
-    base_body = {
+    body = [{
         "summary": omschrijving[:100],
         "details": omschrijving,
         "typeId": HALO_TICKET_TYPE_ID,
         "teamId": HALO_TEAM_ID,
         "impactId": int(impact_id),
         "urgencyId": int(urgency_id),
-        "clientId": client_id,
-        "siteId": site_id,
+        # Alleen de gebruiker! Client & Site pakt Halo automatisch
+        "requestUserId": contact_id,
         "emailAddress": email
-    }
+    }]
 
-    # Varianten om zeker te zijn wat werkt
-    variants = [
-        ("requestUserId",   {**base_body, "requestUserId": contact_id}),
-        ("requestContactId",{**base_body, "requestContactId": contact_id}),
-        ("userId",          {**base_body, "userId": contact_id}),
-        ("users-array",     {**base_body, "users": [{"id": contact_id}]})
-    ]
-
-    for name, body in variants:
-        log.info(f"➡️ Probeer variant {name}: {json.dumps(body)}")
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=15)
-        log.info(f"⬅️ Halo status {r.status_code} bij {name}")
-        if r.status_code in (200, 201):
-            resp = r.json()
-            ticket = resp[0] if isinstance(resp, list) else resp
-            ticket_id = ticket.get("id") or ticket.get("ID") or "?"
-            log.info(f"✅ Ticket aangemaakt met {name}, ID={ticket_id}")
-            if room_id: send_message(room_id, f"✅ Ticket aangemaakt met variant **{name}**, ID: **{ticket_id}**")
-            # Note toevoegen
-            note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
-                    f"**Probleem:** {omschrijving}\n\n"
-                    f"**Sinds:** {sindswanneer}\n"
-                    f"**Wat werkt niet:** {watwerktniet}\n"
-                    f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
-                    f"**Impact:** {impacttoelichting}")
-            add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
-            return {"ID": ticket_id, "contact_id": contact_id}
-        else:
-            log.warning(f"❌ Variant {name} gefaald: {r.text[:200]}")
-
-    if room_id: send_message(room_id, "❌ Geen enkele variant kon ticket aanmaken. Zie logs.")
+    log.info(f"➡️ Ticket-payload: {json.dumps(body)}")
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=15)
+    if r.status_code in (200, 201):
+        resp = r.json()
+        ticket = resp[0] if isinstance(resp, list) else resp
+        ticket_id = ticket.get("id") or ticket.get("ID") or "?"
+        log.info(f"✅ Ticket aangemaakt, ID={ticket_id}")
+        if room_id: send_message(room_id, f"✅ Ticket aangemaakt in Halo, ID: **{ticket_id}**")
+        note = (f"**Naam:** {contact_name}\n**E-mail:** {email}\n"
+                f"**Probleem:** {omschrijving}\n\n"
+                f"**Sinds:** {sindswanneer}\n"
+                f"**Wat werkt niet:** {watwerktniet}\n"
+                f"**Zelf geprobeerd:** {zelfgeprobeerd}\n"
+                f"**Impact:** {impacttoelichting}")
+        add_note_to_ticket(ticket_id, note, contact_name, email, room_id, contact_id)
+        return {"ID": ticket_id, "contact_id": contact_id}
+    else:
+        log.error(f"❌ Ticket-API fout: {r.status_code} {r.text}")
+        if room_id: send_message(room_id, f"❌ Ticket aanmaken mislukt: {r.text}")
     return None
 
 # --------------------------------------------------------------------------
@@ -245,8 +229,7 @@ def process_webex_event(data):
             send_adaptive_card(room_id)
     elif res == "attachmentActions":
         act_id = data["data"]["id"]
-        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}",
-                              headers=WEBEX_HEADERS).json().get("inputs", {})
+        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
         if not inputs.get("email") or not inputs.get("omschrijving"):
             send_message(data["data"]["roomId"], "⚠️ E-mailadres en omschrijving zijn verplicht.")
             return
