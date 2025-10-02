@@ -142,7 +142,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - HALOPSA COMPATIBEL: ALLE VELDEN IN SNAKE_CASE + contactId
+# TICKET CREATION - HALOPSA COMPATIBEL: MIXED CASE — ZIE UITLEG
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -161,18 +161,18 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
-        "type_id": HALO_TICKET_TYPE_ID,     # ✅ snake_case
-        "team_id": HALO_TEAM_ID,            # ✅ snake_case
-        "impact_id": int(impact_id),        # ✅ snake_case
-        "urgency_id": int(urgency_id),      # ✅ snake_case
+        "typeId": HALO_TICKET_TYPE_ID,      # ✅ camelCase — vereist door HaloPSA
+        "teamId": HALO_TEAM_ID,             # ✅ camelCase
+        "impactId": int(impact_id),         # ✅ camelCase — CRUCIAAL! (was impact_id → fout)
+        "urgencyId": int(urgency_id),       # ✅ camelCase — CRUCIAAL! (was urgency_id → fout)
         "client_id": client_id,             # ✅ snake_case
         "site_id": site_id,                 # ✅ snake_case
         "email_address": email              # ✅ snake_case
     }
 
-    # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — ALLEEN contactId werkt!
+    # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — ALLEEN contact_id werkt (snake_case)
     variants = [
-        ("contactId", {**base_body, "contact_id": contact_id}),  # ✅ contact_id, niet contactId
+        ("contact_id", {**base_body, "contact_id": contact_id}),  # ✅ snake_case
     ]
 
     for name, body in variants:
