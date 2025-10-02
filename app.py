@@ -161,7 +161,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - ZORG DAT ClientContactLink BESTAAT
+# TICKET CREATION - LAATSTE FIX: EMAILADDRESS IN CAMELCASE
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -177,10 +177,10 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ CRUCIAAL: Zorg dat er een ClientContactLink bestaat
+    # ✅ Zorg dat er een ClientContactLink bestaat
     create_client_contact_link(contact_id, client_id, site_id)
 
-    # ✅ Nu veilig: requestContactId gebruiken
+    # ✅ CRUCIAAL: gebruik emailAddress (camelCase) — dit koppelt de naam
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -191,10 +191,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "client_id": client_id,
         "site_id": site_id,
         "requestContactId": contact_id,
+        "emailAddress": email,  # ✅ DIT IS DE LAATSTE SLEUTEL — camelCase, exact als in contact
     }
 
     variants = [
-        ("requestContactId", {**base_body}),
+        ("requestContactId+emailAddress", {**base_body}),
     ]
 
     for name, body in variants:
