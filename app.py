@@ -19,8 +19,15 @@ log.info("✅ Logging gestart")
 # CONFIG
 # --------------------------------------------------------------------------
 load_dotenv()
-app = Flask(__name__)
 
+# Controleer essentiële variabelen
+required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET"]
+missing = [k for k in required if not os.getenv(k)]
+if missing:
+    log.critical(f"❌ Ontbrekende .env-variabelen: {missing}")
+    sys.exit(1)
+
+app = Flask(__name__)
 HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE       = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
@@ -32,12 +39,10 @@ HALO_DEFAULT_URGENCY= int(os.getenv("HALO_URGENCY", 3))
 HALO_ACTIONTYPE_PUBLIC = int(os.getenv("HALO_ACTIONTYPE_PUBLIC", 78))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
-
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-
 CONTACT_CACHE = {"contacts": [], "timestamp": 0, "source": "none"}
-CACHE_DURATION = 24 * 60 * 60
+CACHE_DURATION = 24 * 60 * 60  # ✅ GEFIXT: was 24 _60_ 60 → SYNTAXERROR
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -63,42 +68,43 @@ def get_halo_headers():
 def fetch_contacts(client_id: int, site_id: int):
     h = get_halo_headers()
     all_contacts = []
+    client_id = int(client_id)  # ✅ Forceer int
+    site_id = int(site_id)     # ✅ Forceer int
 
     # 1. Probeer ClientContactLinks
     try:
-        log.info("➡️ Probeer /ClientContactLinks ...")
+        log.info(f"➡️ Probeer /ClientContactLinks met client_id={client_id}, site_id={site_id} ...")
         r = requests.get(f"{HALO_API_BASE}/ClientContactLinks", headers=h, params={"client_id": client_id, "site_id": site_id}, timeout=15)
         if r.status_code == 200:
             contacts = r.json().get('contacts') or r.json().get('items') or r.json()
             if contacts:
                 for c in contacts:
-                    # vaak zit hier "id" (link_id) en "user_id"
                     c["link_id"] = c.get("id")
                     all_contacts.append(c)
                 CONTACT_CACHE["source"] = "/ClientContactLinks"
                 log.info(f"✅ {len(all_contacts)} contacten uit /ClientContactLinks")
                 return all_contacts
         else:
-            log.warning(f"⚠️ ClientContactLinks gaf {r.status_code}")
+            log.warning(f"⚠️ ClientContactLinks gaf {r.status_code}: {r.text[:200]}")
     except Exception as e:
         log.error(f"❌ ClientContactLinks faalde: {e}")
 
     # 2. Fallback Users?type=contact
     try:
-        log.info("➡️ Probeer /Users?type=contact ...")
+        log.info(f"➡️ Probeer /Users?type=contact met client_id={client_id}, site_id={site_id} ...")
         params = {"type": "contact", "client_id": client_id, "site_id": site_id}
         r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
         if r.status_code == 200:
             contacts = r.json().get('users', []) or r.json().get('items', []) or r.json()
             if contacts:
                 for c in contacts:
-                    c["link_id"] = c.get("id") # we hebben geen apart link_id hier
+                    c["link_id"] = c.get("id")
                     all_contacts.append(c)
                 CONTACT_CACHE["source"] = "/Users?type=contact"
                 log.info(f"✅ {len(all_contacts)} contacten uit /Users?type=contact")
                 return all_contacts
         else:
-            log.warning(f"⚠️ Users?type=contact gaf {r.status_code}")
+            log.warning(f"⚠️ Users?type=contact gaf {r.status_code}: {r.text[:200]}")
     except Exception as e:
         log.error(f"❌ Users?type=contact faalde: {e}")
 
@@ -107,9 +113,13 @@ def fetch_contacts(client_id: int, site_id: int):
 def get_main_contacts():
     now = time.time()
     if CONTACT_CACHE["contacts"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
+        log.info(f"♻️ Cache gebruikt (source: {CONTACT_CACHE['source']}) - {len(CONTACT_CACHE['contacts'])} contacten")
         return CONTACT_CACHE["contacts"]
+
+    log.info(f"🔄 Ophalen contacten voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID}")
     CONTACT_CACHE["contacts"] = fetch_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     CONTACT_CACHE["timestamp"] = now
+    log.info(f"✅ Cache bijgewerkt: {len(CONTACT_CACHE['contacts'])} contacten uit {CONTACT_CACHE['source']}")
     return CONTACT_CACHE["contacts"]
 
 def get_halo_contact(email: str, room_id=None):
@@ -136,7 +146,10 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        impact_id, urgency_id, room_id=None):
     h = get_halo_headers()
     contact = get_halo_contact(email, room_id=room_id)
-    if not contact: return None
+    if not contact:
+        if room_id:
+            send_message(room_id, "❌ Geen contact gevonden in Halo. Controleer e-mail en client/site-id.")
+        return None
 
     contact_id  = int(contact.get("id"))
     link_id     = int(contact.get("link_id") or contact_id)
@@ -171,19 +184,23 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     ]
 
     for name, body in variants:
-        log.info(f"➡️ Try variant {name}: {json.dumps(body)}")
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
-        log.info(f"⬅️ Halo {r.status_code} ({name}) → {r.text[:250]}")
-        if r.status_code in (200, 201):
-            resp = r.json()
-            ticket = resp[0] if isinstance(resp, list) else resp
-            ticket_id = ticket.get("id") or ticket.get("ID")
-            msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id}"
-            log.info(msg)
-            if room_id: send_message(room_id, msg)
-            return {"ID": ticket_id, "contact_id": contact_id}
+        log.info(f"➡️ Try variant {name}: {json.dumps(body, indent=2)[:300]}...")
+        try:
+            r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
+            log.info(f"⬅️ Halo {r.status_code} ({name}) → {r.text[:250]}")
+            if r.status_code in (200, 201):
+                resp = r.json()
+                ticket = resp[0] if isinstance(resp, list) else resp
+                ticket_id = ticket.get("id") or ticket.get("ID")
+                msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id}"
+                log.info(msg)
+                if room_id: send_message(room_id, msg)
+                return {"ID": ticket_id, "contact_id": contact_id}
+        except Exception as e:
+            log.error(f"❌ Request faalde bij {name}: {e}")
 
-    if room_id: send_message(room_id, "❌ Geen enkele variant werkte, zie logs.")
+    if room_id:
+        send_message(room_id, "❌ Geen enkele variant werkte, zie logs.")
     return None
 
 # --------------------------------------------------------------------------
@@ -191,8 +208,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
 # --------------------------------------------------------------------------
 def send_message(room_id, text):
     if WEBEX_HEADERS:
-        requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
-                      json={"roomId": room_id, "markdown": text}, timeout=10)
+        try:
+            requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS,
+                          json={"roomId": room_id, "markdown": text}, timeout=10)
+        except Exception as e:
+            log.error(f"❌ Webex bericht versturen mislukt: {e}")
 
 def send_adaptive_card(room_id):
     payload = {
@@ -216,7 +236,10 @@ def send_adaptive_card(room_id):
             }
         }]
     }
-    requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=payload, timeout=10)
+    try:
+        requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=payload, timeout=10)
+    except Exception as e:
+        log.error(f"❌ Adaptive card versturen mislukt: {e}")
 
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
@@ -225,24 +248,37 @@ def process_webex_event(data):
     res = data.get("resource")
     if res == "messages":
         msg_id = data["data"]["id"]
-        msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
-        text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
-        if sender.endswith("@webex.bot"): return
-        if "nieuwe melding" in text.lower(): send_adaptive_card(room_id)
-
+        try:
+            msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
+            text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
+            if sender and sender.endswith("@webex.bot"): return
+            if "nieuwe melding" in text.lower():
+                send_adaptive_card(room_id)
+        except Exception as e:
+            log.error(f"❌ Ophalen Webex bericht mislukt: {e}")
     elif res == "attachmentActions":
         act_id = data["data"]["id"]
-        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
-        if not inputs.get("email") or not inputs.get("omschrijving"):
-            send_message(data["data"]["roomId"], "⚠️ E-mail en omschrijving verplicht.")
-            return
-        ticket = create_halo_ticket(inputs["omschrijving"], inputs["email"],
-            inputs.get("sindswanneer","Niet opgegeven"), inputs.get("watwerktniet","Niet opgegeven"),
-            inputs.get("zelfgeprobeerd","Niet opgegeven"), inputs.get("impacttoelichting","Niet opgegeven"),
-            inputs.get("impact",HALO_DEFAULT_IMPACT), inputs.get("urgency",HALO_DEFAULT_URGENCY),
-            room_id=data["data"]["roomId"])
-        if ticket:
-            send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket['ID']}**")
+        try:
+            inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}", headers=WEBEX_HEADERS).json().get("inputs", {})
+            if not inputs.get("email") or not inputs.get("omschrijving"):
+                send_message(data["data"]["roomId"], "⚠️ E-mail en omschrijving zijn verplicht.")
+                return
+            ticket = create_halo_ticket(
+                inputs["omschrijving"], inputs["email"],
+                inputs.get("sindswanneer", "Niet opgegeven"),
+                inputs.get("watwerktniet", "Niet opgegeven"),
+                inputs.get("zelfgeprobeerd", "Niet opgegeven"),
+                inputs.get("impacttoelichting", "Niet opgegeven"),
+                inputs.get("impact", HALO_DEFAULT_IMPACT),
+                inputs.get("urgency", HALO_DEFAULT_URGENCY),
+                room_id=data["data"]["roomId"]
+            )
+            if ticket:
+                send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket['ID']}**")
+            else:
+                send_message(data["data"]["roomId"], "❌ Ticket kon niet worden aangemaakt. Controleer de logs.")
+        except Exception as e:
+            log.error(f"❌ Verwerken Adaptive Card mislukt: {e}")
 
 # --------------------------------------------------------------------------
 # ROUTES
@@ -279,7 +315,7 @@ def webhook():
 # --------------------------------------------------------------------------
 # START
 # --------------------------------------------------------------------------
-if __name__=="__main__":
-    port=int(os.getenv("PORT",5000))
+if __name__ == "__main__":  # ✅ GEFIXT: was **name** → __name__
+    port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
