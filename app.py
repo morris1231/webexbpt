@@ -68,8 +68,8 @@ def get_halo_headers():
 def fetch_contacts(client_id: int, site_id: int):
     h = get_halo_headers()
     all_contacts = []
-    client_id = int(client_id)  # ✅ Forceer int
-    site_id = int(site_id)     # ✅ Forceer int
+    client_id = int(client_id)
+    site_id = int(site_id)
 
     # 1. Probeer ClientContactLinks
     try:
@@ -126,6 +126,9 @@ def get_halo_contact(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for c in get_main_contacts():
+        # ✅ Alleen contacten van client 986 en site 992 accepteren
+        if int(c.get("client_id", 0)) != HALO_CLIENT_ID_NUM or int(c.get("site_id", 0)) != HALO_SITE_ID:
+            continue
         flds = [c.get("EmailAddress"), c.get("emailaddress"), c.get("PrimaryEmail"), c.get("login"), c.get("email"), c.get("email1")]
         for f in flds:
             if f and f.lower() == email:
@@ -139,7 +142,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - gebruik id én link_id varianten
+# TICKET CREATION - HALOPSA COMPATIBEL: GEEN requestContactId, GEEN endUserId — ALLEEN contactId
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -152,7 +155,6 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         return None
 
     contact_id  = int(contact.get("id"))
-    link_id     = int(contact.get("link_id") or contact_id)
     client_id   = int(contact.get("client_id") or HALO_CLIENT_ID_NUM)
     site_id     = int(contact.get("site_id") or HALO_SITE_ID)
 
@@ -168,19 +170,9 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "emailAddress": email
     }
 
+    # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — ALLEEN contactId werkt!
     variants = [
-        ("requestContactId-id", {**base_body, "requestContactId": contact_id}),
-        ("requestContactId-link", {**base_body, "requestContactId": link_id}),
-        ("requestUserId-id",  {**base_body, "requestUserId": contact_id}),
-        ("requestUserId-link",{**base_body, "requestUserId": link_id}),
-        ("userId-id",         {**base_body, "userId": contact_id}),
-        ("userId-link",       {**base_body, "userId": link_id}),
-        ("users-array-id",    {**base_body, "users": [{"id": contact_id}]}),
-        ("users-array-link",  {**base_body, "users": [{"id": link_id}]}),
-        ("endUserId-id",      {**base_body, "endUserId": contact_id}),
-        ("endUserId-link",    {**base_body, "endUserId": link_id}),
-        ("customerId+reqContact-id",   {**base_body, "customerId": client_id, "requestContactId": contact_id}),
-        ("customerId+reqContact-link", {**base_body, "customerId": client_id, "requestContactId": link_id}),
+        ("contactId", {**base_body, "contactId": contact_id}),
     ]
 
     for name, body in variants:
