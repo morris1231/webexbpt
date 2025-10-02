@@ -139,7 +139,7 @@ def get_halo_contact(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION - HALOPSA COMPATIBEL: STRINGS + CORRECTE VELDEN
+# TICKET CREATION - HALOPSA COMPATIBEL: IMPACT/URGENCY ALS INT
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -155,17 +155,17 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(contact.get("client_id", 0))
     site_id     = int(contact.get("site_id", 0))
 
-    # ✅ JOUW WAARDEN: Impact en Urgency als STRINGS (HaloPSA vereist dit)
+    # ✅ JOUW WAARDEN: impactId en urgencyId MOETEN INT ZIJN — HALOPSA ACCEPTEERT GEEN STRINGS
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
-        "typeId": str(HALO_TICKET_TYPE_ID),   # ✅ string
-        "teamId": str(HALO_TEAM_ID),          # ✅ string
-        "impactId": int(impact_id),           # ✅ CRUCIAAL: string (1=Gehele bedrijf, 2=Meerdere, 3=Eén gebruiker)
-        "urgencyId": int(urgency_id),         # ✅ CRUCIAAL: string (1=High, 2=Medium, 3=Low)
-        "client_id": client_id,               # ✅ snake_case
-        "site_id": site_id,                   # ✅ snake_case
-        "email_address": email                # ✅ snake_case
+        "typeId": HALO_TICKET_TYPE_ID,      # ✅ int
+        "teamId": HALO_TEAM_ID,             # ✅ int
+        "impactId": int(impact_id),         # ✅ CRUCIAAL: int (niet string!)
+        "urgencyId": int(urgency_id),       # ✅ CRUCIAAL: int (niet string!)
+        "client_id": client_id,             # ✅ snake_case
+        "site_id": site_id,                 # ✅ snake_case
+        "email_address": email              # ✅ snake_case
     }
 
     # ✅ HALOPSA: ÉÉN ENDELIJKE GELDIGE VARIANT — contact_id als snake_case
@@ -230,7 +230,7 @@ def send_adaptive_card(room_id):
                             {"title": "Meerdere gebruikers (2)", "value": "2"},
                             {"title": "Één gebruiker (3)", "value": "3"}
                         ],
-                        "value": "3",  # standaard: één gebruiker
+                        "value": "3",
                         "required": True
                     },
                     {
@@ -242,7 +242,7 @@ def send_adaptive_card(room_id):
                             {"title": "Medium (2)", "value": "2"},
                             {"title": "Low (3)", "value": "3"}
                         ],
-                        "value": "3",  # standaard: Low
+                        "value": "3",
                         "required": True
                     }
                 ],
@@ -278,9 +278,9 @@ def process_webex_event(data):
                 send_message(data["data"]["roomId"], "⚠️ E-mail en omschrijving zijn verplicht.")
                 return
 
-            # ✅ Haal impact en urgency op als string (zoals gekozen in dropdown)
-            impact_id = inputs.get("impact", "3")   # default: 3 = één gebruiker
-            urgency_id = inputs.get("urgency", "3") # default: 3 = low
+            # ✅ Dropdown stuurt string → zet om naar int voor HaloPSA
+            impact_id = inputs.get("impact", "3")   # "3" → int(3)
+            urgency_id = inputs.get("urgency", "3") # "3" → int(3)
 
             ticket = create_halo_ticket(
                 inputs["omschrijving"], inputs["email"],
@@ -288,8 +288,8 @@ def process_webex_event(data):
                 inputs.get("watwerktniet", "Niet opgegeven"),
                 inputs.get("zelfgeprobeerd", "Niet opgegeven"),
                 inputs.get("impacttoelichting", "Niet opgegeven"),
-                impact_id,  # ✅ string (1,2,3)
-                urgency_id, # ✅ string (1,2,3)
+                impact_id,  # ✅ int(impact_id) wordt gedaan in create_halo_ticket
+                urgency_id, # ✅ int(urgency_id) wordt gedaan in create_halo_ticket
                 room_id=data["data"]["roomId"]
             )
             if ticket:
@@ -338,4 +338,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
-
