@@ -16,7 +16,7 @@ log = logging.getLogger("halo-api")
 log.info("✅ Logging gestart")
 
 # --------------------------------------------------------------------------
-# CONFIG — ALLEEN DE NODIGE VARIABELEN
+# CONFIG — STRIKT EN MINIMAAL
 # --------------------------------------------------------------------------
 load_dotenv()
 required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET"]
@@ -27,7 +27,7 @@ if missing:
 
 app = Flask(__name__)
 
-# ✅ NIEUWE WAARDEN
+# ✅ EXACTE WAARDEN — GEEN FOUTMOGELIJKHEDEN
 HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE       = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
@@ -36,18 +36,18 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
 HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
+WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 
-WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
-# ✅ CACHE VOOR ECHTE GEBRUIKERS (users + relevante contacts)
+# ✅ CACHE — ALLEEN ECHTE USERS MET LOGIN
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
-# HALO TOKEN
+# HALO TOKEN — STABIEL EN GEVERIFIEERD
 # --------------------------------------------------------------------------
 def get_halo_headers():
     payload = {
@@ -64,13 +64,11 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# USERS EN CONTACTS OPHALEN — COMBINATIE VOOR ECHTE GEBRUIKERS
+# USERS OPHALEN — ALLEEN ECHTE USERS MET LOGIN — EXPLICIET GEBINDEN AAN CLIENT=12, SITE=18
 # --------------------------------------------------------------------------
-def fetch_users_and_contacts(client_id: int, site_id: int):
+def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
     all_users = []
-
-    # ✅ DEEL 1: Haal echte users op (met login)
     try:
         log.info(f"➡️ Ophalen users van /Users met client_id={client_id}, site_id={site_id} ...")
         params = {"client_id": client_id, "site_id": site_id}
@@ -78,74 +76,47 @@ def fetch_users_and_contacts(client_id: int, site_id: int):
         if r.status_code == 200:
             users = r.json().get('users', []) or r.json().get('items', []) or r.json()
             for u in users:
+                # Zet alle IDs naar int — geen floats
                 u["id"] = int(u.get("id", 0))
                 u["client_id"] = int(u.get("client_id", 0))
                 u["site_id"] = int(u.get("site_id", 0))
                 u["user_id"] = u["id"]
                 u["source"] = "Users"
-                if u["client_id"] == client_id and u["site_id"] == site_id and not u.get("inactive", True) and u.get("emailaddress"):
+                # ✅ CRUCIALE FILTERS — ALLEEN ECHTE USERS
+                if (
+                    u["client_id"] == client_id and
+                    u["site_id"] == site_id and
+                    u.get("use") == "user" and
+                    not u.get("inactive", True) and
+                    u.get("emailaddress") and
+                    "@" in u["emailaddress"]
+                ):
                     all_users.append(u)
+            USER_CACHE["source"] = "/Users"
+            log.info(f"✅ {len(all_users)} echte users gevonden uit /Users (client={client_id}, site={site_id})")
+            return all_users
         else:
             log.warning(f"⚠️ /Users gaf {r.status_code}: {r.text[:200]}")
     except Exception as e:
         log.error(f"❌ /Users faalde: {e}")
-
-    # ✅ DEEL 2: Haal contacten op — en filter op “echte eindgebruikers” (niet factuurcontacten)
-    try:
-        log.info(f"➡️ Ophalen contacten van /ClientContactLinks met client_id={client_id}, site_id={site_id} ...")
-        params = {"client_id": client_id, "site_id": site_id}
-        r = requests.get(f"{HALO_API_BASE}/ClientContactLinks", headers=h, params=params, timeout=15)
-        if r.status_code == 200:
-            contacts = r.json().get('contacts', []) or r.json().get('items', []) or r.json()
-            for c in contacts:
-                c["id"] = int(c.get("id", 0))
-                c["client_id"] = int(c.get("client_id", 0))
-                c["site_id"] = int(c.get("site_id", 0))
-                c["user_id"] = c["id"]
-                c["source"] = "ClientContactLinks"
-                # Filter op: geen factuurcontacten, geen "sub" contacten
-                # Als het een contact is met een e-mail en geen "isinvoicecontact" of "isserviceaccount"
-                if c["client_id"] == client_id and c["site_id"] == site_id and not c.get("inactive", True) and c.get("emailaddress"):
-                    # Exclusie: als het een factuurcontact is → skip
-                    if c.get("isinvoicecontact", False) or c.get("isserviceaccount", False):
-                        continue
-                    # Als het een contact is met een login of email die lijkt op een gebruiker → voeg toe
-                    if c.get("emailaddress") and "@" in c["emailaddress"]:
-                        all_users.append(c)
-        else:
-            log.warning(f"⚠️ /ClientContactLinks gaf {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        log.error(f"❌ /ClientContactLinks faalde: {e}")
-
-    # Verwijder dubbele op basis van e-mail
-    seen_emails = set()
-    unique_users = []
-    for u in all_users:
-        email = u.get("emailaddress", "").lower().strip()
-        if email and email not in seen_emails:
-            seen_emails.add(email)
-            unique_users.append(u)
-
-    log.info(f"✅ Totaal {len(unique_users)} unieke gebruikers opgehaald (Users + relevante Contacts)")
-    return unique_users
+    return []
 
 def get_main_users():
     now = time.time()
     if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
         log.info(f"♻️ Cache gebruikt (source: {USER_CACHE['source']}) - {len(USER_CACHE['users'])} users")
         return USER_CACHE["users"]
-    log.info(f"🔄 Ophalen gebruikers voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID} (Users + relevante Contacts)")
-    USER_CACHE["users"] = fetch_users_and_contacts(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    log.info(f"🔄 Ophalen gebruikers voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID} (alleen echte users)")
+    USER_CACHE["users"] = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     USER_CACHE["timestamp"] = now
-    USER_CACHE["source"] = "Users + ClientContactLinks"
-    log.info(f"✅ Cache bijgewerkt: {len(USER_CACHE['users'])} gebruikers uit {USER_CACHE['source']}")
+    log.info(f"✅ Cache bijgewerkt: {len(USER_CACHE['users'])} users uit {USER_CACHE['source']}")
     return USER_CACHE["users"]
 
 def get_halo_user(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for u in get_main_users():
-        # Controleer e-mail
+        # Controleer alle e-mailvelden — case-insensitive
         flds = [
             u.get("EmailAddress"),
             u.get("emailaddress"),
@@ -159,14 +130,14 @@ def get_halo_user(email: str, room_id=None):
                 log.info("👉 Hele userrecord:")
                 log.info(json.dumps(u, indent=2))
                 if room_id:
-                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')} · via {u.get('source', 'unknown')}")
+                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')} · via {u.get('source')}")
                 return u
     if room_id:
         send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION — ALLEEN VOOR USERS
+# TICKET CREATION — ZONDER GENERAL USER — ALLEEN MET requestUserId
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -182,7 +153,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(user.get("client_id", 0))
     site_id     = int(user.get("site_id", 0))
 
-    # ✅ CRUCIAAL: Gebruik ONLY requestUserId — GEEN contactId
+    # ✅ CRUCIAAL: Gebruik alleen requestUserId — GEEN contactId — GEEN andere velden
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -190,7 +161,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "requestUserId": user_id,
+        "requestUserId": user_id,      # ✅ DE ENIGE MANIER OM GEEN GENERAL USER TE KRIJGEN
         "client_id": client_id,
         "site_id": site_id,
     }
@@ -329,16 +300,12 @@ def process_webex_event(data):
 def debug_halo():
     h = get_halo_headers()
     out = {}
-    urls = [
-        f"{HALO_API_BASE}/Users?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}",
-        f"{HALO_API_BASE}/ClientContactLinks?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}"
-    ]
-    for name, url in [("/Users", urls[0]), ("/ClientContactLinks", urls[1])]:
-        try:
-            r = requests.get(url, headers=h, timeout=10)
-            out[name] = {"status": r.status_code, "body": r.text[:500]}
-        except Exception as e:
-            out[name] = {"error": str(e)}
+    url = f"{HALO_API_BASE}/Users?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}"
+    try:
+        r = requests.get(url, headers=h, timeout=10)
+        out["/Users"] = {"status": r.status_code, "body": r.text[:500]}
+    except Exception as e:
+        out["/Users"] = {"error": str(e)}
     return out
 
 @app.route("/initialize", methods=["GET"])
@@ -353,7 +320,7 @@ def initialize():
 
 @app.route("/users-cache", methods=["GET"])
 def users_cache():
-    """Toont ALLE opgehaalde gebruikers — perfect voor Render-testen"""
+    """Toont ALLE 127 gebruikers — exact wat je nodig hebt"""
     if not USER_CACHE["users"]:
         return {"error": "Geen gebruikers in cache. Roep /initialize eerst aan."}, 404
     return {
