@@ -16,7 +16,7 @@ log = logging.getLogger("halo-api")
 log.info("✅ Logging gestart")
 
 # --------------------------------------------------------------------------
-# CONFIG — GEUPDATE MET NIEUWE CLIENT/SITE
+# CONFIG — ALLEEN DE NODIGE VARIABELEN
 # --------------------------------------------------------------------------
 load_dotenv()
 required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET"]
@@ -26,18 +26,24 @@ if missing:
     sys.exit(1)
 
 app = Flask(__name__)
+
+# ✅ ALLEEN DE NODIGE WAARDEN
 HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE       = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET  = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
 HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))   # ✅ UPDATE: 12
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))         # ✅ UPDATE: 18
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
+
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}  # ✅ Nu "users", niet "contacts"
-CACHE_DURATION = 24 * 60 * 60  # ✅ FIX: 24*60*60, niet 24 _60_ 60
+
+# ✅ CACHE VOOR USERS — ALLEEN HET NODIGE
+USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
+CACHE_DURATION = 24 * 60 * 60  # 24 uur
+
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -58,30 +64,29 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# USERS OPHALEN — NU MET NIEUWE CLIENT_ID=12 EN SITE_ID=18
+# USERS OPHALEN — SPECIFIEK VOOR CLIENT=12, SITE=18
 # --------------------------------------------------------------------------
 def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
     all_users = []
-    client_id = int(client_id)
-    site_id = int(site_id)
     try:
-        log.info(f"➡️ Probeer /Users met client_id={client_id}, site_id={site_id} ...")
+        log.info(f"➡️ Ophalen users van /Users met client_id={client_id}, site_id={site_id} ...")
         params = {"client_id": client_id, "site_id": site_id}
         r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
         if r.status_code == 200:
             users = r.json().get('users', []) or r.json().get('items', []) or r.json()
             if users:
                 for u in users:
-                    # Zorg dat alle IDs integers zijn — geen floats!
+                    # Zorg dat alle waarden integers zijn — geen floats!
                     u["id"] = int(u.get("id", 0))
                     u["client_id"] = int(u.get("client_id", 0))
                     u["site_id"] = int(u.get("site_id", 0))
-                    u["user_id"] = u["id"]  # Uniforme key
+                    u["user_id"] = u["id"]  # Uniforme key voor consistentie
+                    # Sla alleen op als ze exact matchen met onze client/site
                     if u["client_id"] == client_id and u["site_id"] == site_id:
                         all_users.append(u)
                 USER_CACHE["source"] = "/Users"
-                log.info(f"✅ {len(all_users)} users uit /Users (client={client_id}, site={site_id})")
+                log.info(f"✅ {len(all_users)} users gevonden uit /Users (client={client_id}, site={site_id})")
                 return all_users
         else:
             log.warning(f"⚠️ /Users gaf {r.status_code}: {r.text[:200]}")
@@ -104,10 +109,18 @@ def get_halo_user(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for u in get_main_users():
-        # Controleer client_id en site_id — moeten exact overeenkomen met config
+        # Controleer dat de user bij client_id=12 en site_id=18 hoort
         if u.get("client_id") != HALO_CLIENT_ID_NUM or u.get("site_id") != HALO_SITE_ID:
             continue
-        flds = [u.get("EmailAddress"), u.get("emailaddress"), u.get("PrimaryEmail"), u.get("login"), u.get("email"), u.get("email1")]
+        # Controleer alle mogelijke e-mailvelden
+        flds = [
+            u.get("EmailAddress"),
+            u.get("emailaddress"),
+            u.get("PrimaryEmail"),
+            u.get("login"),
+            u.get("email"),
+            u.get("email1")
+        ]
         for f in flds:
             if f and f.lower() == email:
                 log.info("👉 Hele userrecord:")
@@ -136,7 +149,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(user.get("client_id", 0))
     site_id     = int(user.get("site_id", 0))
 
-    # ✅ CRUCIAAL: Gebruik ONLY requestUserId — GEEN contactId voor users!
+    # ✅ CRUCIAAL: Gebruik ONLY requestUserId — GEEN contactId
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -144,9 +157,9 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "requestUserId": user_id,      # ✅ ENIGE NODIGE ID VOOR INTERNE USERS
-        "client_id": client_id,        # ✅ Context — moet overeenkomen met client_id van user
-        "site_id": site_id,            # ✅ Context — moet overeenkomen met site_id van user
+        "requestUserId": user_id,
+        "client_id": client_id,
+        "site_id": site_id,
     }
 
     variants = [
@@ -283,14 +296,12 @@ def process_webex_event(data):
 def debug_halo():
     h = get_halo_headers()
     out = {}
-    for name, url in {
-        "/Users": f"{HALO_API_BASE}/Users?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}"
-    }.items():
-        try:
-            r = requests.get(url, headers=h, timeout=10)
-            out[name] = {"status": r.status_code, "body": r.text[:500]}
-        except Exception as e:
-            out[name] = {"error": str(e)}
+    url = f"{HALO_API_BASE}/Users?client_id={HALO_CLIENT_ID_NUM}&site_id={HALO_SITE_ID}"
+    try:
+        r = requests.get(url, headers=h, timeout=10)
+        out["/Users"] = {"status": r.status_code, "body": r.text[:500]}
+    except Exception as e:
+        out["/Users"] = {"error": str(e)}
     return out
 
 @app.route("/initialize", methods=["GET"])
