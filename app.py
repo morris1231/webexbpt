@@ -16,7 +16,7 @@ log = logging.getLogger("halo-api")
 log.info("✅ Logging gestart")
 
 # --------------------------------------------------------------------------
-# CONFIG
+# CONFIG — GEUPDATE MET NIEUWE CLIENT/SITE
 # --------------------------------------------------------------------------
 load_dotenv()
 required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET"]
@@ -30,14 +30,14 @@ HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE       = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET  = os.getenv("HALO_CLIENT_SECRET")
-HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 65))
-HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 1))
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 986))
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 992))
+HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
+HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))   # ✅ UPDATE: 12
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))         # ✅ UPDATE: 18
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-CONTACT_CACHE = {"users": [], "timestamp": 0, "source": "none"}  # ✅ Nu "users", niet "contacts"
-CACHE_DURATION = 24 * 60 * 60  # ✅ FIX: was 24 _60_ 60 → syntaxfout!
+USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}  # ✅ Nu "users", niet "contacts"
+CACHE_DURATION = 24 * 60 * 60  # ✅ FIX: 24*60*60, niet 24 _60_ 60
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -58,7 +58,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# USERS ophalen — NU VOOR INTERNE USERS
+# USERS OPHALEN — NU MET NIEUWE CLIENT_ID=12 EN SITE_ID=18
 # --------------------------------------------------------------------------
 def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -73,10 +73,15 @@ def fetch_users(client_id: int, site_id: int):
             users = r.json().get('users', []) or r.json().get('items', []) or r.json()
             if users:
                 for u in users:
-                    u["user_id"] = u.get("id")  # ✅ Uniforme key
-                    all_users.append(u)
-                CONTACT_CACHE["source"] = "/Users"
-                log.info(f"✅ {len(all_users)} users uit /Users")
+                    # Zorg dat alle IDs integers zijn — geen floats!
+                    u["id"] = int(u.get("id", 0))
+                    u["client_id"] = int(u.get("client_id", 0))
+                    u["site_id"] = int(u.get("site_id", 0))
+                    u["user_id"] = u["id"]  # Uniforme key
+                    if u["client_id"] == client_id and u["site_id"] == site_id:
+                        all_users.append(u)
+                USER_CACHE["source"] = "/Users"
+                log.info(f"✅ {len(all_users)} users uit /Users (client={client_id}, site={site_id})")
                 return all_users
         else:
             log.warning(f"⚠️ /Users gaf {r.status_code}: {r.text[:200]}")
@@ -86,20 +91,21 @@ def fetch_users(client_id: int, site_id: int):
 
 def get_main_users():
     now = time.time()
-    if CONTACT_CACHE["users"] and (now - CONTACT_CACHE["timestamp"] < CACHE_DURATION):
-        log.info(f"♻️ Cache gebruikt (source: {CONTACT_CACHE['source']}) - {len(CONTACT_CACHE['users'])} users")
-        return CONTACT_CACHE["users"]
+    if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
+        log.info(f"♻️ Cache gebruikt (source: {USER_CACHE['source']}) - {len(USER_CACHE['users'])} users")
+        return USER_CACHE["users"]
     log.info(f"🔄 Ophalen users voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID}")
-    CONTACT_CACHE["users"] = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
-    CONTACT_CACHE["timestamp"] = now
-    log.info(f"✅ Cache bijgewerkt: {len(CONTACT_CACHE['users'])} users uit {CONTACT_CACHE['source']}")
-    return CONTACT_CACHE["users"]
+    USER_CACHE["users"] = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    USER_CACHE["timestamp"] = now
+    log.info(f"✅ Cache bijgewerkt: {len(USER_CACHE['users'])} users uit {USER_CACHE['source']}")
+    return USER_CACHE["users"]
 
 def get_halo_user(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for u in get_main_users():
-        if int(u.get("client_id", 0)) != HALO_CLIENT_ID_NUM or int(u.get("site_id", 0)) != HALO_SITE_ID:
+        # Controleer client_id en site_id — moeten exact overeenkomen met config
+        if u.get("client_id") != HALO_CLIENT_ID_NUM or u.get("site_id") != HALO_SITE_ID:
             continue
         flds = [u.get("EmailAddress"), u.get("emailaddress"), u.get("PrimaryEmail"), u.get("login"), u.get("email"), u.get("email1")]
         for f in flds:
@@ -107,7 +113,7 @@ def get_halo_user(email: str, room_id=None):
                 log.info("👉 Hele userrecord:")
                 log.info(json.dumps(u, indent=2))
                 if room_id:
-                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')} · via {CONTACT_CACHE['source']}")
+                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')} · via {USER_CACHE['source']}")
                 return u
     if room_id:
         send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
@@ -139,9 +145,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
         "requestUserId": user_id,      # ✅ ENIGE NODIGE ID VOOR INTERNE USERS
-        "client_id": client_id,        # ✅ Context
-        "site_id": site_id,            # ✅ Context
-        # "contactId": user_id,        # ❌ VERWIJDERD! Dit is voor contacts, niet voor users!
+        "client_id": client_id,        # ✅ Context — moet overeenkomen met client_id van user
+        "site_id": site_id,            # ✅ Context — moet overeenkomen met site_id van user
     }
 
     variants = [
@@ -290,12 +295,12 @@ def debug_halo():
 
 @app.route("/initialize", methods=["GET"])
 def initialize():
-    get_main_users()  # ✅ Nu get_main_users()
-    return {"status":"initialized","cache_size":len(CONTACT_CACHE['users']),"source":CONTACT_CACHE["source"]}
+    get_main_users()
+    return {"status":"initialized","cache_size":len(USER_CACHE['users']),"source":USER_CACHE["source"]}
 
 @app.route("/", methods=["GET"])
 def health():
-    return {"status":"ok","users_cached":len(CONTACT_CACHE["users"]), "source":CONTACT_CACHE["source"]}
+    return {"status":"ok","users_cached":len(USER_CACHE["users"]), "source":USER_CACHE["source"]}
 
 @app.route("/webex", methods=["POST"])
 def webhook():
@@ -305,7 +310,7 @@ def webhook():
 # --------------------------------------------------------------------------
 # START
 # --------------------------------------------------------------------------
-if __name__ == "__main__":  # ✅ FIX: was "**name**" → fout!
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
