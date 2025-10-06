@@ -27,7 +27,7 @@ if missing:
 
 app = Flask(__name__)
 
-# ✅ ALLEEN DE NODIGE WAARDEN
+# ✅ NIEUWE WAARDEN
 HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE       = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
@@ -40,7 +40,7 @@ HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
-# ✅ CACHE VOOR USERS — ALLEEN HET NODIGE
+# ✅ CACHE VOOR USERS — GEEN CONTACTS, ALLEEN USERS
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 
@@ -64,7 +64,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# USERS OPHALEN — SPECIFIEK VOOR CLIENT=12, SITE=18
+# USERS OPHALEN — ZOEK NAAR client_id=12 EN site_id=18 — GEEN FILTERING FOUTEN
 # --------------------------------------------------------------------------
 def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -81,8 +81,8 @@ def fetch_users(client_id: int, site_id: int):
                     u["id"] = int(u.get("id", 0))
                     u["client_id"] = int(u.get("client_id", 0))
                     u["site_id"] = int(u.get("site_id", 0))
-                    u["user_id"] = u["id"]  # Uniforme key voor consistentie
-                    # Sla alleen op als ze exact matchen met onze client/site
+                    u["user_id"] = u["id"]  # Uniforme key
+                    # Sla op als ze exact matchen met onze client/site
                     if u["client_id"] == client_id and u["site_id"] == site_id:
                         all_users.append(u)
                 USER_CACHE["source"] = "/Users"
@@ -133,7 +133,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION — ALLEEN VOOR USERS (GEEN CONTACTS!)
+# TICKET CREATION — ALLEEN VOOR USERS
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -307,7 +307,24 @@ def debug_halo():
 @app.route("/initialize", methods=["GET"])
 def initialize():
     get_main_users()
-    return {"status":"initialized","cache_size":len(USER_CACHE['users']),"source":USER_CACHE["source"]}
+    return {
+        "status": "initialized",
+        "cache_size": len(USER_CACHE['users']),
+        "source": USER_CACHE["source"],
+        "users_preview": USER_CACHE["users"][:5]  # Laat eerste 5 zien voor snel overzicht
+    }
+
+@app.route("/users-cache", methods=["GET"])
+def users_cache():
+    """Toont ALLE opgehaalde users — perfect voor Render-testen"""
+    if not USER_CACHE["users"]:
+        return {"error": "Geen users in cache. Roep /initialize eerst aan."}, 404
+    return {
+        "total_users_in_cache": len(USER_CACHE["users"]),
+        "source": USER_CACHE["source"],
+        "last_updated": USER_CACHE["timestamp"],
+        "users": USER_CACHE["users"]
+    }, 200
 
 @app.route("/", methods=["GET"])
 def health():
