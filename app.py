@@ -36,8 +36,8 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))  # ✅ 66
 HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))         # ✅ 35
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))   # ✅ 12
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))         # ✅ 18
-WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 
+WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
@@ -54,10 +54,12 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
-    r = requests.post(HALO_AUTH_URL,
-                      headers={"Content-Type": "application/x-www-form-urlencoded"},
-                      data=urllib.parse.urlencode(payload),
-                      timeout=10)
+    r = requests.post(
+        HALO_AUTH_URL,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=urllib.parse.urlencode(payload),
+        timeout=10
+    )
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
@@ -69,7 +71,6 @@ def fetch_users(client_id: int, site_id: int):
     all_users = []
     page = 1
     per_page = 100
-
     while True:
         log.info(f"➡️ Ophalen pagina {page} van /Users met client_id={client_id}, site_id={site_id}...")
         params = {"client_id": client_id, "site_id": site_id, "page": page, "per_page": per_page}
@@ -78,7 +79,8 @@ def fetch_users(client_id: int, site_id: int):
             log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
         users = r.json().get('users', []) or r.json().get('items', []) or r.json()
-        if not users: break
+        if not users:
+            break
         for u in users:
             u["id"] = int(u.get("id", 0))
             u["client_id"] = int(u.get("client_id", 0))
@@ -96,7 +98,6 @@ def fetch_users(client_id: int, site_id: int):
         if len(users) < per_page:
             break
         page += 1
-
     USER_CACHE["source"] = "/Users (paginated)"
     log.info(f"✅ Totaal {len(all_users)} echte users opgehaald uit alle pagina's")
     return all_users
@@ -112,7 +113,8 @@ def get_main_users():
     return USER_CACHE["users"]
 
 def get_halo_user(email: str, room_id=None):
-    if not email: return None
+    if not email:
+        return None
     email = email.lower().strip()
     for u in get_main_users():
         flds = [u.get("EmailAddress"), u.get("emailaddress"), u.get("PrimaryEmail"),
@@ -143,7 +145,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(user.get("client_id", 0))
     site_id     = int(user.get("site_id", 0))
 
-    # ✅ Basis body (lowercase velden, Halo-vriendelijk)
+    # ✅ Basis body
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -155,7 +157,11 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     }
 
     type_variants = ["typeid", "tickettypeid", "ticketTypeId"]
-    user_variants = ["userid", "userId", "requestedbyid", "requestedById", "requestuserid", "requestUserId"]
+    user_variants = [
+        "userid", "userId",
+        "requestedbyid", "requestedById",
+        "requestuserid", "requestUserId"
+    ]
 
     for type_field in type_variants:
         for user_field in user_variants:
@@ -163,17 +169,28 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             name = f"{type_field}/{user_field}"
             log.info(f"➡️ Try variant {name}: {json.dumps(body, indent=2)[:300]}...")
             try:
-                r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=20)
+                # ✅ FIXED: Halo expects an array, not a single object
+                r = requests.post(
+                    f"{HALO_API_BASE}/Tickets",
+                    headers=h,
+                    json=[body],
+                    timeout=20
+                )
+
                 log.info(f"⬅️ Halo {r.status_code} ({name}) → {r.text[:250]}")
                 if r.status_code in (200, 201):
                     resp = r.json()
-                    ticket = resp[0] if isinstance(resp, list) else resp
+                    ticket = resp[0] if isinstance(resp, list) and resp else resp
                     ticket_id = ticket.get("id") or ticket.get("ID")
-                    msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id} | RequestedBy: {user.get('name')} | Team: {HALO_TEAM_ID}"
+                    msg = (
+                        f"✅ Ticket gelukt via {name} → TicketID={ticket_id} | "
+                        f"RequestedBy: {user.get('name')} | Team: {HALO_TEAM_ID}"
+                    )
                     log.info(msg)
                     if room_id:
                         send_message(room_id, msg)
                     return {"ID": ticket_id, "user_id": user_id}
+
             except Exception as e:
                 log.error(f"❌ Request faalde bij {name}: {e}")
 
@@ -251,7 +268,8 @@ def process_webex_event(data):
         try:
             msg = requests.get(f"https://webexapis.com/v1/messages/{msg_id}", headers=WEBEX_HEADERS).json()
             text, room_id, sender = msg.get("text", ""), msg.get("roomId"), msg.get("personEmail")
-            if sender and sender.endswith("@webex.bot"): return
+            if sender and sender.endswith("@webex.bot"):
+                return
             if "nieuwe melding" in text.lower():
                 send_adaptive_card(room_id)
         except Exception as e:
@@ -311,12 +329,12 @@ def users_cache():
 
 @app.route("/", methods=["GET"])
 def health():
-    return {"status":"ok","users_cached":len(USER_CACHE["users"]), "source":USER_CACHE["source"]}
+    return {"status": "ok", "users_cached": len(USER_CACHE["users"]), "source": USER_CACHE["source"]}
 
 @app.route("/webex", methods=["POST"])
 def webhook():
     threading.Thread(target=process_webex_event, args=(request.json,)).start()
-    return {"status":"ok"}
+    return {"status": "ok"}
 
 # --------------------------------------------------------------------------
 # START
