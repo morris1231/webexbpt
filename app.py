@@ -151,7 +151,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET CREATION — ZONDER GENERAL USER — MET JUISTE TEAM
+# ✅ FIXED: TICKET CREATION — MET CORRECTE USER ID FIELD
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -167,22 +167,22 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(user.get("client_id", 0))
     site_id     = int(user.get("site_id", 0))
 
-    # ✅ CRUCIAAL: Gebruik alleen requestUserId — GEEN contactId
-    # ✅ Zorg dat de gebruiker lid is van het team van het tickettype
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
         "typeId": HALO_TICKET_TYPE_ID,
-        "teamId": HALO_TEAM_ID,        # ✅ TEAM 35 — ZORG DAT DE GEBRUIKER LID IS VAN DIT TEAM
+        "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "requestUserId": user_id,      # ✅ DE ENIGE MANIER OM GEEN GENERAL USER TE KRIJGEN
         "client_id": client_id,
         "site_id": site_id,
     }
 
+    # ✅ Test mogelijke correcte user-ID velden
     variants = [
-        ("requestUserId-only", {**base_body}),
+        ("userId", {**base_body, "userId": user_id}),
+        ("requestedById", {**base_body, "requestedById": user_id}),
+        ("requestUserId", {**base_body, "requestUserId": user_id}),
     ]
 
     for name, body in variants:
@@ -196,7 +196,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                 ticket_id = ticket.get("id") or ticket.get("ID")
                 msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id} | RequestedBy: {user.get('name')} | Team: {HALO_TEAM_ID}"
                 log.info(msg)
-                if room_id: send_message(room_id, msg)
+                if room_id:
+                    send_message(room_id, msg)
                 return {"ID": ticket_id, "user_id": user_id}
         except Exception as e:
             log.error(f"❌ Request faalde bij {name}: {e}")
