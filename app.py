@@ -156,7 +156,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "siteid": site_id,
     }
 
-    type_variants = ["typeid", "tickettypeid", "ticketTypeId"]
+    # ✅ Correct field for Halo: typeId
+    type_variants = ["typeId"]
     user_variants = [
         "userid", "userId",
         "requestedbyid", "requestedById",
@@ -337,7 +338,7 @@ def webhook():
     return {"status": "ok"}
 
 # --------------------------------------------------------------------------
-# START
+# START SERVER
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
