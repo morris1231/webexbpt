@@ -40,10 +40,8 @@ WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
-# ✅ CACHE — ALLEEN ECHTE USERS MET LOGIN
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
-
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -64,7 +62,7 @@ def get_halo_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# USERS OPHALEN — MET PAGINATIE — ALLE 127 ECHTE USERS
+# USERS OPHALEN
 # --------------------------------------------------------------------------
 def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
@@ -73,29 +71,19 @@ def fetch_users(client_id: int, site_id: int):
     per_page = 100
 
     while True:
-        log.info(f"➡️ Ophalen pagina {page} van /Users met client_id={client_id}, site_id={site_id} (per_page={per_page})...")
-        params = {
-            "client_id": client_id,
-            "site_id": site_id,
-            "page": page,
-            "per_page": per_page
-        }
+        log.info(f"➡️ Ophalen pagina {page} van /Users met client_id={client_id}, site_id={site_id}...")
+        params = {"client_id": client_id, "site_id": site_id, "page": page, "per_page": per_page}
         r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
             log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-
         users = r.json().get('users', []) or r.json().get('items', []) or r.json()
-        if not users:
-            break
-
+        if not users: break
         for u in users:
             u["id"] = int(u.get("id", 0))
             u["client_id"] = int(u.get("client_id", 0))
             u["site_id"] = int(u.get("site_id", 0))
             u["user_id"] = u["id"]
-            u["source"] = "Users"
-
             if (
                 u["client_id"] == client_id and
                 u["site_id"] == site_id and
@@ -105,9 +93,6 @@ def fetch_users(client_id: int, site_id: int):
                 "@" in u["emailaddress"]
             ):
                 all_users.append(u)
-
-        log.info(f"✅ Pagina {page}: {len(users)} gebruikers, totaal: {len(all_users)}")
-
         if len(users) < per_page:
             break
         page += 1
@@ -121,37 +106,28 @@ def get_main_users():
     if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
         log.info(f"♻️ Cache gebruikt (source: {USER_CACHE['source']}) - {len(USER_CACHE['users'])} users")
         return USER_CACHE["users"]
-    log.info(f"🔄 Ophalen gebruikers voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID} (alleen echte users)")
+    log.info(f"🔄 Ophalen gebruikers voor client_id={HALO_CLIENT_ID_NUM}, site_id={HALO_SITE_ID}")
     USER_CACHE["users"] = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     USER_CACHE["timestamp"] = now
-    log.info(f"✅ Cache bijgewerkt: {len(USER_CACHE['users'])} users uit {USER_CACHE['source']}")
     return USER_CACHE["users"]
 
 def get_halo_user(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
     for u in get_main_users():
-        flds = [
-            u.get("EmailAddress"),
-            u.get("emailaddress"),
-            u.get("PrimaryEmail"),
-            u.get("login"),
-            u.get("email"),
-            u.get("email1")
-        ]
+        flds = [u.get("EmailAddress"), u.get("emailaddress"), u.get("PrimaryEmail"),
+                u.get("login"), u.get("email"), u.get("email1")]
         for f in flds:
             if f and f.lower() == email:
-                log.info("👉 Hele userrecord:")
-                log.info(json.dumps(u, indent=2))
                 if room_id:
-                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')} · via {u.get('source')}")
+                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')}")
                 return u
     if room_id:
         send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# ✅ FIXED: TICKET CREATION — MET CORRECTE USER ID FIELD
+# FIXED — TICKET CREATION
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -167,40 +143,39 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id   = int(user.get("client_id", 0))
     site_id     = int(user.get("site_id", 0))
 
+    # ✅ Basis body (lowercase velden, Halo-vriendelijk)
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
-        "typeId": HALO_TICKET_TYPE_ID,
-        "teamId": HALO_TEAM_ID,
+        "teamid": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "client_id": client_id,
-        "site_id": site_id,
+        "clientid": client_id,
+        "siteid": site_id,
     }
 
-    # ✅ Test mogelijke correcte user-ID velden
-    variants = [
-        ("userId", {**base_body, "userId": user_id}),
-        ("requestedById", {**base_body, "requestedById": user_id}),
-        ("requestUserId", {**base_body, "requestUserId": user_id}),
-    ]
+    type_variants = ["typeid", "tickettypeid", "ticketTypeId"]
+    user_variants = ["userid", "userId", "requestedbyid", "requestedById", "requestuserid", "requestUserId"]
 
-    for name, body in variants:
-        log.info(f"➡️ Try variant {name}: {json.dumps(body, indent=2)[:300]}...")
-        try:
-            r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
-            log.info(f"⬅️ Halo {r.status_code} ({name}) → {r.text[:250]}")
-            if r.status_code in (200, 201):
-                resp = r.json()
-                ticket = resp[0] if isinstance(resp, list) else resp
-                ticket_id = ticket.get("id") or ticket.get("ID")
-                msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id} | RequestedBy: {user.get('name')} | Team: {HALO_TEAM_ID}"
-                log.info(msg)
-                if room_id:
-                    send_message(room_id, msg)
-                return {"ID": ticket_id, "user_id": user_id}
-        except Exception as e:
-            log.error(f"❌ Request faalde bij {name}: {e}")
+    for type_field in type_variants:
+        for user_field in user_variants:
+            body = {**base_body, type_field: HALO_TICKET_TYPE_ID, user_field: user_id}
+            name = f"{type_field}/{user_field}"
+            log.info(f"➡️ Try variant {name}: {json.dumps(body, indent=2)[:300]}...")
+            try:
+                r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=20)
+                log.info(f"⬅️ Halo {r.status_code} ({name}) → {r.text[:250]}")
+                if r.status_code in (200, 201):
+                    resp = r.json()
+                    ticket = resp[0] if isinstance(resp, list) else resp
+                    ticket_id = ticket.get("id") or ticket.get("ID")
+                    msg = f"✅ Ticket gelukt via {name} → TicketID={ticket_id} | RequestedBy: {user.get('name')} | Team: {HALO_TEAM_ID}"
+                    log.info(msg)
+                    if room_id:
+                        send_message(room_id, msg)
+                    return {"ID": ticket_id, "user_id": user_id}
+            except Exception as e:
+                log.error(f"❌ Request faalde bij {name}: {e}")
 
     if room_id:
         send_message(room_id, "❌ Geen enkele variant werkte, zie logs.")
@@ -229,15 +204,14 @@ def send_adaptive_card(room_id):
                 "body": [
                     {"type": "TextBlock", "text": "🆕 Nieuwe melding", "weight": "bolder"},
                     {"type": "Input.Text", "id": "email", "placeholder": "E-mailadres van gebruiker", "required": True},
-                    {"type": "Input.Text", "id": "omschrijving", "placeholder": "Korte omschrijving van het probleem", "required": True},
-                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer is het probleem aanwezig?"},
-                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt precies niet?"},
-                    {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Wat heb je zelf al geprobeerd?"},
-                    {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Toelichting op impact (optioneel)"},
+                    {"type": "Input.Text", "id": "omschrijving", "placeholder": "Korte omschrijving", "required": True},
+                    {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
+                    {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
+                    {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Wat heb je al geprobeerd?"},
+                    {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Impact toelichting"},
                     {
                         "type": "Input.ChoiceSet",
                         "id": "impact",
-                        "label": "Impact",
                         "choices": [
                             {"title": "Gehele bedrijf (1)", "value": "1"},
                             {"title": "Meerdere gebruikers (2)", "value": "2"},
@@ -249,7 +223,6 @@ def send_adaptive_card(room_id):
                     {
                         "type": "Input.ChoiceSet",
                         "id": "urgency",
-                        "label": "Urgency",
                         "choices": [
                             {"title": "High (1)", "value": "1"},
                             {"title": "Medium (2)", "value": "2"},
@@ -298,9 +271,7 @@ def process_webex_event(data):
                 inputs.get("watwerktniet", "Niet opgegeven"),
                 inputs.get("zelfgeprobeerd", "Niet opgegeven"),
                 inputs.get("impacttoelichting", "Niet opgegeven"),
-                impact_id,
-                urgency_id,
-                room_id=data["data"]["roomId"]
+                impact_id, urgency_id, room_id=data["data"]["roomId"]
             )
             if ticket:
                 send_message(data["data"]["roomId"], f"✅ Ticket aangemaakt: **{ticket['ID']}**")
@@ -327,23 +298,16 @@ def debug_halo():
 @app.route("/initialize", methods=["GET"])
 def initialize():
     get_main_users()
-    return {
-        "status": "initialized",
-        "cache_size": len(USER_CACHE['users']),
-        "source": USER_CACHE["source"],
-        "users_preview": USER_CACHE["users"][:5]
-    }
+    return {"status": "initialized", "cache_size": len(USER_CACHE['users']),
+            "source": USER_CACHE["source"], "users_preview": USER_CACHE["users"][:5]}
 
 @app.route("/users-cache", methods=["GET"])
 def users_cache():
     if not USER_CACHE["users"]:
         return {"error": "Geen gebruikers in cache. Roep /initialize eerst aan."}, 404
-    return {
-        "total_users_in_cache": len(USER_CACHE["users"]),
-        "source": USER_CACHE["source"],
-        "last_updated": USER_CACHE["timestamp"],
-        "users": USER_CACHE["users"]
-    }, 200
+    return {"total_users_in_cache": len(USER_CACHE["users"]),
+            "source": USER_CACHE["source"], "last_updated": USER_CACHE["timestamp"],
+            "users": USER_CACHE["users"]}, 200
 
 @app.route("/", methods=["GET"])
 def health():
