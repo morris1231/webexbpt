@@ -130,7 +130,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN — alleen UID
+# TICKET AANMAKEN — gebruik uid & stuur in list
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -146,7 +146,6 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", 0))
     site_id   = int(user.get("site_id", 0))
 
-    # ✅ simplified, only "uid"
     ticket_data = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -155,12 +154,13 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "uid": user_id
+        "uid": user_id   # <- field confirmed by Halo support
     }
 
     log.info(f"➡️ Ticket data: {json.dumps(ticket_data, indent=2)}")
     try:
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=ticket_data, timeout=20)
+        # ✅ POST as array (Halo expects Faults[])
+        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[ticket_data], timeout=20)
         log.info(f"⬅️ Halo {r.status_code}: {r.text[:250]}")
         if r.status_code in (200, 201):
             resp = r.json()
