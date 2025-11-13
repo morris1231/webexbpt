@@ -2,7 +2,6 @@ import os, urllib.parse, logging, sys, time, threading, json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import requests
-
 # --------------------------------------------------------------------------
 # LOGGING
 # --------------------------------------------------------------------------
@@ -14,7 +13,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("halo-api")
 log.info("✅ Logging gestart")
-
 # --------------------------------------------------------------------------
 # CONFIG — STRIKT EN MINIMAAL
 # --------------------------------------------------------------------------
@@ -24,9 +22,7 @@ missing = [k for k in required if not os.getenv(k)]
 if missing:
     log.critical(f"❌ Ontbrekende .env-variabelen: {missing}")
     sys.exit(1)
-
 app = Flask(__name__)
-
 # ✅ EXACTE WAARDEN — GEEN FOUTMOGELIJKHEDEN
 HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE       = os.getenv("HALO_API_BASE")
@@ -37,15 +33,11 @@ HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))         # ✅ 35
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))   # ✅ 12
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))         # ✅ 18
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
-
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-
 # ✅ CACHE — ALLEEN ECHTE USERS MET LOGIN
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
-
 ticket_room_map = {}
-
 # --------------------------------------------------------------------------
 # HALO TOKEN
 # --------------------------------------------------------------------------
@@ -62,7 +54,6 @@ def get_halo_headers():
                       timeout=10)
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
-
 # --------------------------------------------------------------------------
 # USERS OPHALEN — MET PAGINATIE — ALLE 45+ ECHTE USERS
 # --------------------------------------------------------------------------
@@ -71,7 +62,6 @@ def fetch_users(client_id: int, site_id: int):
     all_users = []
     page = 1
     per_page = 100
-
     while True:
         log.info(f"➡️ Ophalen pagina {page} van /Users met client_id={client_id}, site_id={site_id} (per_page={per_page})...")
         params = {
@@ -84,18 +74,15 @@ def fetch_users(client_id: int, site_id: int):
         if r.status_code != 200:
             log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-
         users = r.json().get('users', []) or r.json().get('items', []) or r.json()
         if not users:
             break
-
         for u in users:
             u["id"] = int(u.get("id", 0))
             u["client_id"] = int(u.get("client_id", 0))
             u["site_id"] = int(u.get("site_id", 0))
             u["user_id"] = u["id"]
             u["source"] = "Users"
-
             if (
                 u["client_id"] == client_id and
                 u["site_id"] == site_id and
@@ -105,17 +92,13 @@ def fetch_users(client_id: int, site_id: int):
                 "@" in u["emailaddress"]
             ):
                 all_users.append(u)
-
         log.info(f"✅ Pagina {page}: {len(users)} gebruikers, totaal: {len(all_users)}")
-
         if len(users) < per_page:
             break
         page += 1
-
     USER_CACHE["source"] = "/Users (paginated)"
     log.info(f"✅ Totaal {len(all_users)} echte users opgehaald uit alle pagina's")
     return all_users
-
 def get_main_users():
     now = time.time()
     if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
@@ -126,7 +109,6 @@ def get_main_users():
     USER_CACHE["timestamp"] = now
     log.info(f"✅ Cache bijgewerkt: {len(USER_CACHE['users'])} users uit {USER_CACHE['source']}")
     return USER_CACHE["users"]
-
 def get_halo_user(email: str, room_id=None):
     if not email: return None
     email = email.lower().strip()
@@ -149,7 +131,6 @@ def get_halo_user(email: str, room_id=None):
     if room_id:
         send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
     return None
-
 # --------------------------------------------------------------------------
 # TICKET CREATION — ZONDER GENERAL USER — MET JUISTE TEAM EN TICKETTYPE
 # --------------------------------------------------------------------------
@@ -162,12 +143,10 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         if room_id:
             send_message(room_id, "❌ Geen gebruiker gevonden in Halo. Controleer e-mail en client/site-id.")
         return None
-
     user_id     = int(user.get("id"))
     client_id   = int(user.get("client_id", 0))
     site_id     = int(user.get("site_id", 0))
-
-    # ✅ CRUCIAAL: Gebruik ONLY requestUserId — GEEN contactId — EN GEEN typeId — WEL tickettype_id!
+    # ✅ CRUCIAAL: Gebruik ONLY userId — GEEN requestUserId!
     base_body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -175,15 +154,13 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
-        "requestUserId": user_id,
+        "userId": user_id,  # ✅ VERVANG requestUserId MET userId
         "client_id": client_id,
         "site_id": site_id,
     }
-
     variants = [
-        ("requestUserId-only", {**base_body}),
+        ("userId-only", {**base_body}),
     ]
-
     for name, body in variants:
         log.info(f"➡️ Try variant {name}: {json.dumps(body, indent=2)[:300]}...")
         try:
@@ -199,11 +176,9 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                 return {"ID": ticket_id, "user_id": user_id}
         except Exception as e:
             log.error(f"❌ Request faalde bij {name}: {e}")
-
     if room_id:
         send_message(room_id, "❌ Geen enkele variant werkte, zie logs.")
     return None
-
 # --------------------------------------------------------------------------
 # WEBEX HELPERS
 # --------------------------------------------------------------------------
@@ -214,7 +189,6 @@ def send_message(room_id, text):
                           json={"roomId": room_id, "markdown": text}, timeout=10)
         except Exception as e:
             log.error(f"❌ Webex bericht versturen mislukt: {e}")
-
 def send_adaptive_card(room_id):
     payload = {
         "roomId": room_id,
@@ -265,7 +239,6 @@ def send_adaptive_card(room_id):
         requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=payload, timeout=10)
     except Exception as e:
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
-
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
 # --------------------------------------------------------------------------
@@ -306,7 +279,6 @@ def process_webex_event(data):
                 send_message(data["data"]["roomId"], "❌ Ticket kon niet worden aangemaakt. Controleer de logs.")
         except Exception as e:
             log.error(f"❌ Verwerken Adaptive Card mislukt: {e}")
-
 # --------------------------------------------------------------------------
 # ROUTES
 # --------------------------------------------------------------------------
@@ -321,7 +293,6 @@ def debug_halo():
     except Exception as e:
         out["/Users"] = {"error": str(e)}
     return out
-
 @app.route("/initialize", methods=["GET"])
 def initialize():
     get_main_users()
@@ -331,7 +302,6 @@ def initialize():
         "source": USER_CACHE["source"],
         "users_preview": USER_CACHE["users"][:5]
     }
-
 @app.route("/users-cache", methods=["GET"])
 def users_cache():
     if not USER_CACHE["users"]:
@@ -342,16 +312,13 @@ def users_cache():
         "last_updated": USER_CACHE["timestamp"],
         "users": USER_CACHE["users"]
     }, 200
-
 @app.route("/", methods=["GET"])
 def health():
     return {"status":"ok","users_cached":len(USER_CACHE["users"]), "source":USER_CACHE["source"]}
-
 @app.route("/webex", methods=["POST"])
 def webhook():
     threading.Thread(target=process_webex_event, args=(request.json,)).start()
     return {"status":"ok"}
-
 # --------------------------------------------------------------------------
 # START
 # --------------------------------------------------------------------------
