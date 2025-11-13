@@ -31,7 +31,7 @@ HALO_AUTH_URL = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE = os.getenv("HALO_API_BASE")  
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")  
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")  
-HALO_TICKET_TYPE_ID = 66  # ✅ Correcte tickettype ID vanuit link
+HALO_TICKET_TYPE_ID = 66  # ✅ Ticket type ID (gebruikt voor referentie)
 HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", 1))  # ✅ TEAMID IS NU 1
 HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", 18))  
@@ -150,7 +150,9 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", HALO_CLIENT_ID_NUM))  
     site_id = int(user.get("site_id", HALO_SITE_ID))  
     
-    # CORRECTIE: Gebruik "Type" met HOOFDLETTER T EN als STRING
+    # CRUCIALE FIX: Gebruik categoryid en issueid in plaats van Type-veld
+    # Vervang de waarden hieronder met de correcte IDs voor ticket type 66
+    # (Vind deze in: https://bncuat.halopsa.com/config/tickets/tickettype?id=66)
     body = {  
         "summary": omschrijving[:100],  
         "details": omschrijving,  
@@ -159,17 +161,15 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),  
         "clientid": client_id,  
         "siteid": site_id,  
-        "categoryid": 0,  
-        "issueid": 0,  
-        "Type": str(HALO_TICKET_TYPE_ID),  # ✅ CRUCIALE FIX: "Type" (hoofdletter) als string
+        "categoryid": 10,  # ✅ Vervang met de juiste category ID (zie tickettype-config)
+        "issueid": 5,      # ✅ Vervang met de juiste issue ID (zie tickettype-config)
         "requestedbyid": user_id,  
     }  
     try:  
         log.info(f"➡️ Verstuur naar Halo /Tickets: {json.dumps(body, indent=2)}")  
-        # Verstuur als array (vereist door Halo API)
         r = requests.post(f"{HALO_API_BASE}/Tickets",  
                           headers=h,  
-                          json=[body],  
+                          json=[body],  # Array zoals vereist
                           timeout=20)  
     except Exception as e:  
         fout = f"❌ Fout bij versturen ticket: {e}"  
