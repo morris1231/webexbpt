@@ -111,47 +111,12 @@ def get_halo_user(email: str, room_id=None):
                 if room_id:
                     send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')}")
                 return u
-    if room_id: send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
+    if room_id:
+        send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# CONTACT OPHALEN / AANMAKEN
-# --------------------------------------------------------------------------
-def get_or_create_contact(email, client_id, site_id, full_name="Webex gebruiker"):
-    """Zoekt contact of maakt nieuw contact aan."""
-    h = get_halo_headers()
-    try:
-        # 🔍 Eerst zoeken
-        search = requests.get(f"{HALO_API_BASE}/Contacts",
-                              headers=h, params={"search": email}, timeout=10)
-        if search.status_code == 200:
-            contacts = search.json().get("contacts", []) or search.json().get("items", []) or search.json()
-            for c in contacts:
-                if c.get("emailaddress", "").lower() == email.lower():
-                    log.info(f"📇 Bestaand contact gevonden: {c.get('name')} ({c.get('id')})")
-                    return int(c["id"])
-        # ➕ Anders contact aanmaken
-        body = [{
-            "name": full_name,
-            "emailaddress": email,
-            "active": True,
-            "client_id": client_id,
-            "site_id": site_id
-        }]
-        create = requests.post(f"{HALO_API_BASE}/Contacts", headers=h, json=body, timeout=15)
-        if create.status_code in (200, 201):
-            new = create.json()[0] if isinstance(create.json(), list) else create.json()
-            cid = int(new.get("id"))
-            log.info(f"🆕 Nieuw contact aangemaakt ({cid})")
-            return cid
-        else:
-            log.warning(f"⚠️ Contact aanmaken gaf status {create.status_code}: {create.text[:200]}")
-    except Exception as e:
-        log.error(f"❌ Contact lookup/aanmaak mislukt: {e}")
-    return None
-
-# --------------------------------------------------------------------------
-# TICKET AANMAKEN
+# TICKET AANMAKEN (met raisedByUserId)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -165,8 +130,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     user_id  = int(user.get("id"))
     client_id = int(user.get("client_id", 0))
     site_id   = int(user.get("site_id", 0))
-    contact_id = get_or_create_contact(email, client_id, site_id, user.get("name", email))
 
+    # 🆕 Gebruik raisedByUserId i.p.v. contactId of userId
     body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -176,8 +141,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "userId": user_id,
-        "contactId": contact_id
+        "raisedByUserId": user_id  # <-- CRUCIAAL! 🔥
     }
 
     log.info(f"➡️ Ticket body: {json.dumps(body, indent=2)[:400]}")
@@ -189,8 +153,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             ticket = resp[0] if isinstance(resp, list) else resp
             tid = ticket.get("id") or ticket.get("ID")
             if room_id:
-                send_message(room_id,
-                             f"✅ Ticket gemaakt: **{tid}** · Contact={contact_id} · User={user_id}")
+                send_message(room_id, f"✅ Ticket gemaakt: **{tid}** · RaisedByUserId={user_id}")
             return {"ID": tid}
     except Exception as e:
         log.error(f"❌ Ticket aanmaken mislukt: {e}")
@@ -199,7 +162,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     return None
 
 # --------------------------------------------------------------------------
-# WEBEX HELPER FUNCTIES
+# WEBEX FUNCTIES
 # --------------------------------------------------------------------------
 def send_message(room_id, text):
     if not WEBEX_HEADERS: return
