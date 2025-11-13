@@ -27,13 +27,13 @@ if missing:
 
 app = Flask(__name__)
 
-HALO_AUTH_URL       = os.getenv("HALO_AUTH_URL")
-HALO_API_BASE       = os.getenv("HALO_API_BASE")
-HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
-HALO_CLIENT_SECRET  = os.getenv("HALO_CLIENT_SECRET")
+HALO_AUTH_URL      = os.getenv("HALO_AUTH_URL")
+HALO_API_BASE      = os.getenv("HALO_API_BASE")
+HALO_CLIENT_ID     = os.getenv("HALO_CLIENT_ID")
+HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 
 HALO_TICKET_TYPE_ID = 66   # ✅ correct type-id
-HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 1))
+HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 
@@ -42,14 +42,14 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
-CACHE_DURATION = 24 * 60 * 60  # 24h
+CACHE_DURATION = 24 * 60 * 60  # 24 uur
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
 # HALO TOKEN
 # --------------------------------------------------------------------------
 def get_halo_headers():
-    payload = {
+    data = {
         "grant_type": "client_credentials",
         "client_id": HALO_CLIENT_ID,
         "client_secret": HALO_CLIENT_SECRET,
@@ -58,7 +58,7 @@ def get_halo_headers():
     r = requests.post(
         HALO_AUTH_URL,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data=urllib.parse.urlencode(payload),
+        data=urllib.parse.urlencode(data),
         timeout=10,
     )
     if r.status_code != 200:
@@ -134,7 +134,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# HALO TICKET CREATION (gecorrigeerd)
+# HALO TICKET CREATION (definitieve versie)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -158,13 +158,18 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "clientid": client_id,
         "siteid": site_id,
-        "typeid": HALO_TICKET_TYPE_ID,      # ✅ lowercase veld
-        "requestedbyid": user_id,           # ✅ lowercase veld
+        "typeid": HALO_TICKET_TYPE_ID,      # ✅ lowercase correct
+        "requestedbyid": user_id,           # ✅ lowercase correct
     }
 
-    log.info(f"➡️ Ticket sturen naar Halo: {json.dumps(body, indent=2)}")
+    log.info(f"➡️ Ticket sturen naar Halo (array): {json.dumps(body, indent=2)}")
     try:
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=20)
+        r = requests.post(
+            f"{HALO_API_BASE}/Tickets",
+            headers=h,
+            json=[body],                    # ✅ verpakt in array
+            timeout=20,
+        )
     except Exception as e:
         log.error(f"❌ Fout bij HTTP-call: {e}")
         if room_id:
@@ -177,12 +182,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             resp = r.json()
         except ValueError:
             resp = None
-        ticket_id = None
-        if isinstance(resp, dict):
-            ticket_id = resp.get("id") or resp.get("ID")
-        elif isinstance(resp, list) and resp:
-            ticket_id = resp[0].get("id") or resp[0].get("ID")
-
+        ticket = resp[0] if isinstance(resp, list) and resp else resp
+        ticket_id = ticket.get("id") or ticket.get("ID")
         msg = f"✅ Ticket aangemaakt · ID={ticket_id} · user={user.get('name')}"
         log.info(msg)
         if room_id:
@@ -196,7 +197,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     return None
 
 # --------------------------------------------------------------------------
-# WEBEX HELPERS  (ongewijzigd)
+# WEBEX HELPERS
 # --------------------------------------------------------------------------
 def send_message(room_id, text):
     if WEBEX_HEADERS:
@@ -264,8 +265,8 @@ def process_webex_event(data):
         impact_id = inputs.get("impact", "3")
         urgency_id = inputs.get("urgency", "3")
         ticket = create_halo_ticket(
-            inputs["omschrijving"], inputs["email"], "",
-            "", "", inputs.get("impacttoelichting", ""), impact_id, urgency_id, room_id
+            inputs["omschrijving"], inputs["email"], "", "", "",
+            inputs.get("impacttoelichting", ""), impact_id, urgency_id, room_id
         )
         if ticket:
             send_message(room_id, f"✅ Ticket aangemaakt: **{ticket['ID']}**")
