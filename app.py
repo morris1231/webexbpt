@@ -32,7 +32,7 @@ HALO_API_BASE = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")  
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")  
 HALO_TICKET_TYPE_ID = 66  # ✅ Correcte tickettype ID vanuit link
-HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", 1))  # ✅ TEAMID IS NU 1 (controleer .env)
+HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", 1))  # ✅ TEAMID IS NU 1
 HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", 18))  
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")  
@@ -150,7 +150,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", HALO_CLIENT_ID_NUM))  
     site_id = int(user.get("site_id", HALO_SITE_ID))  
     
-    # CORRECTIE: Gebruik "tickettype" als veldnaam (geen Type/type) EN als string
+    # CORRECTIE: Gebruik "Type" met HOOFDLETTER T EN als STRING
     body = {  
         "summary": omschrijving[:100],  
         "details": omschrijving,  
@@ -161,7 +161,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "siteid": site_id,  
         "categoryid": 0,  
         "issueid": 0,  
-        "tickettype": str(HALO_TICKET_TYPE_ID),  # ✅ CRUCIALE FIX: "tickettype" (geen Type/type) + string
+        "Type": str(HALO_TICKET_TYPE_ID),  # ✅ CRUCIALE FIX: "Type" (hoofdletter) als string
         "requestedbyid": user_id,  
     }  
     try:  
