@@ -32,7 +32,6 @@ HALO_API_BASE       = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID      = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET  = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
-HALO_TEAM_ID        = int(os.getenv("HALO_TEAM_ID", 35))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
@@ -98,6 +97,7 @@ def fetch_users(client_id: int, site_id: int):
             break
         page += 1
     USER_CACHE["source"] = "/Users (paginated)"
+    log.info(f"✅ {len(all_users)} users opgehaald")
     return all_users
 
 def get_main_users():
@@ -123,14 +123,14 @@ def get_halo_user(email: str, room_id=None):
         ]:
             if f and f.lower() == email:
                 if room_id:
-                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')} · via {u.get('source')}")
+                    send_message(room_id, f"✅ Gebruiker {u.get('name')} gevonden · id={u.get('id')}")
                 return u
     if room_id:
         send_message(room_id, f"⚠️ Geen gebruiker gevonden voor {email}")
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN — met uid
+# TICKET AANMAKEN — alleen UID
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -139,15 +139,15 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     user = get_halo_user(email, room_id)
     if not user:
         if room_id:
-            send_message(room_id, "❌ Geen gebruiker gevonden in Halo. Controleer e-mail en client/site-id.")
+            send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return None
 
     user_id  = int(user.get("id"))
     client_id = int(user.get("client_id", 0))
     site_id   = int(user.get("site_id", 0))
 
-    # 🟢 Changed: use "uid" per Halo Support
-    body = {
+    # ✅ simplified, only "uid"
+    ticket_data = {
         "summary": omschrijving[:100],
         "details": omschrijving,
         "tickettype_id": HALO_TICKET_TYPE_ID,
@@ -155,22 +155,26 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "uid": user_id   # ✅ correct field according to Halo support
+        "uid": user_id
     }
 
-    log.info(f"➡️ Ticket body: {json.dumps(body, indent=2)[:400]}")
+    log.info(f"➡️ Ticket data: {json.dumps(ticket_data, indent=2)}")
     try:
-        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
+        r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=ticket_data, timeout=20)
         log.info(f"⬅️ Halo {r.status_code}: {r.text[:250]}")
         if r.status_code in (200, 201):
             resp = r.json()
             ticket = resp[0] if isinstance(resp, list) else resp
             ticket_id = ticket.get("id") or ticket.get("ID")
-            msg = f"✅ Ticket aangemaakt: ID={ticket_id} | uid={user_id}"
+            msg = f"✅ Ticket aangemaakt: {ticket_id} | uid={user_id}"
             log.info(msg)
             if room_id:
                 send_message(room_id, msg)
             return {"ID": ticket_id, "user_id": user_id}
+        else:
+            log.warning(f"⚠️ Halo gaf status {r.status_code}")
+            if room_id:
+                send_message(room_id, f"⚠️ Halo gaf status {r.status_code}")
     except Exception as e:
         log.error(f"❌ Ticket aanmaken mislukt: {e}")
         if room_id:
