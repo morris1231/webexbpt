@@ -42,7 +42,7 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
-CACHE_DURATION = 24 * 60 * 60  # 24 uur
+CACHE_DURATION = 24 * 60 * 60
 ticket_room_map = {}
 
 # --------------------------------------------------------------------------
@@ -134,7 +134,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# HALO TICKET CREATION (definitieve versie)
+# HALO TICKET CREATION (met auto-fallback veld)
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -150,47 +150,48 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", HALO_CLIENT_ID_NUM))
     site_id   = int(user.get("site_id", HALO_SITE_ID))
 
-    body = {
-        "summary": omschrijving[:100],
-        "details": omschrijving,
-        "teamid": HALO_TEAM_ID,
-        "impact": int(impact_id),
-        "urgency": int(urgency_id),
-        "clientid": client_id,
-        "siteid": site_id,
-        "typeid": HALO_TICKET_TYPE_ID,      # ✅ lowercase correct
-        "requestedbyid": user_id,           # ✅ lowercase correct
-    }
+    # probeer verschillende veldnamen automatisch
+    type_fields = ["typeid", "type", "typeId"]
 
-    log.info(f"➡️ Ticket sturen naar Halo (array): {json.dumps(body, indent=2)}")
-    try:
-        r = requests.post(
-            f"{HALO_API_BASE}/Tickets",
-            headers=h,
-            json=[body],                    # ✅ verpakt in array
-            timeout=20,
-        )
-    except Exception as e:
-        log.error(f"❌ Fout bij HTTP-call: {e}")
-        if room_id:
-            send_message(room_id, f"❌ Fout bij aanmaken ticket: {e}")
-        return None
+    for fld in type_fields:
+        body = {
+            "summary": omschrijving[:100],
+            "details": omschrijving,
+            "teamid": HALO_TEAM_ID,
+            "impact": int(impact_id),
+            "urgency": int(urgency_id),
+            "clientid": client_id,
+            "siteid": site_id,
+            fld: HALO_TICKET_TYPE_ID,        # probeert elk veld
+            "requestedbyid": user_id,
+        }
 
-    log.info(f"⬅️ Halo {r.status_code}: {r.text[:250]}")
-    if r.status_code in (200, 201):
         try:
-            resp = r.json()
-        except ValueError:
-            resp = None
-        ticket = resp[0] if isinstance(resp, list) and resp else resp
-        ticket_id = ticket.get("id") or ticket.get("ID")
-        msg = f"✅ Ticket aangemaakt · ID={ticket_id} · user={user.get('name')}"
-        log.info(msg)
-        if room_id:
-            send_message(room_id, msg)
-        return {"ID": ticket_id, "user_id": user_id}
+            r = requests.post(
+                f"{HALO_API_BASE}/Tickets",
+                headers=h,
+                json=[body],
+                timeout=20,
+            )
+            log.info(f"➡️ POST /Tickets veld={fld} → {r.status_code}: {r.text[:250]}")
+        except Exception as e:
+            log.error(f"❌ Fout bij versturen ticket ({fld}): {e}")
+            continue
 
-    fout = f"❌ Ticket niet aangemaakt: {r.status_code} → {r.text}"
+        if r.status_code in (200, 201):
+            try:
+                resp = r.json()
+            except ValueError:
+                resp = None
+            ticket = resp[0] if isinstance(resp, list) and resp else resp
+            ticket_id = ticket.get("id") or ticket.get("ID")
+            msg = f"✅ Ticket aangemaakt: ID={ticket_id} via veld {fld}"
+            log.info(msg)
+            if room_id:
+                send_message(room_id, msg)
+            return {"ID": ticket_id, "user_id": user_id}
+
+    fout = f"❌ Ticket niet aangemaakt met velden {type_fields}. Laatste antwoord: {r.status_code} → {r.text}"
     log.error(fout)
     if room_id:
         send_message(room_id, fout)
