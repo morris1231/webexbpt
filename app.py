@@ -32,7 +32,7 @@ HALO_API_BASE = os.getenv("HALO_API_BASE")
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")  
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")  
 HALO_TICKET_TYPE_ID = 66  # ✅ Correcte tickettype ID vanuit link
-HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", 1))  # ✅ TEAMID IS NU 1 (in plaats van 35)
+HALO_TEAM_ID = int(os.getenv("HALO_TEAM_ID", 1))  # ✅ TEAMID IS NU 1
 HALO_CLIENT_ID_NUM = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  
 HALO_SITE_ID = int(os.getenv("HALO_SITE_ID", 18))  
 WEBEX_TOKEN = os.getenv("WEBEX_BOT_TOKEN")  
@@ -150,25 +150,26 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", HALO_CLIENT_ID_NUM))  
     site_id = int(user.get("site_id", HALO_SITE_ID))  
     
-    # BODY FIX: "Type" → "type" (kleine letters) EN GEEN ARRAY
+    # CORRECTIE: "Type" in HOOFDLETTERS EN als ARRAY versturen
     body = {  
         "summary": omschrijving[:100],  
         "details": omschrijving,  
-        "teamid": HALO_TEAM_ID,  # ✅ Nu 1 (gebruikt de juiste team ID)
+        "teamid": HALO_TEAM_ID,  
         "impact": int(impact_id),  
         "urgency": int(urgency_id),  
         "clientid": client_id,  
         "siteid": site_id,  
         "categoryid": 0,  
         "issueid": 0,  
-        "type": HALO_TICKET_TYPE_ID,  # ✅ "type" in kleine letters
+        "Type": HALO_TICKET_TYPE_ID,  # ✅ HOOFDLETTER T (cruciaal voor Halo)
         "requestedbyid": user_id,  
     }  
     try:  
         log.info(f"➡️ Verstuur naar Halo /Tickets: {json.dumps(body, indent=2)}")  
+        # CORRECTIE: json=[body] in plaats van json=body (server verwacht array)
         r = requests.post(f"{HALO_API_BASE}/Tickets",  
                           headers=h,  
-                          json=body,  # ✅ Geen array, alleen het object
+                          json=[body],  # ✅ Nu als array versturen
                           timeout=20)  
     except Exception as e:  
         fout = f"❌ Fout bij versturen ticket: {e}"  
