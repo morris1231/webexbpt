@@ -130,7 +130,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN — MET requestUserID EN ZONDER teamId
+# TICKET AANMAKEN — met uid
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -146,8 +146,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", 0))
     site_id   = int(user.get("site_id", 0))
 
-    # ✅ Use requestUserID (correct field for requester)
-    # ❌ Remove 'teamId' – prevents user mismatch / General User fallback
+    # 🟢 Changed: use "uid" per Halo Support
     body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
@@ -156,9 +155,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-        "requestUserID": user_id,
-        # optional if you want routing but not ownership issues:
-        # "assignedTeamId": HALO_TEAM_ID 
+        "uid": user_id   # ✅ correct field according to Halo support
     }
 
     log.info(f"➡️ Ticket body: {json.dumps(body, indent=2)[:400]}")
@@ -169,7 +166,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             resp = r.json()
             ticket = resp[0] if isinstance(resp, list) else resp
             ticket_id = ticket.get("id") or ticket.get("ID")
-            msg = f"✅ Ticket aangemaakt: ID={ticket_id} | requestUserID={user_id}"
+            msg = f"✅ Ticket aangemaakt: ID={ticket_id} | uid={user_id}"
             log.info(msg)
             if room_id:
                 send_message(room_id, msg)
