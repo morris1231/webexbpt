@@ -130,7 +130,7 @@ def get_halo_user(email: str, room_id=None):
     return None
 
 # --------------------------------------------------------------------------
-# TICKET AANMAKEN — MET requestUserID
+# TICKET AANMAKEN — MET requestUserID EN ZONDER teamId
 # --------------------------------------------------------------------------
 def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
                        zelfgeprobeerd, impacttoelichting,
@@ -146,21 +146,22 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
     client_id = int(user.get("client_id", 0))
     site_id   = int(user.get("site_id", 0))
 
+    # ✅ Use requestUserID (correct field for requester)
+    # ❌ Remove 'teamId' – prevents user mismatch / General User fallback
     body = {
         "summary": omschrijving[:100],
         "details": omschrijving,
         "tickettype_id": HALO_TICKET_TYPE_ID,
-        "teamId": HALO_TEAM_ID,
         "impact": int(impact_id),
         "urgency": int(urgency_id),
         "client_id": client_id,
         "site_id": site_id,
-
-        # ✅ THIS IS THE CORRECT FIELD HALO USES FOR END-USER (User record)
-        "requestUserID": user_id
+        "requestUserID": user_id,
+        # optional if you want routing but not ownership issues:
+        # "assignedTeamId": HALO_TEAM_ID 
     }
 
-    log.info(f"➡️ Ticket aanmaken body: {json.dumps(body, indent=2)[:400]}")
+    log.info(f"➡️ Ticket body: {json.dumps(body, indent=2)[:400]}")
     try:
         r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
         log.info(f"⬅️ Halo {r.status_code}: {r.text[:250]}")
@@ -168,7 +169,7 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             resp = r.json()
             ticket = resp[0] if isinstance(resp, list) else resp
             ticket_id = ticket.get("id") or ticket.get("ID")
-            msg = f"✅ Ticket aangemaakt → ID={ticket_id} | requestUserID={user_id} | Team={HALO_TEAM_ID}"
+            msg = f"✅ Ticket aangemaakt: ID={ticket_id} | requestUserID={user_id}"
             log.info(msg)
             if room_id:
                 send_message(room_id, msg)
@@ -186,12 +187,14 @@ def send_message(room_id, text):
     if not WEBEX_HEADERS:
         return
     try:
-        requests.post("https://webexapis.com/v1/messages",
-                      headers=WEBEX_HEADERS,
-                      json={"roomId": room_id, "markdown": text},
-                      timeout=10)
+        requests.post(
+            "https://webexapis.com/v1/messages",
+            headers=WEBEX_HEADERS,
+            json={"roomId": room_id, "markdown": text},
+            timeout=10
+        )
     except Exception as e:
-        log.error(f"❌ Webex bericht mislukt: {e}")
+        log.error(f"❌ Webex bericht versturen mislukt: {e}")
 
 def send_adaptive_card(room_id):
     payload = {
@@ -212,14 +215,16 @@ def send_adaptive_card(room_id):
                     {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Wat heb je zelf al geprobeerd?"},
                     {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Toelichting op impact (optioneel)"},
                     {"type": "Input.ChoiceSet", "id": "impact", "label": "Impact",
-                     "choices": [{"title": "Gehele bedrijf (1)", "value": "1"},
-                                 {"title": "Meerdere gebruikers (2)", "value": "2"},
-                                 {"title": "Één gebruiker (3)", "value": "3"}],
+                     "choices": [
+                         {"title": "Gehele bedrijf (1)", "value": "1"},
+                         {"title": "Meerdere gebruikers (2)", "value": "2"},
+                         {"title": "Één gebruiker (3)", "value": "3"}],
                      "value": "3", "required": True},
                     {"type": "Input.ChoiceSet", "id": "urgency", "label": "Urgency",
-                     "choices": [{"title": "High (1)", "value": "1"},
-                                 {"title": "Medium (2)", "value": "2"},
-                                 {"title": "Low (3)", "value": "3"}],
+                     "choices": [
+                         {"title": "High (1)", "value": "1"},
+                         {"title": "Medium (2)", "value": "2"},
+                         {"title": "Low (3)", "value": "3"}],
                      "value": "3", "required": True}
                 ],
                 "actions": [{"type": "Action.Submit", "title": "✅ Ticket aanmaken"}]
@@ -227,10 +232,7 @@ def send_adaptive_card(room_id):
         }]
     }
     try:
-        requests.post("https://webexapis.com/v1/messages",
-                      headers=WEBEX_HEADERS,
-                      json=payload,
-                      timeout=10)
+        requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=payload, timeout=10)
     except Exception as e:
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
 
