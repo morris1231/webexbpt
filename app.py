@@ -38,7 +38,7 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}   # roomId <-> ticketId
-CACHE_DURATION = 24 * 60 * 60  # CORRECTED: 24 uur in seconden
+CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
 
 # --------------------------------------------------------------------------
 # HALO AUTH
@@ -65,14 +65,14 @@ def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
     all_users = []
     page = 1
-    per_page = 100  # Max 100 per pagina (Halo standaard)
+    page_size = 50  # Halo gebruikt "page_size" in plaats van "per_page"
     
     while True:
         params = {
             "client_id": client_id,
             "site_id": site_id,
             "page": page,
-            "per_page": per_page
+            "page_size": page_size  # CORRECTE PARAMETERNAAM
         }
         r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
         
@@ -98,14 +98,16 @@ def fetch_users(client_id: int, site_id: int):
                 u["site_id"] = int(u.get("site_id", 0))
                 all_users.append(u)
                 
-        # Stop als minder dan per_page gebruikers in de pagina zitten
-        if len(users) < per_page:
+        log.info(f"✅ Pagina {page}: {len(users)} gebruikers (client={client_id}, site={site_id})")
+        
+        # Stop als minder dan page_size gebruikers in de pagina zitten
+        if len(users) < page_size:
             break
             
         page += 1
         
     USER_CACHE["source"] = "/Users (paginated)"
-    log.info(f"✅ {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
+    log.info(f"✅ Totaal {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
 
 def get_users():
@@ -203,10 +205,25 @@ def create_halo_ticket(form, room_id):
         "user_id": user_id
     }
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
+    
     if not r.ok:
+        log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         return
-    tid = r.json()[0]["id"]
+        
+    # Handle response (can be list or single object)
+    response = r.json()
+    if isinstance(response, list) and len(response) > 0:
+        ticket = response[0]
+    else:
+        ticket = response
+    
+    tid = ticket.get("id") or ticket.get("ID")
+    if not tid:
+        log.error(f"❌ Geen ticket ID gevonden in respons: {response}")
+        send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
+        return
+        
     TICKET_ROOM_MAP[room_id] = tid
     # Voeg formuliergegevens als eerste public note toe
     note = "\n".join([
@@ -225,57 +242,20 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    requests.post(
+    note_data = {
+        "text": text,
+        "is_public": True
+    }
+    r = requests.post(
         f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes",
         headers=h,
-        json={"text": text, "is_public": True},
+        json=note_data,
         timeout=15
     )
-
-def check_new_halo_notes():
-    """Polling voor Halo webhook: haalt nieuwe public notes op en stuurt ze naar Webex"""
-    while True:
-        try:
-            h = get_halo_headers()
-            for room_id, ticket_id in list(TICKET_ROOM_MAP.items()):
-                r = requests.get(
-                    f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes",
-                    headers=h,
-                    timeout=15
-                )
-                if not r.ok:
-                    continue
-                notes = r.json()
-                # Filter alleen public notes en vind de nieuwste ID
-                public_notes = [n for n in notes if n.get("is_public")]
-                if not public_notes:
-                    continue
-                latest_note_id = max(n["id"] for n in public_notes)
-                
-                # Determine last note ID from TICKET_ROOM_MAP
-                last_data = TICKET_ROOM_MAP.get(room_id)
-                last_note_id = last_data.get("last_note", 0) if isinstance(last_data, dict) else 0
-                
-                # Check if we have new notes
-                if last_note_id < latest_note_id:
-                    # Get all new public notes
-                    new_notes = []
-                    for n in public_notes:
-                        if n["id"] > last_note_id:
-                            new_notes.append(n)
-                    
-                    # Send new notes to Webex
-                    for n in new_notes:
-                        send_message(room_id, f"📢 **Public note in Halo:**\n{n['text']}")
-                    
-                    # Update last note ID for this room
-                    TICKET_ROOM_MAP[room_id] = {
-                        "ticket_id": ticket_id,
-                        "last_note": latest_note_id
-                    }
-        except Exception as e:
-            log.error(f"❌ Poll notes error: {e}")
-        time.sleep(60)  # Check elke minuut
+    if not r.ok:
+        log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
+        return False
+    return True
 
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
@@ -330,12 +310,13 @@ def halo_hook():
             send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note}")
     return {"status": "ok"}
 
-@app.route("/", methods=["GET"])
-def health():
+@app.route("/initialize", methods=["GET"])
+def initialize():
+    get_users()  # CORRECTE FUNCTIE AANROEPEN
     return {
-        "status": "running",
-        "tracked_rooms": len(TICKET_ROOM_MAP),
-        "cached_users": len(USER_CACHE["users"]) if USER_CACHE["users"] else 0
+        "status": "initialized",
+        "cache_size": len(USER_CACHE['users']),
+        "source": USER_CACHE["source"]
     }
 
 # --------------------------------------------------------------------------
@@ -344,5 +325,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
-    threading.Thread(target=check_new_halo_notes, daemon=True).start()
     app.run(host="0.0.0.0", port=port, debug=False)
