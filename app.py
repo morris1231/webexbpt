@@ -39,6 +39,7 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}   # roomId <-> ticketId
 CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
+MAX_PAGES = 10  # Beperk tot max 10 pagina's om oneindige loops te voorkomen
 
 # --------------------------------------------------------------------------
 # HALO AUTH
@@ -66,45 +67,65 @@ def fetch_users(client_id: int, site_id: int):
     all_users = []
     page = 1
     page_size = 50  # Halo gebruikt "page_size" in plaats van "per_page"
+    page_count = 0
     
-    while True:
+    while page_count < MAX_PAGES:
         params = {
             "client_id": client_id,
             "site_id": site_id,
             "page": page,
-            "page_size": page_size  # CORRECTE PARAMETERNAAM
+            "page_size": page_size
         }
+        log.info(f"➡️ Fetching users page {page} (size={page_size})")
         r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
         
         if r.status_code != 200:
             log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
             
-        users = r.json().get("users", []) or r.json().get("items", []) or r.json()
+        # Log de volledige response voor debugging
+        response_json = r.json()
+        log.debug(f"Response voor pagina {page}: {json.dumps(response_json, indent=2)}")
+        
+        # Probeer verschillende manieren om gebruikers te vinden
+        users = []
+        if isinstance(response_json, list):
+            users = response_json
+        elif isinstance(response_json, dict):
+            users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
+        
         if not users:
+            log.info(f"✅ Geen gebruikers gevonden op pagina {page}")
             break
             
+        # Filter actieve gebruikers met geldig emailadres
         for u in users:
-            # Filter actieve gebruikers met geldig emailadres
+            # Zet alle ID's om naar integers
+            if "id" in u:
+                u["id"] = int(u["id"])
+            if "client_id" in u:
+                u["client_id"] = int(u["client_id"])
+            if "site_id" in u:
+                u["site_id"] = int(u["site_id"])
+                
+            # Filter op basis van gebruikersstatus en email
             if (
                 u.get("use") == "user" and
                 not u.get("inactive", True) and
                 u.get("emailaddress") and
                 "@" in u["emailaddress"]
             ):
-                # Zet alle ID's om naar integers
-                u["id"] = int(u.get("id", 0))
-                u["client_id"] = int(u.get("client_id", 0))
-                u["site_id"] = int(u.get("site_id", 0))
                 all_users.append(u)
                 
-        log.info(f"✅ Pagina {page}: {len(users)} gebruikers (client={client_id}, site={site_id})")
+        log.info(f"✅ Pagina {page}: {len(users)} gebruikers, {len(all_users)} totaal")
         
-        # Stop als minder dan page_size gebruikers in de pagina zitten
+        # Stop als we minder dan page_size gebruikers hebben
         if len(users) < page_size:
+            log.info(f"✅ Eind van gebruikerslijst bereikt (pagina {page})")
             break
             
         page += 1
+        page_count += 1
         
     USER_CACHE["source"] = "/Users (paginated)"
     log.info(f"✅ Totaal {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
@@ -312,7 +333,7 @@ def halo_hook():
 
 @app.route("/initialize", methods=["GET"])
 def initialize():
-    get_users()  # CORRECTE FUNCTIE AANROEPEN
+    get_users()
     return {
         "status": "initialized",
         "cache_size": len(USER_CACHE['users']),
