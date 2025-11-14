@@ -33,6 +33,7 @@ HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}", "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
+TICKET_ROOM_MAP = {}  # Room ID -> Ticket ID mapping for handling notes
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 # --------------------------------------------------------------------------
 # HALO AUTH
@@ -156,6 +157,8 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
             log.info(msg)
             if room_id:
                 send_message(room_id, msg)
+                # Store room-ticket mapping for future notes
+                TICKET_ROOM_MAP[room_id] = ticket_id
             return {"ID": ticket_id, "user_id": user_id}
         else:
             log.warning(f"⚠️ Halo gaf status {r.status_code}")
@@ -166,6 +169,30 @@ def create_halo_ticket(omschrijving, email, sindswanneer, watwerktniet,
         if room_id:
             send_message(room_id, "❌ Ticket aanmaken mislukt, zie logs.")
     return None
+# --------------------------------------------------------------------------
+# VOEG PUBLIC NOTE TOE AAN TICKET
+# --------------------------------------------------------------------------
+def add_note_to_ticket(ticket_id, note_text, room_id=None):
+    h = get_halo_headers()
+    note_data = {
+        "text": note_text,
+        "is_public": True
+    }
+    url = f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes"
+    try:
+        r = requests.post(url, headers=h, json=note_data, timeout=20)
+        if r.status_code in (200, 201):
+            log.info(f"✅ Toegevoegde public note aan ticket {ticket_id}")
+            if room_id:
+                send_message(room_id, "✅ Public note toegevoegd aan ticket.")
+        else:
+            log.warning(f"⚠️ Notitie toevoegen mislukt: {r.status_code} {r.text[:200]}")
+            if room_id:
+                send_message(room_id, f"⚠️ Notitie toevoegen mislukt: {r.status_code}")
+    except Exception as e:
+        log.error(f"❌ Fout bij notitie toevoegen: {e}")
+        if room_id:
+            send_message(room_id, "❌ Fout bij toevoegen van notitie")
 # --------------------------------------------------------------------------
 # WEBEX HELPERS
 # --------------------------------------------------------------------------
@@ -233,6 +260,10 @@ def process_webex_event(data):
             return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
+        elif room_id in TICKET_ROOM_MAP:
+            # Dit is een bericht in een ticket-kamer - voeg toe als public note
+            ticket_id = TICKET_ROOM_MAP[room_id]
+            add_note_to_ticket(ticket_id, text, room_id)
     elif res == "attachmentActions":
         act_id = data["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{act_id}",
