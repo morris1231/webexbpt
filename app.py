@@ -26,7 +26,7 @@ if missing:
     sys.exit(1)
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
-# Zet HALO_API_BASE naar de volledige basis-URL (bijv. https://bncuat.halopsa.com/api/v1)
+# Zet HALO_API_BASE naar de domeinnaam ZONDER /api of /v1
 HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
@@ -76,10 +76,10 @@ def fetch_users(client_id: int, site_id: int):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (size={page_size})")
-        # Gebruik de volledige HALO_API_BASE met lowercase endpoints
-        r = requests.get(f"{HALO_API_BASE}/users", headers=h, params=params, timeout=15)
+        # Gebruik de volledige HALO_API_BASE met /api/users (geen v1)
+        r = requests.get(f"{HALO_API_BASE}/api/users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
-            log.warning(f"⚠️ /users pagina {page} gaf {r.status_code}: {r.text[:200]}")
+            log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
         response_json = r.json()
         log.debug(f"Response voor pagina {page}: {json.dumps(response_json, indent=2)}")
@@ -111,7 +111,7 @@ def fetch_users(client_id: int, site_id: int):
             break
         page += 1
         page_count += 1
-    USER_CACHE["source"] = "/users (paginated)"
+    USER_CACHE["source"] = "/api/users (paginated)"
     log.info(f"✅ Totaal {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
 
@@ -221,8 +221,8 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    # Gebruik de volledige HALO_API_BASE met lowercase endpoints
-    r = requests.post(f"{HALO_API_BASE}/tickets", headers=h, json=[body], timeout=20)
+    # Gebruik /api/tickets (geen v1)
+    r = requests.post(f"{HALO_API_BASE}/api/tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
@@ -254,8 +254,8 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # Gebruik de volledige HALO_API_BASE met lowercase endpoints
-    url = f"{HALO_API_BASE}/tickets/{ticket_id}/notes"
+    # Gebruik /api/tickets/{ticket_id}/notes (geen v1)
+    url = f"{HALO_API_BASE}/api/tickets/{ticket_id}/notes"
     note_data = {
         "text": text,
         "is_public": True
