@@ -227,8 +227,8 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    # ZEND EEN ENKELE OBJECT INSTEAD VAN LIST
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=20)
+    # BELANGRIJKE FIX: Halo API verwacht een JSON ARRAY van tickets (ook voor 1 ticket)
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
