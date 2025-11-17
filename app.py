@@ -75,7 +75,6 @@ def fetch_users(client_id, site_id):
     page = 1
     page_size = 50
     page_count = 0
-
     while page_count < MAX_PAGES:
         params = {"client_id": client_id, "site_id": site_id, "page": page, "page_size": page_size}
         log.info(f"➡️ Fetching users page {page}")
@@ -83,7 +82,6 @@ def fetch_users(client_id, site_id):
         if r.status_code != 200:
             log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-
         response_json = r.json()
         users = []
         if isinstance(response_json, list):
@@ -107,7 +105,6 @@ def fetch_users(client_id, site_id):
             break
         page += 1
         page_count += 1
-
     USER_CACHE["source"] = "/api/users (paginated)"
     USER_CACHE["timestamp"] = time.time()
     USER_CACHE["users"] = all_users
@@ -226,7 +223,6 @@ def create_halo_ticket(form, room_id):
         ticket = response.get("data") or response.get("tickets", [None])[0] or response
     else:
         ticket = response
-
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
@@ -236,49 +232,52 @@ def create_halo_ticket(form, room_id):
     return tid
 
 # --------------------------------------------------------------------------
-# ✅ PUBLIC NOTE FUNCTIE – probeert alle mogelijke endpoints
+# ✅ PUBLIC NOTE FUNCTIE (probeert alle varianten)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
-    """Voegt een public note toe aan Halo PSA, test alle endpoint-varianten."""
+    """Public note plaatsen in Halo PSA – probeert alle bekende endpoint- en payloadvarianten."""
     h = get_halo_headers()
     if not h:
-        log.error("❌ Geen HALO headers beschikbaar")
+        log.error("❌ Kan geen HALO headers verkrijgen")
         return False
 
-    # check ticket
     try:
-        check = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
-        if not check.ok:
-            log.error(f"❌ Ticket {ticket_id} bestaat niet ({check.status_code})")
+        chk = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
+        if not chk.ok:
+            log.error(f"❌ Ticket {ticket_id} bestaat niet ({chk.status_code})")
             return False
     except Exception as e:
         log.error(f"❌ Ticket check mislukt: {e}")
         return False
 
-    payload = {
-        "TicketId": int(ticket_id),
-        "ActionId": ACTION_ID_PUBLIC,
-        "Fields": {NOTE_FIELD_NAME: text}
-    }
-
     endpoints = [
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/run",
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/execute",
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions",
-        f"{HALO_API_BASE}/api/tickets/actions"
+        f"{HALO_API_BASE}/api/tickets/actions/run",
+        f"{HALO_API_BASE}/api/tickets/actions/execute",
+        f"{HALO_API_BASE}/api/tickets/actions",
+    ]
+
+    payloads = [
+        {"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Fields": {"Note": text}},
+        {"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Values": {"Note": text}},
+        [{"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Fields": {"Note": text}}],
+        [{"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Values": {"Note": text}}],
     ]
 
     for ep in endpoints:
-        try:
-            log.info(f"🚀 Probeer public note endpoint: {ep}")
-            log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
-            r = requests.post(ep, headers=h, json=payload, timeout=15)
-            if r.ok:
-                log.info(f"✅ Public note succesvol toegevoegd via {ep}")
-                return True
-            else:
-                log.warning(f"⚠️ {ep} gaf status {r.status_code} - {r.text[:300]}")
-        except Exception as e:
-            log.warning(f"💥 Fout bij {ep}: {e}")
+        for p in payloads:
+            try:
+                log.info(f"🚀 Test endpoint: {ep}")
+                log.info(f"🔍 Payload: {json.dumps(p, indent=2)}")
+                r = requests.post(ep, headers=h, json=p, timeout=15)
+                if r.ok:
+                    log.info(f"✅ Public note succesvol toegevoegd via {ep}")
+                    return True
+                log.warning(f"⚠️ {ep} status {r.status_code} - {r.text[:300]}")
+            except Exception as e:
+                log.warning(f"💥 Fout bij {ep}: {e}")
 
     log.error("❌ Geen van de endpoints werkte om een public note toe te voegen.")
     return False
@@ -301,7 +300,6 @@ def process_webex_event(payload):
         elif room_id in TICKET_ROOM_MAP:
             add_public_note(TICKET_ROOM_MAP[room_id], f"💬 **Van gebruiker:** {text}")
             send_message(room_id, "📝 Bericht toegevoegd aan Halo als public note.")
-
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{a_id}",
@@ -315,7 +313,6 @@ def process_webex_event(payload):
 def halo_action():
     data = request.json if request.is_json else request.form.to_dict()
     log.info(f"📥 Ontvangen Halo action data: {json.dumps(data, indent=2)}")
-
     ticket_id = None
     note_text = None
     for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id"]:
@@ -326,11 +323,9 @@ def halo_action():
         if f in data:
             note_text = data[f]
             break
-
     if not ticket_id or not note_text:
         log.warning("❌ Onvoldoende data in webhook")
         return {"status": "ignore"}
-
     found_room = False
     for room_id, stored_tid in TICKET_ROOM_MAP.items():
         if str(stored_tid) == str(ticket_id):
@@ -353,9 +348,7 @@ def webex_hook():
 @app.route("/initialize", methods=["GET"])
 def initialize():
     get_users()
-    return {"status": "initialized",
-            "cache_size": len(USER_CACHE['users']),
-            "source": USER_CACHE["source"]}
+    return {"status": "initialized", "cache_size": len(USER_CACHE['users']), "source": USER_CACHE["source"]}
 
 # --------------------------------------------------------------------------
 # START
