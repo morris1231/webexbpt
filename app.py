@@ -254,63 +254,103 @@ def create_halo_ticket(form, room_id):
     log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 # --------------------------------------------------------------------------
-# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - VERBETERDE VERSIE)
+# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - MEERDERE BENADERINGEN)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
+    """
+    Voeg een public note toe aan een HALO ticket via de Actions API
+    Probeert meerdere payload formaten om compatibiliteit te garanderen
+    """
     h = get_halo_headers()
+    if not h:
+        log.error("❌ Kan geen HALO headers verkrijgen")
+        return False
     
-    # Eerst controleren of het ticket bestaat
+    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions"
+    
+    # Eerst controleren of ticket bestaat
     try:
-        check_url = f"{HALO_API_BASE}/api/tickets/{ticket_id}"
-        check_response = requests.get(check_url, headers=h, timeout=15)
-        if not check_response.ok:
-            log.error(f"❌ Ticket {ticket_id} bestaat niet of is niet toegankelijk: {check_response.status_code} - {check_response.text}")
+        check_resp = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
+        if not check_resp.ok:
+            log.error(f"❌ Ticket {ticket_id} bestaat niet: {check_resp.status_code}")
             return False
         log.info(f"✅ Ticket {ticket_id} bestaat en is toegankelijk")
     except Exception as e:
-        log.error(f"❌ Kan ticket {ticket_id} niet valideren: {str(e)}")
+        log.error(f"❌ Ticket check mislukt: {str(e)}")
         return False
     
-    # Dan proberen we de actie uit te voeren
-    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions"
-    
-    # Meerdere mogelijke veldnamen proberen
-    possible_field_names = [NOTE_FIELD_NAME, "Note", "note", "Public Note", "PublicNote", "Comments", "Description"]
-    
-    # Unieke veldnamen proberen
-    unique_field_names = list(dict.fromkeys(possible_field_names))  # Verwijder duplicaten
-    
-    for field_name in unique_field_names:
-        if not field_name:  # Skip lege veldnamen
-            continue
-            
-        payload = {
-            "action_id": ACTION_ID_PUBLIC,
-            "fields": {
-                field_name: text
-            },
-            "is_public": True
+    # Verschillende payload formaten proberen
+    payloads_to_try = [
+        {
+            "name": "Standaard met Note",
+            "payload": {
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"Note": text},
+                "is_public": True
+            }
+        },
+        {
+            "name": "Zonder is_public",
+            "payload": {
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"Note": text}
+            }
+        },
+        {
+            "name": "Met Description",
+            "payload": {
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"Description": text},
+                "is_public": True
+            }
+        },
+        {
+            "name": "Met Comments",
+            "payload": {
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"Comments": text},
+                "is_public": True
+            }
+        },
+        {
+            "name": "Kleine letters",
+            "payload": {
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"note": text},
+                "is_public": True
+            }
+        },
+        {
+            "name": "Zonder fields",
+            "payload": {
+                "action_id": ACTION_ID_PUBLIC,
+                "is_public": True
+            }
         }
-        
+    ]
+    
+    # Probeer elke payload
+    for i, test in enumerate(payloads_to_try, 1):
         try:
-            log.info(f"🔍 Proberen met action_id {ACTION_ID_PUBLIC} en veldnaam: '{field_name}'")
-            log.info(f"🔍 URL: {url}")
-            log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
+            payload = test["payload"]
+            log.info(f"🔍 Poging {i}: {test['name']}")
+            log.debug(f"   Payload: {json.dumps(payload, indent=2)}")
             
             r = requests.post(url, headers=h, json=payload, timeout=15)
             
             if r.ok:
-                log.info(f"✅ Public note succesvol toegevoegd via Ticket Action met veld '{field_name}'!")
+                log.info(f"✅ Public note succesvol toegevoegd! (Poging {i}: {test['name']})")
                 return True
             else:
-                log.warning(f"⚠️ Actie met veld '{field_name}' mislukt: {r.status_code}")
-                log.warning(f"Response: {r.text[:500]}")
-                
+                log.warning(f"⚠️  Poging {i} ({test['name']}) mislukt: {r.status_code}")
+                if r.text:
+                    log.debug(f"   Response: {r.text[:200]}")
+                    
         except Exception as e:
-            log.error(f"💥 Exceptie bij public note versturen met veld '{field_name}': {str(e)}")
+            log.error(f"💥 Poging {i} ({test['name']}) exceptie: {str(e)}")
             continue
     
-    log.error(f"❌ Alle pogingen mislukt voor ticket {ticket_id}")
+    log.error(f"❌ Alle {len(payloads_to_try)} pogingen mislukt voor ticket {ticket_id}")
     return False
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
