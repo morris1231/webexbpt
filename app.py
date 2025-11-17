@@ -254,7 +254,7 @@ def create_halo_ticket(form, room_id):
     log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 # --------------------------------------------------------------------------
-# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - OPTIMALISEERDE VERSIE)
+# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - ULTIMATE VERSIE)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
     """
@@ -283,6 +283,7 @@ def add_public_note(ticket_id, text):
         f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions",
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/Actions",
         f"{HALO_API_BASE}/api/Tickets/{ticket_id}/actions",
+        f"{HALO_API_BASE}/api/actions",                      # Nieuw: POST naar /api/actions met ticket_id in payload
     ]
     
     # Mogelijke payload structuren
@@ -317,6 +318,23 @@ def add_public_note(ticket_id, text):
                 "fields": {"note": text},
                 "is_public": True
             }
+        },
+        {
+            "name": "Ticket ID in root (POST /api/actions)",
+            "payload": {
+                "ticket_id": ticket_id,
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"Note": text},
+                "is_public": True
+            }
+        },
+        {
+            "name": "Ticket ID in root zonder is_public",
+            "payload": {
+                "ticket_id": ticket_id,
+                "action_id": ACTION_ID_PUBLIC,
+                "fields": {"Note": text}
+            }
         }
     ]
     
@@ -329,7 +347,12 @@ def add_public_note(ticket_id, text):
             payload = test["payload"]
             log.info(f"🔍 Poging {i}: {test['name']}")
             
-            r = requests.post(primary_endpoint, headers=h, json=payload, timeout=15)
+            # Bepaal welke endpoint we gebruiken
+            endpoint = primary_endpoint
+            if i > 4:  # De laatste twee payload's zijn voor /api/actions
+                endpoint = endpoints_to_try[4]
+            
+            r = requests.post(endpoint, headers=h, json=payload, timeout=15)
             
             if r.ok:
                 log.info(f"✅ Public note succesvol toegevoegd! ({test['name']})")
