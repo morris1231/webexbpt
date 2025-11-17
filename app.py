@@ -232,15 +232,16 @@ def create_halo_ticket(form, room_id):
     return tid
 
 # --------------------------------------------------------------------------
-# ✅ PUBLIC NOTE FUNCTIE (probeert alle varianten)
+# ✅ PUBLIC NOTE FUNCTIE (POST en PUT varianten)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
-    """Public note plaatsen in Halo PSA – probeert alle bekende endpoint- en payloadvarianten."""
+    """Public note toevoegen – probeert alle bekende endpoint-, payload- en method-varianten."""
     h = get_halo_headers()
     if not h:
-        log.error("❌ Kan geen HALO headers verkrijgen")
+        log.error("❌ Geen HALO headers beschikbaar")
         return False
 
+    # Ticket controleren
     try:
         chk = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
         if not chk.ok:
@@ -266,18 +267,31 @@ def add_public_note(ticket_id, text):
         [{"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Values": {"Note": text}}],
     ]
 
+    # Eerst POST
     for ep in endpoints:
         for p in payloads:
             try:
-                log.info(f"🚀 Test endpoint: {ep}")
-                log.info(f"🔍 Payload: {json.dumps(p, indent=2)}")
+                log.info(f"🚀 Test POST endpoint: {ep}")
                 r = requests.post(ep, headers=h, json=p, timeout=15)
                 if r.ok:
-                    log.info(f"✅ Public note succesvol toegevoegd via {ep}")
+                    log.info(f"✅ Public note succesvol toegevoegd via POST {ep}")
                     return True
-                log.warning(f"⚠️ {ep} status {r.status_code} - {r.text[:300]}")
+                log.warning(f"⚠️ POST {ep} status {r.status_code}")
             except Exception as e:
-                log.warning(f"💥 Fout bij {ep}: {e}")
+                log.warning(f"💥 Fout bij POST {ep}: {e}")
+
+    # Daarna PUT proberen
+    for ep in endpoints:
+        for p in payloads:
+            try:
+                log.info(f"🚀 Test PUT endpoint: {ep}")
+                r = requests.put(ep, headers=h, json=p, timeout=15)
+                if r.ok:
+                    log.info(f"✅ Public note succesvol toegevoegd via PUT {ep}")
+                    return True
+                log.warning(f"⚠️ PUT {ep} status {r.status_code}")
+            except Exception as e:
+                log.warning(f"💥 Fout bij PUT {ep}: {e}")
 
     log.error("❌ Geen van de endpoints werkte om een public note toe te voegen.")
     return False
