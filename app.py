@@ -203,14 +203,17 @@ def create_halo_ticket(form, room_id):
         send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return
 
-    # Combineer ALLE formuliervelden in de ticket details (zonder impact/urgency)
+    # Combineer ALLE formuliervelden in de ticket details (met conditionele impacttoelichting)
     details = (
         f"**Omschrijving:** {form['omschrijving']}\n"
         f"**Sinds wanneer:** {form.get('sindswanneer', '-')}\n"
         f"**Wat werkt niet:** {form.get('watwerktniet', '-')}\n"
         f"**Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}\n"
-        f"**Impact toelichting:** {form.get('impacttoelichting', '-')}"
     )
+    
+    # Alleen toevoegen als impacttoelichting niet leeg is
+    if form.get('impacttoelichting', '').strip():
+        details += f"**Impact toelichting:** {form['impacttoelichting']}\n"
 
     body = {
         "summary": form["omschrijving"][:100],
@@ -250,14 +253,13 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # Gebruik de juiste endpoint voor Notes met ticket_id in de body
+    # GEWENSTE ENDPOINT: /Tickets/{ticket_id}/Notes
     note_data = {
         "text": text,
-        "is_public": True,
-        "ticket_id": int(ticket_id)  # Zorg dat ticket_id een integer is
+        "is_public": True
     }
     r = requests.post(
-        f"{HALO_API_BASE}/Notes",  # Correcte endpoint voor Notes
+        f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes",  # Correcte endpoint met ticket_id in URL
         headers=h,
         json=note_data,
         timeout=15
