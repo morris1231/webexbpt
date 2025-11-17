@@ -283,7 +283,9 @@ def add_public_note(ticket_id, text):
         f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions",
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/Actions",
         f"{HALO_API_BASE}/api/Tickets/{ticket_id}/actions",
-        f"{HALO_API_BASE}/api/actions",                      # Nieuw: POST naar /api/actions met ticket_id in payload
+        f"{HALO_API_BASE}/api/actions",
+        f"{HALO_API_BASE}/api/Notes",                        # Nieuw: /api/Notes endpoint
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",    # Nieuw: /api/tickets/{id}/Notes
     ]
     
     # Mogelijke payload structuren
@@ -335,6 +337,36 @@ def add_public_note(ticket_id, text):
                 "action_id": ACTION_ID_PUBLIC,
                 "fields": {"Note": text}
             }
+        },
+        {
+            "name": "POST /api/Notes (hoofdletters)",
+            "payload": {
+                "TicketId": ticket_id,
+                "NoteText": text,
+                "IsPublic": True
+            }
+        },
+        {
+            "name": "POST /api/Notes (kleine letters)",
+            "payload": {
+                "ticketid": ticket_id,
+                "notetext": text,
+                "ispublic": True
+            }
+        },
+        {
+            "name": "POST /api/Notes (zonder IsPublic)",
+            "payload": {
+                "TicketId": ticket_id,
+                "NoteText": text
+            }
+        },
+        {
+            "name": "POST /api/tickets/{id}/Notes",
+            "payload": {
+                "text": text,
+                "is_public": True
+            }
         }
     ]
     
@@ -349,8 +381,8 @@ def add_public_note(ticket_id, text):
             
             # Bepaal welke endpoint we gebruiken
             endpoint = primary_endpoint
-            if i > 4:  # De laatste twee payload's zijn voor /api/actions
-                endpoint = endpoints_to_try[4]
+            if i > 6:  # De laatste 4 payload's zijn voor andere endpoints
+                endpoint = endpoints_to_try[i-6]  # Pas de index aan voor de nieuwe endpoints
             
             r = requests.post(endpoint, headers=h, json=payload, timeout=15)
             
@@ -383,6 +415,8 @@ def add_public_note(ticket_id, text):
                     return True
                 else:
                     log.warning(f"⚠️  Alternatief endpoint {j} mislukt: {r.status_code}")
+                    if r.text:
+                        log.debug(f"   Response: {r.text[:200]}")
                     
             except Exception as e:
                 log.error(f"💥 Alternatief endpoint {j} exceptie: {str(e)}")
