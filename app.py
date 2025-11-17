@@ -26,8 +26,10 @@ if missing:
     sys.exit(1)
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
-# STRIP TRAILING SLASHES FROM API BASE URL
-HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
+HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')  # Base URL zonder trailing slash
+API_VERSION = "v1"  # API versie
+API_PATH = f"/api/{API_VERSION}"  # Volledige API pad
+
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
@@ -76,7 +78,8 @@ def fetch_users(client_id: int, site_id: int):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (size={page_size})")
-        r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
+        # Gebruik de volledige API_PATH voor alle endpoints
+        r = requests.get(f"{HALO_API_BASE}{API_PATH}/Users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
             log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
@@ -229,7 +232,7 @@ def create_halo_ticket(form, room_id):
     }
 
     # Belangrijke fix: Halo API verwacht een JSON ARRAY van tickets
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
+    r = requests.post(f"{HALO_API_BASE}{API_PATH}/Tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
@@ -265,8 +268,8 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes
-    url = f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes"
+    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes met API_PATH
+    url = f"{HALO_API_BASE}{API_PATH}/Tickets/{ticket_id}/Notes"
     note_data = {
         "text": text,
         "is_public": True
@@ -281,6 +284,7 @@ def add_public_note(ticket_id, text):
         log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
         log.error(f"🔍 Gebruikte URL: {url}")
         log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
+        log.error(f"🔍 API_PATH: {API_PATH}")
         log.error(f"🔍 ticket_id: {ticket_id}")
         # Log de volledige response voor debugging
         if r.text:
