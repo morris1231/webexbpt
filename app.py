@@ -254,19 +254,17 @@ def create_halo_ticket(form, room_id):
     log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 # --------------------------------------------------------------------------
-# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - MEERDERE BENADERINGEN)
+# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - OPTIMALISEERDE VERSIE)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
     """
-    Voeg een public note toe aan een HALO ticket via de Actions API
-    Probeert meerdere payload formaten om compatibiliteit te garanderen
+    Voeg een public note toe aan een HALO ticket via de Actions API.
+    Probeert verschillende endpoint en payload combinaties.
     """
     h = get_halo_headers()
     if not h:
         log.error("❌ Kan geen HALO headers verkrijgen")
         return False
-    
-    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions"
     
     # Eerst controleren of ticket bestaat
     try:
@@ -279,10 +277,18 @@ def add_public_note(ticket_id, text):
         log.error(f"❌ Ticket check mislukt: {str(e)}")
         return False
     
-    # Verschillende payload formaten proberen
+    # Mogelijke endpoints (combinaties van hoofd-/kleine letters)
+    endpoints_to_try = [
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions",  # Meest waarschijnlijk
+        f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions",
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Actions",
+        f"{HALO_API_BASE}/api/Tickets/{ticket_id}/actions",
+    ]
+    
+    # Mogelijke payload structuren
     payloads_to_try = [
         {
-            "name": "Standaard met Note",
+            "name": "Standaard met Note (kleine letters endpoint)",
             "payload": {
                 "action_id": ACTION_ID_PUBLIC,
                 "fields": {"Note": text},
@@ -290,14 +296,14 @@ def add_public_note(ticket_id, text):
             }
         },
         {
-            "name": "Zonder is_public",
+            "name": "Zonder is_public (kleine letters)",
             "payload": {
                 "action_id": ACTION_ID_PUBLIC,
                 "fields": {"Note": text}
             }
         },
         {
-            "name": "Met Description",
+            "name": "Met Description (kleine letters)",
             "payload": {
                 "action_id": ACTION_ID_PUBLIC,
                 "fields": {"Description": text},
@@ -305,41 +311,28 @@ def add_public_note(ticket_id, text):
             }
         },
         {
-            "name": "Met Comments",
-            "payload": {
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"Comments": text},
-                "is_public": True
-            }
-        },
-        {
-            "name": "Kleine letters",
+            "name": "Kleine letters veldnaam",
             "payload": {
                 "action_id": ACTION_ID_PUBLIC,
                 "fields": {"note": text},
                 "is_public": True
             }
-        },
-        {
-            "name": "Zonder fields",
-            "payload": {
-                "action_id": ACTION_ID_PUBLIC,
-                "is_public": True
-            }
         }
     ]
     
-    # Probeer elke payload
+    # Eerst proberen met het meest waarschijnlijke endpoint
+    primary_endpoint = endpoints_to_try[0]
+    log.info(f"🎯 Probeert primary endpoint: {primary_endpoint}")
+    
     for i, test in enumerate(payloads_to_try, 1):
         try:
             payload = test["payload"]
             log.info(f"🔍 Poging {i}: {test['name']}")
-            log.debug(f"   Payload: {json.dumps(payload, indent=2)}")
             
-            r = requests.post(url, headers=h, json=payload, timeout=15)
+            r = requests.post(primary_endpoint, headers=h, json=payload, timeout=15)
             
             if r.ok:
-                log.info(f"✅ Public note succesvol toegevoegd! (Poging {i}: {test['name']})")
+                log.info(f"✅ Public note succesvol toegevoegd! ({test['name']})")
                 return True
             else:
                 log.warning(f"⚠️  Poging {i} ({test['name']}) mislukt: {r.status_code}")
@@ -350,7 +343,29 @@ def add_public_note(ticket_id, text):
             log.error(f"💥 Poging {i} ({test['name']}) exceptie: {str(e)}")
             continue
     
-    log.error(f"❌ Alle {len(payloads_to_try)} pogingen mislukt voor ticket {ticket_id}")
+    # Als primary endpoint niet werkt, probeer andere endpoints
+    if len(endpoints_to_try) > 1:
+        log.info("🔄 Primary endpoint mislukt, probeert alternatieve endpoints...")
+        
+        # Gebruik de meest succesvolle payload (eerste in lijst)
+        test_payload = payloads_to_try[0]["payload"]
+        
+        for j, endpoint in enumerate(endpoints_to_try[1:], 1):
+            try:
+                log.info(f"🔍 Alternatief endpoint {j}: {endpoint}")
+                r = requests.post(endpoint, headers=h, json=test_payload, timeout=15)
+                
+                if r.ok:
+                    log.info(f"✅ Public note succesvol toegevoegd via alternatief endpoint!")
+                    return True
+                else:
+                    log.warning(f"⚠️  Alternatief endpoint {j} mislukt: {r.status_code}")
+                    
+            except Exception as e:
+                log.error(f"💥 Alternatief endpoint {j} exceptie: {str(e)}")
+                continue
+    
+    log.error(f"❌ Alle pogingen mislukt voor ticket {ticket_id}")
     return False
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
