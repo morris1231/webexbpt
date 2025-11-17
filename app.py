@@ -227,7 +227,7 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    # BELANGRIJKE FIX: Halo API verwacht een JSON ARRAY van tickets (ook voor 1 ticket)
+    # Belangrijke fix: Halo API verwacht een JSON ARRAY van tickets
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
@@ -264,11 +264,12 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes
-    url = f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes"
+    # CORRECTE ENDPOINT: /Notes met ticket_id in de body
+    url = f"{HALO_API_BASE}/Notes"
     note_data = {
         "text": text,
-        "is_public": True
+        "is_public": True,
+        "ticket_id": int(ticket_id)  # Ticket ID in de body
     }
     r = requests.post(
         url,
