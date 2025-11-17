@@ -296,7 +296,7 @@ def process_webex_event(payload):
         create_halo_ticket(inputs, payload["data"]["roomId"])
 
 # --------------------------------------------------------------------------
-# HALO ACTION BUTTON WEBHOOK (automatische detectie)
+# HALO ACTION BUTTON WEBHOOK (verbeterde logging)
 # --------------------------------------------------------------------------
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
@@ -309,31 +309,36 @@ def halo_action():
         data = request.form.to_dict()
         log.info(f"📥 Received form data: {json.dumps(data, indent=2)}")
     
-    # Probeer meerdere mogelijke velden voor ticket_id en note_text
-    ticket_id = (
-        data.get("ticket_id") or 
-        data.get("TicketID") or 
-        data.get("id") or 
-        data.get("TicketId") or 
-        data.get("TicketID") or 
-        data.get("ticketId") or
-        data.get("TicketNumber") or
-        data.get("TicketNo")
-    )
+    # Check alle mogelijke velden voor ticket_id
+    ticket_id_field = None
+    ticket_id = None
+    for field in ["ticket_id", "TicketID", "id", "TicketId", "TicketID", "ticketId", "TicketNumber", "TicketNo", "ticket_number", "ticketno", "TicketReference", "Reference", "number", "ticket_id_number", "ticket_id_value"]:
+        if field in data:
+            ticket_id = data[field]
+            ticket_id_field = field
+            break
     
-    note_text = (
-        data.get("note") or 
-        data.get("text") or 
-        data.get("note_text") or 
-        data.get("noteContent") or 
-        data.get("Note") or 
-        data.get("NoteText") or 
-        data.get("public_note") or 
-        data.get("comment") or 
-        data.get("description") or
-        data.get("noteBody") or
-        data.get("content")
-    )
+    # Check alle mogelijke velden voor note_text
+    note_text_field = None
+    note_text = None
+    for field in ["note", "text", "note_text", "noteContent", "Note", "NoteText", "public_note", "comment", "description", "noteBody", "content", "note_details", "note_text_field", "public_note_text"]:
+        if field in data:
+            note_text = data[field]
+            note_text_field = field
+            break
+    
+    # Log welke velden zijn gebruikt
+    if ticket_id_field and note_text_field:
+        log.info(f"✅ Using ticket_id field: '{ticket_id_field}' value: {ticket_id}")
+        log.info(f"✅ Using note_text field: '{note_text_field}' value: {note_text}")
+    elif ticket_id_field:
+        log.info(f"✅ Using ticket_id field: '{ticket_id_field}' value: {ticket_id}")
+        log.warning("❌ No note_text field found")
+    elif note_text_field:
+        log.info(f"✅ Using note_text field: '{note_text_field}' value: {note_text}")
+        log.warning("❌ No ticket_id field found")
+    else:
+        log.warning("❌ No ticket_id or note_text fields found in any field")
     
     # Controleer of we voldoende gegevens hebben
     if not ticket_id or not note_text:
@@ -342,14 +347,19 @@ def halo_action():
     
     # Converteer ticket_id naar string voor veilige vergelijking
     ticket_id_str = str(ticket_id)
+    found_room = False
     for room_id, stored_tid in TICKET_ROOM_MAP.items():
         if str(stored_tid) == ticket_id_str:
             send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
             log.info(f"✅ Notitie gestuurd naar room {room_id} voor ticket {ticket_id}")
-            return {"status": "ok"}
+            found_room = True
+            break
     
-    log.warning(f"❌ Geen Webex-ruimte gevonden voor ticket_id: {ticket_id}")
-    return {"status": "ignore"}
+    if not found_room:
+        log.warning(f"❌ Geen Webex-ruimte gevonden voor ticket_id: {ticket_id}")
+        log.warning(f"✅ Huidige TICKET_ROOM_MAP: {json.dumps(TICKET_ROOM_MAP, indent=2)}")
+    
+    return {"status": "ok"}
 
 # --------------------------------------------------------------------------
 # ROUTES
