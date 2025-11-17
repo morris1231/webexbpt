@@ -264,12 +264,11 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # CORRECTE ENDPOINT: /Notes met ticket_id in de body
-    url = f"{HALO_API_BASE}/Notes"
+    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes met HALO_API_BASE inclusief /v1/
+    url = f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes"
     note_data = {
         "text": text,
-        "is_public": True,
-        "ticket_id": int(ticket_id)  # Ticket ID in de body
+        "is_public": True
     }
     r = requests.post(
         url,
