@@ -203,19 +203,20 @@ def create_halo_ticket(form, room_id):
         send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return
 
-    # Combineer ALLE formuliervelden in de ticket details
+    # Combineer ALLE formuliervelden in de ticket details (zonder email in details)
     details = (
-        f"**Email:** {form['email']}\n"
         f"**Omschrijving:** {form['omschrijving']}\n"
         f"**Sinds wanneer:** {form.get('sindswanneer', '-')}\n"
         f"**Wat werkt niet:** {form.get('watwerktniet', '-')}\n"
         f"**Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}\n"
         f"**Impact toelichting:** {form.get('impacttoelichting', '-')}\n"
-        f"**Impact:** {form.get('impact', '-')} | **Urgency:** {form.get('urgency', '-')}")
+        f"**Impact:** {form.get('impact', '-')}\n"
+        f"**Urgency:** {form.get('urgency', '-')}"
+    )
 
     body = {
         "summary": form["omschrijving"][:100],
-        "details": details,  # Nu bevat details ALLE vragenlijstvelden
+        "details": details,
         "tickettype_id": HALO_TICKET_TYPE_ID,
         "impact": int(form.get("impact", "3")),
         "urgency": int(form.get("urgency", "3")),
@@ -251,12 +252,14 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
+    # Wijzig de endpoint naar /Notes en stuur ticket_id in de body
     note_data = {
         "text": text,
-        "is_public": True
+        "is_public": True,
+        "ticket_id": ticket_id
     }
     r = requests.post(
-        f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes",
+        f"{HALO_API_BASE}/Notes",
         headers=h,
         json=note_data,
         timeout=15
