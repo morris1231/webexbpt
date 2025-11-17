@@ -242,12 +242,14 @@ def create_halo_ticket(form, room_id):
     else:
         ticket = response
         log.info(f"✅ Gevonden ticket in raw response: {json.dumps(ticket, indent=2)}")
-    # Probeers verschillende key's voor ticket-ID
-    tid = str(ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or ticket.get("ticket_id") or "")
+    
+    # Check voor TicketNumber (de publieke ticket ID die in de URL wordt gebruikt)
+    tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or ticket.get("ticket_id") or "")
     if not tid:
         log.error(f"❌ Geen ticket ID gevonden in respons: {json.dumps(ticket, indent=2)}")
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         return
+    
     # Sla op met string-ID (om type-problemen te voorkomen)
     TICKET_ROOM_MAP[room_id] = tid
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
@@ -287,6 +289,8 @@ def add_public_note(ticket_id, text):
         f"{HALO_API_BASE}/api/Notes",
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/notes",
+        f"{HALO_API_BASE}/api/Notes/{ticket_id}",  # Nieuw: /api/Notes/{ticket_id}
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",  # Dubbelcheck
     ]
     
     # Mogelijke payload structuren
@@ -394,6 +398,27 @@ def add_public_note(ticket_id, text):
                     "Note": text
                 }
             }
+        },
+        # Poging 13: POST /api/Notes/{ticket_id}, NoteText
+        {
+            "name": "POST /api/Notes/{ticket_id}, NoteText",
+            "payload": {
+                "NoteText": text
+            }
+        },
+        # Poging 14: POST /api/Notes/{ticket_id}, Note
+        {
+            "name": "POST /api/Notes/{ticket_id}, Note",
+            "payload": {
+                "Note": text
+            }
+        },
+        # Poging 15: POST /api/Notes/{ticket_id}, text
+        {
+            "name": "POST /api/Notes/{ticket_id}, text",
+            "payload": {
+                "text": text
+            }
         }
     ]
     
@@ -411,7 +436,7 @@ def add_public_note(ticket_id, text):
             
             # Bepaal welke endpoint we gebruiken
             endpoint = primary_endpoint
-            if i > 1:  # Gebruik alternatieve endpoints voor de rest
+            if i > 1 and i-1 < len(endpoints_to_try):
                 endpoint = endpoints_to_try[i-1]
             
             r = requests.post(endpoint, headers=h, json=payload, timeout=15)
