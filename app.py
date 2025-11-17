@@ -37,11 +37,9 @@ USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}   # roomId <-> ticketId
 CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
 MAX_PAGES = 10  # Beperk tot max 10 pagina's om oneindige loops te voorkomen
-
 # HALO PSA Action Configuration voor Public Notes
 ACTION_ID_PUBLIC = 145  # Specifiek voor jouw test
 NOTE_FIELD_NAME = "Note"  # Enkel "Note" als veld
-
 # --------------------------------------------------------------------------
 # HALO AUTH
 # --------------------------------------------------------------------------
@@ -242,14 +240,12 @@ def create_halo_ticket(form, room_id):
     else:
         ticket = response
         log.info(f"✅ Gevonden ticket in raw response: {json.dumps(ticket, indent=2)}")
-    
     # Check voor TicketNumber (de publieke ticket ID die in de URL wordt gebruikt)
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or ticket.get("ticket_id") or "")
     if not tid:
         log.error(f"❌ Geen ticket ID gevonden in respons: {json.dumps(ticket, indent=2)}")
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         return
-    
     # Sla op met string-ID (om type-problemen te voorkomen)
     TICKET_ROOM_MAP[room_id] = tid
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
@@ -266,7 +262,6 @@ def add_public_note(ticket_id, text):
     if not h:
         log.error("❌ Kan geen HALO headers verkrijgen")
         return False
-    
     # Eerst controleren of ticket bestaat
     try:
         check_resp = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
@@ -277,7 +272,6 @@ def add_public_note(ticket_id, text):
     except Exception as e:
         log.error(f"❌ Ticket check mislukt: {str(e)}")
         return False
-    
     # Specifieke endpoint en payload voor deze test
     endpoint = f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions"
     payload = {
@@ -286,13 +280,11 @@ def add_public_note(ticket_id, text):
             "Note": text
         }
     }
-    
     log.info(f"🎯 Specifieke test met action_id {ACTION_ID_PUBLIC} op endpoint: {endpoint}")
     log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
-    
     try:
-        r = requests.post(endpoint, headers=h, json=[payload], timeout=15)
-        
+        # FIX: Stuur een enkel object ipv een lijst ([payload] -> payload)
+        r = requests.post(endpoint, headers=h, json=payload, timeout=15)
         if r.ok:
             log.info("✅ Public note succesvol toegevoegd!")
             return True
