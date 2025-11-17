@@ -299,7 +299,7 @@ def add_public_note(ticket_id, text):
                 "Note": text
             }
         },
-        # Poging 2: action_id als string, NoteText als root-veld
+        # Poging 2: action_id (string), NoteText als root-veld
         {
             "name": "action_id (string), NoteText als root-veld",
             "payload": {
@@ -307,7 +307,7 @@ def add_public_note(ticket_id, text):
                 "NoteText": text
             }
         },
-        # Poging 3: action_id als string, Text als root-veld
+        # Poging 3: action_id (string), Text als root-veld
         {
             "name": "action_id (string), Text als root-veld",
             "payload": {
@@ -315,7 +315,7 @@ def add_public_note(ticket_id, text):
                 "Text": text
             }
         },
-        # Poging 4: POST /api/Notes met TicketId en NoteText
+        # Poging 4: POST /api/Notes, TicketId en NoteText
         {
             "name": "POST /api/Notes, TicketId en NoteText",
             "payload": {
@@ -324,7 +324,7 @@ def add_public_note(ticket_id, text):
                 "IsPublic": True
             }
         },
-        # Poging 5: POST /api/Notes met ticketid en notetext
+        # Poging 5: POST /api/Notes, ticketid en notetext
         {
             "name": "POST /api/Notes, ticketid en notetext",
             "payload": {
@@ -333,7 +333,7 @@ def add_public_note(ticket_id, text):
                 "ispublic": True
             }
         },
-        # Poging 6: POST /api/tickets/{id}/notes met text en is_public
+        # Poging 6: POST /api/tickets/{id}/notes, text en is_public
         {
             "name": "POST /api/tickets/{id}/notes, text en is_public",
             "payload": {
@@ -341,7 +341,7 @@ def add_public_note(ticket_id, text):
                 "is_public": True
             }
         },
-        # Poging 7: POST /api/tickets/{id}/Notes met text en is_public
+        # Poging 7: POST /api/tickets/{id}/Notes, text en is_public
         {
             "name": "POST /api/tickets/{id}/Notes, text en is_public",
             "payload": {
@@ -349,7 +349,7 @@ def add_public_note(ticket_id, text):
                 "is_public": True
             }
         },
-        # Poging 8: POST /api/actions met ticket_id en action_id
+        # Poging 8: POST /api/actions, ticket_id en action_id
         {
             "name": "POST /api/actions, ticket_id en action_id",
             "payload": {
@@ -358,7 +358,7 @@ def add_public_note(ticket_id, text):
                 "Note": text
             }
         },
-        # Poging 9: POST /api/actions met ticket_id en action_id (NoteText)
+        # Poging 9: POST /api/actions, ticket_id en action_id (NoteText)
         {
             "name": "POST /api/actions, ticket_id en action_id (NoteText)",
             "payload": {
@@ -367,12 +367,32 @@ def add_public_note(ticket_id, text):
                 "NoteText": text
             }
         },
-        # Poging 10: POST /api/tickets/{id}/actions met action_id en NoteText
+        # Poging 10: POST /api/tickets/{id}/actions, action_id en NoteText
         {
             "name": "POST /api/tickets/{id}/actions, action_id en NoteText",
             "payload": {
                 "action_id": str(ACTION_ID_PUBLIC),
                 "NoteText": text
+            }
+        },
+        # Poging 11: POST /api/tickets/{id}/actions, action_id en fields
+        {
+            "name": "POST /api/tickets/{id}/actions, action_id en fields",
+            "payload": {
+                "action_id": str(ACTION_ID_PUBLIC),
+                "fields": {
+                    "Note": text
+                }
+            }
+        },
+        # Poging 12: POST /api/actions, action_id en fields (ARRAY)
+        {
+            "name": "POST /api/actions, action_id en fields (ARRAY)",
+            "payload": {
+                "action_id": str(ACTION_ID_PUBLIC),
+                "fields": {
+                    "Note": text
+                }
             }
         }
     ]
@@ -383,8 +403,11 @@ def add_public_note(ticket_id, text):
     
     for i, test in enumerate(payloads_to_try, 1):
         try:
-            payload = test["payload"]
+            # BELANGRIJK: Zet de payload in een ARRAY (JSON array)
+            payload = [test["payload"]]
+            
             log.info(f"🔍 Poging {i}: {test['name']}")
+            log.debug(f"   Payload: {json.dumps(payload, indent=2)}")
             
             # Bepaal welke endpoint we gebruiken
             endpoint = primary_endpoint
@@ -412,7 +435,7 @@ def add_public_note(ticket_id, text):
         log.info("🔄 Primary endpoint mislukt, probeert alternatieve endpoints...")
         
         # Gebruik de meest succesvolle payload (eerste in lijst)
-        test_payload = payloads_to_try[0]["payload"]
+        test_payload = [payloads_to_try[0]["payload"]]
         
         for j, endpoint in enumerate(endpoints_to_try[1:], 1):
             try:
