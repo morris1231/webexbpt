@@ -219,34 +219,54 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    r = requests.post(f"{HALO_API_BASE}/api/tickets", headers=h, json=[body], timeout=20)
+    # Log volledige request details
+    url = f"{HALO_API_BASE}/api/tickets"
+    log.info(f"➡️ Creating ticket to {url}")
+    log.info(f"📩 Request body: {json.dumps(body, indent=2)}")
+    
+    r = requests.post(url, headers=h, json=[body], timeout=20)
+    
+    # Log response details
+    log.info(f"✅ Halo API response status: {r.status_code}")
+    log.info(f"📩 Response body: {r.text[:1000]}")
+    
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         return
 
     response = r.json()
+    log.debug(f"🔍 Response structure: {type(response)} - {json.dumps(response, indent=2)}")
+    
     ticket = None
     if isinstance(response, list) and len(response) > 0:
         ticket = response[0]
+        log.info(f"✅ Gevonden ticket in list: {json.dumps(ticket, indent=2)}")
     elif isinstance(response, dict):
         if "data" in response:
             ticket = response["data"]
+            log.info(f"✅ Gevonden ticket in data field: {json.dumps(ticket, indent=2)}")
         elif "tickets" in response:
             ticket = response["tickets"][0]
+            log.info(f"✅ Gevonden ticket in tickets field: {json.dumps(ticket, indent=2)}")
         else:
             ticket = response
+            log.info(f"✅ Gevonden ticket in root: {json.dumps(ticket, indent=2)}")
     else:
         ticket = response
+        log.info(f"✅ Gevonden ticket in raw response: {json.dumps(ticket, indent=2)}")
 
+    # Probeers verschillende key's voor ticket-ID
     tid = str(ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or ticket.get("ticket_id") or "")
     if not tid:
-        log.error(f"❌ Geen ticket ID gevonden in respons: {response}")
+        log.error(f"❌ Geen ticket ID gevonden in respons: {json.dumps(ticket, indent=2)}")
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         return
 
+    # Sla op met string-ID (om type-problemen te voorkomen)
     TICKET_ROOM_MAP[room_id] = tid
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
+    log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 
 # --------------------------------------------------------------------------
@@ -281,14 +301,13 @@ def process_webex_event(payload):
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
     """Webhook vanuit Halo voor Action Button (id 78)"""
-    # Check of het JSON of form data is
+    # Log volledige ontvangen data
     if request.is_json:
         data = request.json
+        log.info(f"📥 Received JSON data: {json.dumps(data, indent=2)}")
     else:
         data = request.form.to_dict()
-    
-    # Log de volledige ontvangen data voor debugging
-    log.info(f"Received halo action webhook data: {json.dumps(data, indent=2)}")
+        log.info(f"📥 Received form data: {json.dumps(data, indent=2)}")
     
     # Probeer meerdere mogelijke velden voor ticket_id en note_text
     ticket_id = (
@@ -297,7 +316,9 @@ def halo_action():
         data.get("id") or 
         data.get("TicketId") or 
         data.get("TicketID") or 
-        data.get("ticketId")
+        data.get("ticketId") or
+        data.get("TicketNumber") or
+        data.get("TicketNo")
     )
     
     note_text = (
@@ -309,12 +330,14 @@ def halo_action():
         data.get("NoteText") or 
         data.get("public_note") or 
         data.get("comment") or 
-        data.get("description")
+        data.get("description") or
+        data.get("noteBody") or
+        data.get("content")
     )
     
-    # Controleer of we voldoende data hebben
+    # Controleer of we voldoende gegevens hebben
     if not ticket_id or not note_text:
-        log.warning(f"❌ Onvoldoende gegevens in action webhook: {data}")
+        log.warning(f"❌ Onvoldoende gegevens in action webhook: {json.dumps(data, indent=2)}")
         return {"status": "ignore"}
     
     # Converteer ticket_id naar string voor veilige vergelijking
@@ -322,6 +345,7 @@ def halo_action():
     for room_id, stored_tid in TICKET_ROOM_MAP.items():
         if str(stored_tid) == ticket_id_str:
             send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
+            log.info(f"✅ Notitie gestuurd naar room {room_id} voor ticket {ticket_id}")
             return {"status": "ok"}
     
     log.warning(f"❌ Geen Webex-ruimte gevonden voor ticket_id: {ticket_id}")
