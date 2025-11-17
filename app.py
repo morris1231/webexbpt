@@ -39,7 +39,7 @@ CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
 MAX_PAGES = 10  # Beperk tot max 10 pagina's om oneindige loops te voorkomen
 
 # HALO PSA Action Configuration voor Public Notes
-ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 78))  # Default 78, pas aan indien nodig
+ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))  # Default 78, pas aan indien nodig
 NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")     # Default "Note"
 
 # --------------------------------------------------------------------------
@@ -592,3 +592,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
