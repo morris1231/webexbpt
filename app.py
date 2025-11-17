@@ -26,10 +26,8 @@ if missing:
     sys.exit(1)
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
+# Zet HALO_API_BASE naar de volledige basis-URL (bijv. https://bncuat.halopsa.com/api/v1)
 HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
-API_VERSION = "v1"
-API_PATH = f"/api/{API_VERSION}"
-
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
@@ -78,8 +76,8 @@ def fetch_users(client_id: int, site_id: int):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (size={page_size})")
-        # Gebruik lowercase endpoints
-        r = requests.get(f"{HALO_API_BASE}{API_PATH}/users", headers=h, params=params, timeout=15)
+        # Gebruik de volledige HALO_API_BASE met lowercase endpoints
+        r = requests.get(f"{HALO_API_BASE}/users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
             log.warning(f"⚠️ /users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
@@ -223,8 +221,8 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    # Gebruik lowercase endpoints
-    r = requests.post(f"{HALO_API_BASE}{API_PATH}/tickets", headers=h, json=[body], timeout=20)
+    # Gebruik de volledige HALO_API_BASE met lowercase endpoints
+    r = requests.post(f"{HALO_API_BASE}/tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
@@ -256,8 +254,8 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # Gebruik lowercase endpoints
-    url = f"{HALO_API_BASE}{API_PATH}/tickets/{ticket_id}/notes"
+    # Gebruik de volledige HALO_API_BASE met lowercase endpoints
+    url = f"{HALO_API_BASE}/tickets/{ticket_id}/notes"
     note_data = {
         "text": text,
         "is_public": True
@@ -272,7 +270,6 @@ def add_public_note(ticket_id, text):
         log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
         log.error(f"🔍 Gebruikte URL: {url}")
         log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
-        log.error(f"🔍 API_PATH: {API_PATH}")
         log.error(f"🔍 ticket_id: {ticket_id}")
         if r.text:
             log.error(f"Response body: {r.text}")
