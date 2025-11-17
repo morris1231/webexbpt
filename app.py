@@ -35,7 +35,7 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}   # roomId <-> ticketId
-CACHE_DURATION = 24 _60_ 60  # 24 uur in seconden
+CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
 MAX_PAGES = 10  # Beperk tot max 10 pagina's om oneindige loops te voorkomen
 # --------------------------------------------------------------------------
 # HALO AUTH
@@ -379,7 +379,7 @@ def initialize():
 # --------------------------------------------------------------------------
 # START
 # --------------------------------------------------------------------------
-if **name** == "__main__":
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
