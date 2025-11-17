@@ -26,9 +26,9 @@ if missing:
     sys.exit(1)
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
-HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')  # Base URL zonder trailing slash
-API_VERSION = "v1"  # API versie
-API_PATH = f"/api/{API_VERSION}"  # Volledige API pad
+HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
+API_VERSION = "v1"
+API_PATH = f"/api/{API_VERSION}"
 
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
@@ -68,7 +68,7 @@ def fetch_users(client_id: int, site_id: int):
     h = get_halo_headers()
     all_users = []
     page = 1
-    page_size = 50  # Halo gebruikt "page_size" in plaats van "per_page"
+    page_size = 50
     page_count = 0
     while page_count < MAX_PAGES:
         params = {
@@ -78,15 +78,13 @@ def fetch_users(client_id: int, site_id: int):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (size={page_size})")
-        # Gebruik de volledige API_PATH voor alle endpoints
-        r = requests.get(f"{HALO_API_BASE}{API_PATH}/Users", headers=h, params=params, timeout=15)
+        # Gebruik lowercase endpoints
+        r = requests.get(f"{HALO_API_BASE}{API_PATH}/users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
-            log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
+            log.warning(f"⚠️ /users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-        # Log de volledige response voor debugging
         response_json = r.json()
         log.debug(f"Response voor pagina {page}: {json.dumps(response_json, indent=2)}")
-        # Probeer verschillende manieren om gebruikers te vinden
         users = []
         if isinstance(response_json, list):
             users = response_json
@@ -95,16 +93,13 @@ def fetch_users(client_id: int, site_id: int):
         if not users:
             log.info(f"✅ Geen gebruikers gevonden op pagina {page}")
             break
-        # Filter actieve gebruikers met geldig emailadres
         for u in users:
-            # Zet alle ID's om naar integers
             if "id" in u:
                 u["id"] = int(u["id"])
             if "client_id" in u:
                 u["client_id"] = int(u["client_id"])
             if "site_id" in u:
                 u["site_id"] = int(u["site_id"])
-            # Filter op basis van gebruikersstatus en email
             if (
                 u.get("use") == "user" and
                 not u.get("inactive", True) and
@@ -113,13 +108,12 @@ def fetch_users(client_id: int, site_id: int):
             ):
                 all_users.append(u)
         log.info(f"✅ Pagina {page}: {len(users)} gebruikers, {len(all_users)} totaal")
-        # Stop als we minder dan page_size gebruikers hebben
         if len(users) < page_size:
             log.info(f"✅ Eind van gebruikerslijst bereikt (pagina {page})")
             break
         page += 1
         page_count += 1
-    USER_CACHE["source"] = "/Users (paginated)"
+    USER_CACHE["source"] = "/users (paginated)"
     log.info(f"✅ Totaal {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
 
@@ -207,7 +201,6 @@ def create_halo_ticket(form, room_id):
         send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return
 
-    # Verbeterde markdown-weergave met bullet points en duidelijke secties
     details = (
         "### 📝 Nieuwe melding details\n\n"
         f"- **Omschrijving:** {form['omschrijving']}\n"
@@ -216,7 +209,6 @@ def create_halo_ticket(form, room_id):
         f"- **Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}\n"
     )
     
-    # Alleen toevoegen als impacttoelichting niet leeg is
     if form.get('impacttoelichting', '').strip():
         details += f"- **Impact toelichting:** {form['impacttoelichting']}\n"
 
@@ -231,20 +223,18 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    # Belangrijke fix: Halo API verwacht een JSON ARRAY van tickets
-    r = requests.post(f"{HALO_API_BASE}{API_PATH}/Tickets", headers=h, json=[body], timeout=20)
+    # Gebruik lowercase endpoints
+    r = requests.post(f"{HALO_API_BASE}{API_PATH}/tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         return
 
-    # Handle response (kan verschillende structuren hebben)
     response = r.json()
     ticket = None
     if isinstance(response, list) and len(response) > 0:
         ticket = response[0]
     elif isinstance(response, dict):
-        # Check voor verschillende mogelijke structuur
         if "data" in response:
             ticket = response["data"]
         elif "tickets" in response:
@@ -254,22 +244,20 @@ def create_halo_ticket(form, room_id):
     else:
         ticket = response
 
-    # Probeers verschillende key's voor ticket-ID
     tid = str(ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or ticket.get("ticket_id") or "")
     if not tid:
         log.error(f"❌ Geen ticket ID gevonden in respons: {response}")
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         return
 
-    # Sla op met string-ID (om type-problemen te voorkomen)
     TICKET_ROOM_MAP[room_id] = tid
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
     return tid
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes met API_PATH
-    url = f"{HALO_API_BASE}{API_PATH}/Tickets/{ticket_id}/Notes"
+    # Gebruik lowercase endpoints
+    url = f"{HALO_API_BASE}{API_PATH}/tickets/{ticket_id}/notes"
     note_data = {
         "text": text,
         "is_public": True
@@ -286,7 +274,6 @@ def add_public_note(ticket_id, text):
         log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
         log.error(f"🔍 API_PATH: {API_PATH}")
         log.error(f"🔍 ticket_id: {ticket_id}")
-        # Log de volledige response voor debugging
         if r.text:
             log.error(f"Response body: {r.text}")
         return False
@@ -311,7 +298,6 @@ def process_webex_event(payload):
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
         elif room_id in TICKET_ROOM_MAP:
-            # Stuur Webex-bericht als public note naar Halo
             add_public_note(TICKET_ROOM_MAP[room_id], f"💬 **Van gebruiker:** {text}")
             send_message(room_id, "📝 Bericht toegevoegd aan Halo als public note.")
     elif res == "attachmentActions":
@@ -332,19 +318,16 @@ def webex_hook():
 
 @app.route("/halo", methods=["POST"])
 def halo_hook():
-    """Webhook vanuit Halo op nieuwe public note"""
     data = request.json or {}
     log.info(f"Received halo webhook data: {json.dumps(data, indent=2)}")
     
     note = data.get("note") or data.get("text") or ""
-    # Probeer meerdere mogelijke key's voor ticket-ID
     ticket_id = data.get("ticket_id") or data.get("TicketID") or data.get("ID") or data.get("id")
     
     if not note or not ticket_id:
         log.warning(f"❌ Geen geldige ticket_id of note in webhook data: {data}")
         return {"status": "ignore"}
     
-    # Converteer alle ID's naar string voor veilige vergelijking
     ticket_id_str = str(ticket_id)
     for room_id, stored_tid in TICKET_ROOM_MAP.items():
         if str(stored_tid) == ticket_id_str:
