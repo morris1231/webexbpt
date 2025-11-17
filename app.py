@@ -203,17 +203,18 @@ def create_halo_ticket(form, room_id):
         send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return
 
-    # Combineer ALLE formuliervelden in de ticket details (met conditionele impacttoelichting)
+    # Verbeterde markdown-weergave met bullet points en duidelijke secties
     details = (
-        f"**Omschrijving:** {form['omschrijving']}\n"
-        f"**Sinds wanneer:** {form.get('sindswanneer', '-')}\n"
-        f"**Wat werkt niet:** {form.get('watwerktniet', '-')}\n"
-        f"**Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}\n"
+        "### 📝 Nieuwe melding details\n\n"
+        f"- **Omschrijving:** {form['omschrijving']}\n"
+        f"- **Sinds wanneer:** {form.get('sindswanneer', '-')}\n"
+        f"- **Wat werkt niet:** {form.get('watwerktniet', '-')}\n"
+        f"- **Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}\n"
     )
     
     # Alleen toevoegen als impacttoelichting niet leeg is
     if form.get('impacttoelichting', '').strip():
-        details += f"**Impact toelichting:** {form['impacttoelichting']}\n"
+        details += f"- **Impact toelichting:** {form['impacttoelichting']}\n"
 
     body = {
         "summary": form["omschrijving"][:100],
@@ -226,7 +227,8 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
+    # ZEND EEN ENKELE OBJECT INSTEAD VAN LIST
+    r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=body, timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
@@ -262,20 +264,21 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # GEWENSTE ENDPOINT: /Notes met ticket_id in de body
+    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes
+    url = f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes"
     note_data = {
         "text": text,
-        "is_public": True,
-        "ticket_id": ticket_id  # Zorg dat ticket_id in de body staat
+        "is_public": True
     }
     r = requests.post(
-        f"{HALO_API_BASE}/Notes",  # Correcte endpoint voor notes
+        url,
         headers=h,
         json=note_data,
         timeout=15
     )
     if not r.ok:
         log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
+        log.error(f"🔍 Gebruikte URL: {url}")
         # Log de volledige response voor debugging
         if r.text:
             log.error(f"Response body: {r.text}")
