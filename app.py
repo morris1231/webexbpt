@@ -232,15 +232,24 @@ def create_halo_ticket(form, room_id):
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         return
 
-    # Handle response (can be list or single object)
+    # Handle response (kan verschillende structuren hebben)
     response = r.json()
+    ticket = None
     if isinstance(response, list) and len(response) > 0:
         ticket = response[0]
+    elif isinstance(response, dict):
+        # Check voor verschillende mogelijke structuur
+        if "data" in response:
+            ticket = response["data"]
+        elif "tickets" in response:
+            ticket = response["tickets"][0]
+        else:
+            ticket = response
     else:
         ticket = response
 
-    # Converteer ticket-ID naar string voor betere vergelijking
-    tid = str(ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or "")
+    # Probeers verschillende key's voor ticket-ID
+    tid = str(ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or ticket.get("ticket_id") or "")
     if not tid:
         log.error(f"❌ Geen ticket ID gevonden in respons: {response}")
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
@@ -253,19 +262,23 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # GEWENSTE ENDPOINT: /Tickets/{ticket_id}/Notes
+    # GEWENSTE ENDPOINT: /Notes met ticket_id in de body
     note_data = {
         "text": text,
-        "is_public": True
+        "is_public": True,
+        "ticket_id": ticket_id  # Zorg dat ticket_id in de body staat
     }
     r = requests.post(
-        f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes",  # Correcte endpoint met ticket_id in URL
+        f"{HALO_API_BASE}/Notes",  # Correcte endpoint voor notes
         headers=h,
         json=note_data,
         timeout=15
     )
     if not r.ok:
         log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
+        # Log de volledige response voor debugging
+        if r.text:
+            log.error(f"Response body: {r.text}")
         return False
     return True
 
