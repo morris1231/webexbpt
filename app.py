@@ -270,6 +270,33 @@ def create_halo_ticket(form, room_id):
     return tid
 
 # --------------------------------------------------------------------------
+# PUBLIC NOTE FUNCTIE (nieuw toegevoegd)
+# --------------------------------------------------------------------------
+def add_public_note(ticket_id, text):
+    h = get_halo_headers()
+    # CORRECTE ENDPOINT: /api/tickets/{ticket_id}/notes
+    url = f"{HALO_API_BASE}/api/tickets/{ticket_id}/notes"
+    note_data = {
+        "text": text,
+        "is_public": True
+    }
+    r = requests.post(
+        url,
+        headers=h,
+        json=note_data,
+        timeout=15
+    )
+    if not r.ok:
+        log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
+        log.error(f"🔍 Gebruikte URL: {url}")
+        log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
+        log.error(f"🔍 ticket_id: {ticket_id}")
+        if r.text:
+            log.error(f"Response body: {r.text}")
+        return False
+    return True
+
+# --------------------------------------------------------------------------
 # WEBEX EVENTS
 # --------------------------------------------------------------------------
 def process_webex_event(payload):
@@ -287,6 +314,10 @@ def process_webex_event(payload):
             return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
+        elif room_id in TICKET_ROOM_MAP:
+            # Stuur Webex-bericht als public note naar Halo
+            add_public_note(TICKET_ROOM_MAP[room_id], f"💬 **Van gebruiker:** {text}")
+            send_message(room_id, "📝 Bericht toegevoegd aan Halo als public note.")
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         inputs = requests.get(
