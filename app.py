@@ -264,7 +264,7 @@ def create_halo_ticket(form, room_id):
 
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes met HALO_API_BASE inclusief /v1/
+    # CORRECTE ENDPOINT: /Tickets/{ticket_id}/Notes
     url = f"{HALO_API_BASE}/Tickets/{ticket_id}/Notes"
     note_data = {
         "text": text,
@@ -279,6 +279,8 @@ def add_public_note(ticket_id, text):
     if not r.ok:
         log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
         log.error(f"🔍 Gebruikte URL: {url}")
+        log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
+        log.error(f"🔍 ticket_id: {ticket_id}")
         # Log de volledige response voor debugging
         if r.text:
             log.error(f"Response body: {r.text}")
@@ -327,11 +329,14 @@ def webex_hook():
 def halo_hook():
     """Webhook vanuit Halo op nieuwe public note"""
     data = request.json or {}
+    log.info(f"Received halo webhook data: {json.dumps(data, indent=2)}")
+    
     note = data.get("note") or data.get("text") or ""
     # Probeer meerdere mogelijke key's voor ticket-ID
     ticket_id = data.get("ticket_id") or data.get("TicketID") or data.get("ID") or data.get("id")
     
     if not note or not ticket_id:
+        log.warning(f"❌ Geen geldige ticket_id of note in webhook data: {data}")
         return {"status": "ignore"}
     
     # Converteer alle ID's naar string voor veilige vergelijking
