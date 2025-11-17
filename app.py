@@ -24,7 +24,6 @@ missing = [k for k in required if not os.getenv(k)]
 if missing:
     log.critical(f"❌ Ontbrekende .env-variabelen: {missing}")
     sys.exit(1)
-
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE  = os.getenv("HALO_API_BASE")
@@ -68,7 +67,6 @@ def fetch_users(client_id: int, site_id: int):
     page = 1
     page_size = 50  # Halo gebruikt "page_size" in plaats van "per_page"
     page_count = 0
-    
     while page_count < MAX_PAGES:
         params = {
             "client_id": client_id,
@@ -78,26 +76,21 @@ def fetch_users(client_id: int, site_id: int):
         }
         log.info(f"➡️ Fetching users page {page} (size={page_size})")
         r = requests.get(f"{HALO_API_BASE}/Users", headers=h, params=params, timeout=15)
-        
         if r.status_code != 200:
             log.warning(f"⚠️ /Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-            
         # Log de volledige response voor debugging
         response_json = r.json()
         log.debug(f"Response voor pagina {page}: {json.dumps(response_json, indent=2)}")
-        
         # Probeer verschillende manieren om gebruikers te vinden
         users = []
         if isinstance(response_json, list):
             users = response_json
         elif isinstance(response_json, dict):
             users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
-        
         if not users:
             log.info(f"✅ Geen gebruikers gevonden op pagina {page}")
             break
-            
         # Filter actieve gebruikers met geldig emailadres
         for u in users:
             # Zet alle ID's om naar integers
@@ -107,7 +100,6 @@ def fetch_users(client_id: int, site_id: int):
                 u["client_id"] = int(u["client_id"])
             if "site_id" in u:
                 u["site_id"] = int(u["site_id"])
-                
             # Filter op basis van gebruikersstatus en email
             if (
                 u.get("use") == "user" and
@@ -116,17 +108,13 @@ def fetch_users(client_id: int, site_id: int):
                 "@" in u["emailaddress"]
             ):
                 all_users.append(u)
-                
         log.info(f"✅ Pagina {page}: {len(users)} gebruikers, {len(all_users)} totaal")
-        
         # Stop als we minder dan page_size gebruikers hebben
         if len(users) < page_size:
             log.info(f"✅ Eind van gebruikerslijst bereikt (pagina {page})")
             break
-            
         page += 1
         page_count += 1
-        
     USER_CACHE["source"] = "/Users (paginated)"
     log.info(f"✅ Totaal {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
@@ -206,7 +194,7 @@ def send_adaptive_card(room_id):
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
 
 # --------------------------------------------------------------------------
-# HALO TICKETS + NOTES
+# HALO TICKETS + NOTES (GEFIXTE VERSIE)
 # --------------------------------------------------------------------------
 def create_halo_ticket(form, room_id):
     h = get_halo_headers()
@@ -214,50 +202,50 @@ def create_halo_ticket(form, room_id):
     if not user:
         send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return
-    user_id = int(user["id"])
+
+    # Combineer ALLE formuliervelden in de ticket details
+    details = (
+        f"**Email:** {form['email']}\n"
+        f"**Omschrijving:** {form['omschrijving']}\n"
+        f"**Sinds wanneer:** {form.get('sindswanneer', '-')}\n"
+        f"**Wat werkt niet:** {form.get('watwerktniet', '-')}\n"
+        f"**Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}\n"
+        f"**Impact toelichting:** {form.get('impacttoelichting', '-')}\n"
+        f"**Impact:** {form.get('impact', '-')} | **Urgency:** {form.get('urgency', '-')}")
+
     body = {
         "summary": form["omschrijving"][:100],
-        "details": form["omschrijving"],
+        "details": details,  # Nu bevat details ALLE vragenlijstvelden
         "tickettype_id": HALO_TICKET_TYPE_ID,
         "impact": int(form.get("impact", "3")),
         "urgency": int(form.get("urgency", "3")),
         "client_id": int(user.get("client_id", HALO_CLIENT_ID_NUM)),
         "site_id": int(user.get("site_id", HALO_SITE_ID)),
-        "user_id": user_id
+        "user_id": int(user["id"])
     }
+
     r = requests.post(f"{HALO_API_BASE}/Tickets", headers=h, json=[body], timeout=20)
-    
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         return
-        
+
     # Handle response (can be list or single object)
     response = r.json()
     if isinstance(response, list) and len(response) > 0:
         ticket = response[0]
     else:
         ticket = response
-    
-    tid = ticket.get("id") or ticket.get("ID")
+
+    # Converteer ticket-ID naar string voor betere vergelijking
+    tid = str(ticket.get("id") or ticket.get("ID") or ticket.get("TicketID") or "")
     if not tid:
         log.error(f"❌ Geen ticket ID gevonden in respons: {response}")
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         return
-        
+
+    # Sla op met string-ID (om type-problemen te voorkomen)
     TICKET_ROOM_MAP[room_id] = tid
-    # Voeg formuliergegevens als eerste public note toe
-    note = "\n".join([
-        "**Nieuwe melding gegevens:**",
-        f"**Email:** {form['email']}",
-        f"**Omschrijving:** {form['omschrijving']}",
-        f"**Sinds wanneer:** {form.get('sindswanneer', '-')}",
-        f"**Wat werkt niet:** {form.get('watwerktniet', '-')}",
-        f"**Zelf geprobeerd:** {form.get('zelfgeprobeerd', '-')}",
-        f"**Impact toelichting:** {form.get('impacttoelichting', '-')}",
-        f"**Impact:** {form.get('impact', '-')} | **Urgency:** {form.get('urgency', '-')}"
-    ])
-    add_public_note(tid, note)
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
     return tid
 
@@ -321,13 +309,16 @@ def halo_hook():
     """Webhook vanuit Halo op nieuwe public note"""
     data = request.json or {}
     note = data.get("note") or data.get("text") or ""
-    ticket_id = data.get("ticket_id") or data.get("TicketID")
+    # Probeer meerdere mogelijke key's voor ticket-ID
+    ticket_id = data.get("ticket_id") or data.get("TicketID") or data.get("ID") or data.get("id")
+    
     if not note or not ticket_id:
         return {"status": "ignore"}
-    for room_id, t_id in TICKET_ROOM_MAP.items():
-        if isinstance(t_id, dict):
-            t_id = t_id.get("ticket_id")
-        if t_id == ticket_id:
+    
+    # Converteer alle ID's naar string voor veilige vergelijking
+    ticket_id_str = str(ticket_id)
+    for room_id, stored_tid in TICKET_ROOM_MAP.items():
+        if str(stored_tid) == ticket_id_str:
             send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note}")
     return {"status": "ok"}
 
