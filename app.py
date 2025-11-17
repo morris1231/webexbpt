@@ -272,10 +272,9 @@ def add_public_note(ticket_id, text):
     except Exception as e:
         log.error(f"❌ Ticket check mislukt: {str(e)}")
         return False
-    # Specifieke endpoint en payload voor deze test
-    endpoint = f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions"
+    # FIX: Action ID nu in de URL path in plaats van in de payload
+    endpoint = f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/{ACTION_ID_PUBLIC}"
     payload = {
-        "action_id": ACTION_ID_PUBLIC,
         "fields": {
             "Note": text
         }
@@ -283,7 +282,6 @@ def add_public_note(ticket_id, text):
     log.info(f"🎯 Specifieke test met action_id {ACTION_ID_PUBLIC} op endpoint: {endpoint}")
     log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
     try:
-        # FIX: Stuur een enkel object ipv een lijst ([payload] -> payload)
         r = requests.post(endpoint, headers=h, json=payload, timeout=15)
         if r.ok:
             log.info("✅ Public note succesvol toegevoegd!")
