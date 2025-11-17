@@ -37,6 +37,11 @@ USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}   # roomId <-> ticketId
 CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
 MAX_PAGES = 10  # Beperk tot max 10 pagina's om oneindige loops te voorkomen
+
+# HALO PSA Action Configuration voor Public Notes
+ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 78))  # Default 78, pas aan indien nodig
+NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")     # Default "Note"
+
 # --------------------------------------------------------------------------
 # HALO AUTH
 # --------------------------------------------------------------------------
@@ -249,31 +254,33 @@ def create_halo_ticket(form, room_id):
     log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 # --------------------------------------------------------------------------
-# PUBLIC NOTE FUNCTIE (nieuw toegevoegd)
+# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - CORRECTE MANIER)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
     h = get_halo_headers()
-    # CORRECTE ENDPOINT: /api/tickets/{ticket_id}/notes
-    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Notes"
-    note_data = {
-        "text": text,
+    
+    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions"
+
+    payload = {
+        "action_id": ACTION_ID_PUBLIC,
+        "fields": {
+            NOTE_FIELD_NAME: text
+        },
         "is_public": True
     }
-    r = requests.post(
-        url,
-        headers=h,
-        json=note_data,
-        timeout=15
-    )
-    if not r.ok:
-        log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
-        log.error(f"🔍 Gebruikte URL: {url}")
-        log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
-        log.error(f"🔍 ticket_id: {ticket_id}")
-        if r.text:
-            log.error(f"Response body: {r.text}")
+
+    try:
+        r = requests.post(url, headers=h, json=payload, timeout=15)
+        if not r.ok:
+            log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
+            log.error(f"🔍 URL: {url}")
+            log.error(f"🔍 Payload: {json.dumps(payload, indent=2)}")
+            return False
+        log.info("✅ Public note succesvol toegevoegd via Ticket Action.")
+        return True
+    except Exception as e:
+        log.error(f"💥 Exceptie bij public note versturen: {str(e)}")
         return False
-    return True
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
 # --------------------------------------------------------------------------
