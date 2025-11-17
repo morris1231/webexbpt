@@ -39,8 +39,8 @@ CACHE_DURATION = 24 * 60 * 60  # 24 uur in seconden
 MAX_PAGES = 10  # Beperk tot max 10 pagina's om oneindige loops te voorkomen
 
 # HALO PSA Action Configuration voor Public Notes
-ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))  # Default 78, pas aan indien nodig
-NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")     # Default "Note"
+ACTION_ID_PUBLIC = 145  # Specifiek voor jouw test
+NOTE_FIELD_NAME = "Note"  # Enkel "Note" als veld
 
 # --------------------------------------------------------------------------
 # HALO AUTH
@@ -256,12 +256,11 @@ def create_halo_ticket(form, room_id):
     log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 # --------------------------------------------------------------------------
-# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - DEFINITIEVE VERSIE)
+# PUBLIC NOTE FUNCTIE (specifieke test met action ID 145)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
     """
-    Voeg een public note toe aan een HALO ticket via de Actions API.
-    Probeert verschillende endpoint en payload combinaties.
+    Specifieke testfunctie voor action ID 145 met alleen "Note" als veld
     """
     h = get_halo_headers()
     if not h:
@@ -279,210 +278,34 @@ def add_public_note(ticket_id, text):
         log.error(f"❌ Ticket check mislukt: {str(e)}")
         return False
     
-    # Mogelijke endpoints (combinaties van hoofd-/kleine letters)
-    endpoints_to_try = [
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions",  # Meest waarschijnlijk
-        f"{HALO_API_BASE}/api/Tickets/{ticket_id}/Actions",
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Actions",
-        f"{HALO_API_BASE}/api/Tickets/{ticket_id}/actions",
-        f"{HALO_API_BASE}/api/actions",
-        f"{HALO_API_BASE}/api/Notes",
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/notes",
-        f"{HALO_API_BASE}/api/Notes/{ticket_id}",  # Nieuw: /api/Notes/{ticket_id}
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",  # Dubbelcheck
-    ]
-    
-    # Mogelijke payload structuren
-    payloads_to_try = [
-        # Poging 1: action_id als string, Note als root-veld
-        {
-            "name": "action_id (string), Note als root-veld",
-            "payload": {
-                "action_id": str(ACTION_ID_PUBLIC),
-                "Note": text
-            }
-        },
-        # Poging 2: action_id (string), NoteText als root-veld
-        {
-            "name": "action_id (string), NoteText als root-veld",
-            "payload": {
-                "action_id": str(ACTION_ID_PUBLIC),
-                "NoteText": text
-            }
-        },
-        # Poging 3: action_id (string), Text als root-veld
-        {
-            "name": "action_id (string), Text als root-veld",
-            "payload": {
-                "action_id": str(ACTION_ID_PUBLIC),
-                "Text": text
-            }
-        },
-        # Poging 4: POST /api/Notes, TicketId en NoteText
-        {
-            "name": "POST /api/Notes, TicketId en NoteText",
-            "payload": {
-                "TicketId": ticket_id,
-                "NoteText": text,
-                "IsPublic": True
-            }
-        },
-        # Poging 5: POST /api/Notes, ticketid en notetext
-        {
-            "name": "POST /api/Notes, ticketid en notetext",
-            "payload": {
-                "ticketid": ticket_id,
-                "notetext": text,
-                "ispublic": True
-            }
-        },
-        # Poging 6: POST /api/tickets/{id}/notes, text en is_public
-        {
-            "name": "POST /api/tickets/{id}/notes, text en is_public",
-            "payload": {
-                "text": text,
-                "is_public": True
-            }
-        },
-        # Poging 7: POST /api/tickets/{id}/Notes, text en is_public
-        {
-            "name": "POST /api/tickets/{id}/Notes, text en is_public",
-            "payload": {
-                "text": text,
-                "is_public": True
-            }
-        },
-        # Poging 8: POST /api/actions, ticket_id en action_id
-        {
-            "name": "POST /api/actions, ticket_id en action_id",
-            "payload": {
-                "ticket_id": ticket_id,
-                "action_id": str(ACTION_ID_PUBLIC),
-                "Note": text
-            }
-        },
-        # Poging 9: POST /api/actions, ticket_id en action_id (NoteText)
-        {
-            "name": "POST /api/actions, ticket_id en action_id (NoteText)",
-            "payload": {
-                "ticket_id": ticket_id,
-                "action_id": str(ACTION_ID_PUBLIC),
-                "NoteText": text
-            }
-        },
-        # Poging 10: POST /api/tickets/{id}/actions, action_id en NoteText
-        {
-            "name": "POST /api/tickets/{id}/actions, action_id en NoteText",
-            "payload": {
-                "action_id": str(ACTION_ID_PUBLIC),
-                "NoteText": text
-            }
-        },
-        # Poging 11: POST /api/tickets/{id}/actions, action_id en fields
-        {
-            "name": "POST /api/tickets/{id}/actions, action_id en fields",
-            "payload": {
-                "action_id": str(ACTION_ID_PUBLIC),
-                "fields": {
-                    "Note": text
-                }
-            }
-        },
-        # Poging 12: POST /api/actions, action_id en fields (ARRAY)
-        {
-            "name": "POST /api/actions, action_id en fields (ARRAY)",
-            "payload": {
-                "action_id": str(ACTION_ID_PUBLIC),
-                "fields": {
-                    "Note": text
-                }
-            }
-        },
-        # Poging 13: POST /api/Notes/{ticket_id}, NoteText
-        {
-            "name": "POST /api/Notes/{ticket_id}, NoteText",
-            "payload": {
-                "NoteText": text
-            }
-        },
-        # Poging 14: POST /api/Notes/{ticket_id}, Note
-        {
-            "name": "POST /api/Notes/{ticket_id}, Note",
-            "payload": {
-                "Note": text
-            }
-        },
-        # Poging 15: POST /api/Notes/{ticket_id}, text
-        {
-            "name": "POST /api/Notes/{ticket_id}, text",
-            "payload": {
-                "text": text
-            }
+    # Specifieke endpoint en payload voor deze test
+    endpoint = f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions"
+    payload = {
+        "action_id": ACTION_ID_PUBLIC,
+        "fields": {
+            "Note": text
         }
-    ]
+    }
     
-    # Eerst proberen met het meest waarschijnlijke endpoint
-    primary_endpoint = endpoints_to_try[0]
-    log.info(f"🎯 Probeert primary endpoint: {primary_endpoint}")
+    log.info(f"🎯 Specifieke test met action_id {ACTION_ID_PUBLIC} op endpoint: {endpoint}")
+    log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
     
-    for i, test in enumerate(payloads_to_try, 1):
-        try:
-            # BELANGRIJK: Zet de payload in een ARRAY (JSON array)
-            payload = [test["payload"]]
-            
-            log.info(f"🔍 Poging {i}: {test['name']}")
-            log.debug(f"   Payload: {json.dumps(payload, indent=2)}")
-            
-            # Bepaal welke endpoint we gebruiken
-            endpoint = primary_endpoint
-            if i > 1 and i-1 < len(endpoints_to_try):
-                endpoint = endpoints_to_try[i-1]
-            
-            r = requests.post(endpoint, headers=h, json=payload, timeout=15)
-            
-            if r.ok:
-                log.info(f"✅ Public note succesvol toegevoegd! ({test['name']})")
-                return True
+    try:
+        r = requests.post(endpoint, headers=h, json=[payload], timeout=15)
+        
+        if r.ok:
+            log.info("✅ Public note succesvol toegevoegd!")
+            return True
+        else:
+            log.error(f"❌ Test mislukt: {r.status_code}")
+            if r.text:
+                log.error(f"   Response body: {r.text}")
             else:
-                log.warning(f"⚠️  Poging {i} ({test['name']}) mislukt: {r.status_code}")
-                if r.text:
-                    log.error(f"   Response body: {r.text}")
-                else:
-                    log.error("   Geen response body ontvangen")
-                    
-        except Exception as e:
-            log.error(f"💥 Poging {i} ({test['name']}) exceptie: {str(e)}")
-            continue
-    
-    # Als primary endpoint niet werkt, probeer andere endpoints
-    if len(endpoints_to_try) > 1:
-        log.info("🔄 Primary endpoint mislukt, probeert alternatieve endpoints...")
-        
-        # Gebruik de meest succesvolle payload (eerste in lijst)
-        test_payload = [payloads_to_try[0]["payload"]]
-        
-        for j, endpoint in enumerate(endpoints_to_try[1:], 1):
-            try:
-                log.info(f"🔍 Alternatief endpoint {j}: {endpoint}")
-                r = requests.post(endpoint, headers=h, json=test_payload, timeout=15)
-                
-                if r.ok:
-                    log.info(f"✅ Public note succesvol toegevoegd via alternatief endpoint!")
-                    return True
-                else:
-                    log.warning(f"⚠️  Alternatief endpoint {j} mislukt: {r.status_code}")
-                    if r.text:
-                        log.error(f"   Response body: {r.text}")
-                    else:
-                        log.error("   Geen response body ontvangen")
-                    
-            except Exception as e:
-                log.error(f"💥 Alternatief endpoint {j} exceptie: {str(e)}")
-                continue
-    
-    log.error(f"❌ Alle pogingen mislukt voor ticket {ticket_id}")
-    return False
+                log.error("   Geen response body ontvangen")
+            return False
+    except Exception as e:
+        log.error(f"💥 Test exceptie: {str(e)}")
+        return False
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
 # --------------------------------------------------------------------------
@@ -592,4 +415,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
-
