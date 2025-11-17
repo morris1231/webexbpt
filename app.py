@@ -42,10 +42,10 @@ WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
 
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}
-CACHE_DURATION = 24 * 60 * 60  # 24 uur
+CACHE_DURATION = 24 * 60 * 60
 MAX_PAGES = 10
 
-ACTION_ID_PUBLIC = 145        # Public note action ID
+ACTION_ID_PUBLIC = 145
 NOTE_FIELD_NAME = "Note"
 
 # --------------------------------------------------------------------------
@@ -159,7 +159,7 @@ def send_adaptive_card(room_id):
                     {"type": "Input.Text", "id": "omschrijving", "placeholder": "Korte omschrijving", "required": True},
                     {"type": "Input.Text", "id": "sindswanneer", "placeholder": "Sinds wanneer?"},
                     {"type": "Input.Text", "id": "watwerktniet", "placeholder": "Wat werkt niet?"},
-                    {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Wat zelf geprobeerd?"},
+                    {"type": "Input.Text", "id": "zelfgeprobeerd", "placeholder": "Wat heb je al geprobeerd?"},
                     {"type": "Input.Text", "id": "impacttoelichting", "placeholder": "Impact toelichting (optioneel)"},
                     {"type": "Input.ChoiceSet", "id": "impact", "label": "Impact",
                      "choices": [
@@ -220,7 +220,6 @@ def create_halo_ticket(form, room_id):
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         return
     response = r.json()
-    ticket = None
     if isinstance(response, list) and response:
         ticket = response[0]
     elif isinstance(response, dict):
@@ -237,49 +236,52 @@ def create_halo_ticket(form, room_id):
     return tid
 
 # --------------------------------------------------------------------------
-# ✅ FIXED: PUBLIC NOTE FUNCTIE (Halo 22.0.8 compatible)
+# ✅ PUBLIC NOTE FUNCTIE – probeert alle mogelijke endpoints
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
-    """Public note plaatsen in Halo PSA 22.0.8"""
+    """Voegt een public note toe aan Halo PSA, test alle endpoint-varianten."""
     h = get_halo_headers()
     if not h:
-        log.error("❌ Kan geen HALO headers verkrijgen")
+        log.error("❌ Geen HALO headers beschikbaar")
         return False
 
-    # Controleer bestaan ticket
+    # check ticket
     try:
-        check_resp = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
-        if not check_resp.ok:
-            log.error(f"❌ Ticket {ticket_id} bestaat niet: {check_resp.status_code}")
+        check = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
+        if not check.ok:
+            log.error(f"❌ Ticket {ticket_id} bestaat niet ({check.status_code})")
             return False
-        log.info(f"✅ Ticket {ticket_id} bestaat en is toegankelijk")
     except Exception as e:
         log.error(f"❌ Ticket check mislukt: {e}")
         return False
 
-    # Correct endpoint & payload volgens Halo 22.0.8
-    endpoint = f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/run"
     payload = {
         "TicketId": int(ticket_id),
         "ActionId": ACTION_ID_PUBLIC,
         "Fields": {NOTE_FIELD_NAME: text}
     }
 
-    log.info(f"🎯 Public note POST naar {endpoint}")
-    log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
+    endpoints = [
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/run",
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions",
+        f"{HALO_API_BASE}/api/tickets/actions"
+    ]
 
-    try:
-        r = requests.post(endpoint, headers=h, json=payload, timeout=15)
-        if r.ok:
-            log.info("✅ Public note succesvol toegevoegd!")
-            return True
-        else:
-            log.error(f"❌ Public note mislukt: {r.status_code}")
-            log.error(f"Response body: {r.text[:1000]}")
-            return False
-    except Exception as e:
-        log.error(f"💥 Exceptie bij public note: {e}")
-        return False
+    for ep in endpoints:
+        try:
+            log.info(f"🚀 Probeer public note endpoint: {ep}")
+            log.info(f"🔍 Payload: {json.dumps(payload, indent=2)}")
+            r = requests.post(ep, headers=h, json=payload, timeout=15)
+            if r.ok:
+                log.info(f"✅ Public note succesvol toegevoegd via {ep}")
+                return True
+            else:
+                log.warning(f"⚠️ {ep} gaf status {r.status_code} - {r.text[:300]}")
+        except Exception as e:
+            log.warning(f"💥 Fout bij {ep}: {e}")
+
+    log.error("❌ Geen van de endpoints werkte om een public note toe te voegen.")
+    return False
 
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
@@ -351,7 +353,8 @@ def webex_hook():
 @app.route("/initialize", methods=["GET"])
 def initialize():
     get_users()
-    return {"status": "initialized", "cache_size": len(USER_CACHE['users']),
+    return {"status": "initialized",
+            "cache_size": len(USER_CACHE['users']),
             "source": USER_CACHE["source"]}
 
 # --------------------------------------------------------------------------
