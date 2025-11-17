@@ -26,7 +26,6 @@ if missing:
     sys.exit(1)
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
-# Zet HALO_API_BASE naar de domeinnaam ZONDER /api of /v1
 HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
@@ -76,7 +75,6 @@ def fetch_users(client_id: int, site_id: int):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (size={page_size})")
-        # Gebruik de volledige HALO_API_BASE met /api/users (geen v1)
         r = requests.get(f"{HALO_API_BASE}/api/users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
             log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
@@ -190,7 +188,7 @@ def send_adaptive_card(room_id):
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
 
 # --------------------------------------------------------------------------
-# HALO TICKETS + NOTES (GEFIXTE VERSIE)
+# HALO TICKETS (GEFIXTE VERSIE)
 # --------------------------------------------------------------------------
 def create_halo_ticket(form, room_id):
     h = get_halo_headers()
@@ -221,7 +219,6 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
 
-    # Gebruik /api/tickets (geen v1)
     r = requests.post(f"{HALO_API_BASE}/api/tickets", headers=h, json=[body], timeout=20)
     if not r.ok:
         log.error(f"❌ Halo API respons: {r.status_code} - {r.text}")
@@ -252,30 +249,6 @@ def create_halo_ticket(form, room_id):
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
     return tid
 
-def add_public_note(ticket_id, text):
-    h = get_halo_headers()
-    # Gebruik /api/tickets/{ticket_id}/notes (geen v1)
-    url = f"{HALO_API_BASE}/api/tickets/{ticket_id}/notes"
-    note_data = {
-        "text": text,
-        "is_public": True
-    }
-    r = requests.post(
-        url,
-        headers=h,
-        json=note_data,
-        timeout=15
-    )
-    if not r.ok:
-        log.error(f"❌ Notitie toevoegen mislukt: {r.status_code} - {r.text}")
-        log.error(f"🔍 Gebruikte URL: {url}")
-        log.error(f"🔍 HALO_API_BASE: {HALO_API_BASE}")
-        log.error(f"🔍 ticket_id: {ticket_id}")
-        if r.text:
-            log.error(f"Response body: {r.text}")
-        return False
-    return True
-
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
 # --------------------------------------------------------------------------
@@ -294,9 +267,6 @@ def process_webex_event(payload):
             return
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
-        elif room_id in TICKET_ROOM_MAP:
-            add_public_note(TICKET_ROOM_MAP[room_id], f"💬 **Van gebruiker:** {text}")
-            send_message(room_id, "📝 Bericht toegevoegd aan Halo als public note.")
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         inputs = requests.get(
@@ -306,29 +276,63 @@ def process_webex_event(payload):
         create_halo_ticket(inputs, payload["data"]["roomId"])
 
 # --------------------------------------------------------------------------
+# HALO ACTION BUTTON WEBHOOK (automatische detectie)
+# --------------------------------------------------------------------------
+@app.route("/halo-action", methods=["POST"])
+def halo_action():
+    """Webhook vanuit Halo voor Action Button (id 78)"""
+    # Check of het JSON of form data is
+    if request.is_json:
+        data = request.json
+    else:
+        data = request.form.to_dict()
+    
+    # Log de volledige ontvangen data voor debugging
+    log.info(f"Received halo action webhook data: {json.dumps(data, indent=2)}")
+    
+    # Probeer meerdere mogelijke velden voor ticket_id en note_text
+    ticket_id = (
+        data.get("ticket_id") or 
+        data.get("TicketID") or 
+        data.get("id") or 
+        data.get("TicketId") or 
+        data.get("TicketID") or 
+        data.get("ticketId")
+    )
+    
+    note_text = (
+        data.get("note") or 
+        data.get("text") or 
+        data.get("note_text") or 
+        data.get("noteContent") or 
+        data.get("Note") or 
+        data.get("NoteText") or 
+        data.get("public_note") or 
+        data.get("comment") or 
+        data.get("description")
+    )
+    
+    # Controleer of we voldoende data hebben
+    if not ticket_id or not note_text:
+        log.warning(f"❌ Onvoldoende gegevens in action webhook: {data}")
+        return {"status": "ignore"}
+    
+    # Converteer ticket_id naar string voor veilige vergelijking
+    ticket_id_str = str(ticket_id)
+    for room_id, stored_tid in TICKET_ROOM_MAP.items():
+        if str(stored_tid) == ticket_id_str:
+            send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
+            return {"status": "ok"}
+    
+    log.warning(f"❌ Geen Webex-ruimte gevonden voor ticket_id: {ticket_id}")
+    return {"status": "ignore"}
+
+# --------------------------------------------------------------------------
 # ROUTES
 # --------------------------------------------------------------------------
 @app.route("/webex", methods=["POST"])
 def webex_hook():
     threading.Thread(target=process_webex_event, args=(request.json,)).start()
-    return {"status": "ok"}
-
-@app.route("/halo", methods=["POST"])
-def halo_hook():
-    data = request.json or {}
-    log.info(f"Received halo webhook data: {json.dumps(data, indent=2)}")
-    
-    note = data.get("note") or data.get("text") or ""
-    ticket_id = data.get("ticket_id") or data.get("TicketID") or data.get("ID") or data.get("id")
-    
-    if not note or not ticket_id:
-        log.warning(f"❌ Geen geldige ticket_id of note in webhook data: {data}")
-        return {"status": "ignore"}
-    
-    ticket_id_str = str(ticket_id)
-    for room_id, stored_tid in TICKET_ROOM_MAP.items():
-        if str(stored_tid) == ticket_id_str:
-            send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note}")
     return {"status": "ok"}
 
 @app.route("/initialize", methods=["GET"])
