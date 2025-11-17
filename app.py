@@ -254,7 +254,7 @@ def create_halo_ticket(form, room_id):
     log.info(f"✅ Ticket {tid} opgeslagen voor room {room_id}")
     return tid
 # --------------------------------------------------------------------------
-# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - ULTIMATE VERSIE)
+# PUBLIC NOTE FUNCTIE (via HALO PSA Actions - DEFINITIEVE VERSIE)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
     """
@@ -284,88 +284,95 @@ def add_public_note(ticket_id, text):
         f"{HALO_API_BASE}/api/tickets/{ticket_id}/Actions",
         f"{HALO_API_BASE}/api/Tickets/{ticket_id}/actions",
         f"{HALO_API_BASE}/api/actions",
-        f"{HALO_API_BASE}/api/Notes",                        # Nieuw: /api/Notes endpoint
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",    # Nieuw: /api/tickets/{id}/Notes
+        f"{HALO_API_BASE}/api/Notes",
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/Notes",
+        f"{HALO_API_BASE}/api/tickets/{ticket_id}/notes",
     ]
     
     # Mogelijke payload structuren
     payloads_to_try = [
+        # Poging 1: action_id als string, Note als root-veld
         {
-            "name": "Standaard met Note (kleine letters endpoint)",
+            "name": "action_id (string), Note als root-veld",
             "payload": {
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"Note": text},
-                "is_public": True
+                "action_id": str(ACTION_ID_PUBLIC),
+                "Note": text
             }
         },
+        # Poging 2: action_id als string, NoteText als root-veld
         {
-            "name": "Zonder is_public (kleine letters)",
+            "name": "action_id (string), NoteText als root-veld",
             "payload": {
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"Note": text}
+                "action_id": str(ACTION_ID_PUBLIC),
+                "NoteText": text
             }
         },
+        # Poging 3: action_id als string, Text als root-veld
         {
-            "name": "Met Description (kleine letters)",
+            "name": "action_id (string), Text als root-veld",
             "payload": {
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"Description": text},
-                "is_public": True
+                "action_id": str(ACTION_ID_PUBLIC),
+                "Text": text
             }
         },
+        # Poging 4: POST /api/Notes met TicketId en NoteText
         {
-            "name": "Kleine letters veldnaam",
-            "payload": {
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"note": text},
-                "is_public": True
-            }
-        },
-        {
-            "name": "Ticket ID in root (POST /api/actions)",
-            "payload": {
-                "ticket_id": ticket_id,
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"Note": text},
-                "is_public": True
-            }
-        },
-        {
-            "name": "Ticket ID in root zonder is_public",
-            "payload": {
-                "ticket_id": ticket_id,
-                "action_id": ACTION_ID_PUBLIC,
-                "fields": {"Note": text}
-            }
-        },
-        {
-            "name": "POST /api/Notes (hoofdletters)",
+            "name": "POST /api/Notes, TicketId en NoteText",
             "payload": {
                 "TicketId": ticket_id,
                 "NoteText": text,
                 "IsPublic": True
             }
         },
+        # Poging 5: POST /api/Notes met ticketid en notetext
         {
-            "name": "POST /api/Notes (kleine letters)",
+            "name": "POST /api/Notes, ticketid en notetext",
             "payload": {
                 "ticketid": ticket_id,
                 "notetext": text,
                 "ispublic": True
             }
         },
+        # Poging 6: POST /api/tickets/{id}/notes met text en is_public
         {
-            "name": "POST /api/Notes (zonder IsPublic)",
-            "payload": {
-                "TicketId": ticket_id,
-                "NoteText": text
-            }
-        },
-        {
-            "name": "POST /api/tickets/{id}/Notes",
+            "name": "POST /api/tickets/{id}/notes, text en is_public",
             "payload": {
                 "text": text,
                 "is_public": True
+            }
+        },
+        # Poging 7: POST /api/tickets/{id}/Notes met text en is_public
+        {
+            "name": "POST /api/tickets/{id}/Notes, text en is_public",
+            "payload": {
+                "text": text,
+                "is_public": True
+            }
+        },
+        # Poging 8: POST /api/actions met ticket_id en action_id
+        {
+            "name": "POST /api/actions, ticket_id en action_id",
+            "payload": {
+                "ticket_id": ticket_id,
+                "action_id": str(ACTION_ID_PUBLIC),
+                "Note": text
+            }
+        },
+        # Poging 9: POST /api/actions met ticket_id en action_id (NoteText)
+        {
+            "name": "POST /api/actions, ticket_id en action_id (NoteText)",
+            "payload": {
+                "ticket_id": ticket_id,
+                "action_id": str(ACTION_ID_PUBLIC),
+                "NoteText": text
+            }
+        },
+        # Poging 10: POST /api/tickets/{id}/actions met action_id en NoteText
+        {
+            "name": "POST /api/tickets/{id}/actions, action_id en NoteText",
+            "payload": {
+                "action_id": str(ACTION_ID_PUBLIC),
+                "NoteText": text
             }
         }
     ]
@@ -381,8 +388,8 @@ def add_public_note(ticket_id, text):
             
             # Bepaal welke endpoint we gebruiken
             endpoint = primary_endpoint
-            if i > 6:  # De laatste 4 payload's zijn voor andere endpoints
-                endpoint = endpoints_to_try[i-6]  # Pas de index aan voor de nieuwe endpoints
+            if i > 1:  # Gebruik alternatieve endpoints voor de rest
+                endpoint = endpoints_to_try[i-1]
             
             r = requests.post(endpoint, headers=h, json=payload, timeout=15)
             
@@ -392,7 +399,9 @@ def add_public_note(ticket_id, text):
             else:
                 log.warning(f"⚠️  Poging {i} ({test['name']}) mislukt: {r.status_code}")
                 if r.text:
-                    log.debug(f"   Response: {r.text[:200]}")
+                    log.error(f"   Response body: {r.text}")
+                else:
+                    log.error("   Geen response body ontvangen")
                     
         except Exception as e:
             log.error(f"💥 Poging {i} ({test['name']}) exceptie: {str(e)}")
@@ -416,7 +425,9 @@ def add_public_note(ticket_id, text):
                 else:
                     log.warning(f"⚠️  Alternatief endpoint {j} mislukt: {r.status_code}")
                     if r.text:
-                        log.debug(f"   Response: {r.text[:200]}")
+                        log.error(f"   Response body: {r.text}")
+                    else:
+                        log.error("   Geen response body ontvangen")
                     
             except Exception as e:
                 log.error(f"💥 Alternatief endpoint {j} exceptie: {str(e)}")
