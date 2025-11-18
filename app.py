@@ -318,7 +318,7 @@ def create_halo_ticket(form, room_id):
         ticket = response
     
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
-    current_status = ticket.get("Status") or ticket.get("status") or "Unknown"
+    current_status = ticket.get("Status") or ticket.get("status") or ticket.get("StatusName") or "Unknown"
     
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
@@ -370,7 +370,7 @@ def check_ticket_status_changes():
     h = get_halo_headers()
     for ticket_id, status_info in list(TICKET_STATUS_TRACKER.items()):
         try:
-            # FIX: Voeg "includedetails=true" toe voor volledige ticket details
+            # Haal volledige ticket details met includedetails=true
             url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
             log.info(f"➡️ Controleer status van ticket {ticket_id}")
             r = halo_request(url, headers=h, params={"includedetails": True})
@@ -378,14 +378,19 @@ def check_ticket_status_changes():
             if r.status_code == 200:
                 ticket_data = r.json()
                 # Log volledige ticket data voor debugging
-                log.info(f"Full ticket data for {ticket_id}: {json.dumps(ticket_data, indent=2)}")
+                log.info(f"📊 VOLLEDIGE TICKET DATA VOOR {ticket_id}: {json.dumps(ticket_data, indent=2)}")
                 
-                # Check meerdere mogelijke statusvelden
+                # Check alle mogelijke statusvelden (top-level en nested)
                 current_status = ticket_data.get("Status") or \
                                  ticket_data.get("status") or \
                                  ticket_data.get("StatusName") or \
                                  ticket_data.get("status_name") or \
                                  ticket_data.get("StatusID") or \
+                                 ticket_data.get("ticket_status", {}).get("name") or \
+                                 ticket_data.get("status", {}).get("name") or \
+                                 ticket_data.get("status", {}).get("status") or \
+                                 ticket_data.get("status", {}).get("Status") or \
+                                 ticket_data.get("status", {}).get("StatusName") or \
                                  "Unknown"
                 
                 log.info(f"📊 Huidige status van ticket {ticket_id}: {current_status} | Oude status: {status_info['status']}")
@@ -474,7 +479,7 @@ def process_webex_event(payload):
         log.info(f"ℹ️ Onbekende resource type: {res}")
 
 # -------------------------------------------------------------------------- 
-# HALO ACTION BUTTON WEBHOOK - VERBETERDE VERWERKING
+# HALO ACTION BUTTON WEBHOOK - DIEPGAANDE DEBUGGING
 # -------------------------------------------------------------------------- 
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
@@ -488,38 +493,46 @@ def halo_action():
     
     # Controleer alle mogelijke veldnamen voor ticket ID
     ticket_id = None
-    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber", "Ticket_ID", "ticketid", "TicketID"]:
+    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber", "Ticket_ID", "ticketid", "TicketID", "TicketID", "ticket_id", "TicketID"]:
         if f in data:
             ticket_id = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor notitietekst
     note_text = None
-    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description", "notecontent", "NoteContent", "note_body", "NoteBody"]:
+    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description", "notecontent", "NoteContent", "note_body", "NoteBody", "note_text", "NoteText", "action_note", "ActionNote"]:
         if f in data:
             note_text = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor status
     status_change = None
-    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus", "current_status", "NewStatus", "NewStatusName"]:
+    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus", "current_status", "NewStatus", "NewStatusName", "status_value", "StatusValue", "status_name", "StatusName", "status_text", "StatusText"]:
         if f in data:
             status_change = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor toegewezen agent
     assigned_agent = None
-    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy", "assignedby", "AssignedBy", "assigned_to_name", "assignedToName", "agent_name", "AgentName"]:
+    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy", "assignedby", "AssignedBy", "assigned_to_name", "assignedToName", "agent_name", "AgentName", "assigned_to_id", "AssignedToID", "assigned_by_id", "AssignedByID"]:
         if f in data:
             assigned_agent = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor actie ID
     action_id = None
-    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id", "ActionID", "action_id", "ActionType", "action_type"]:
+    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id", "ActionID", "action_id", "ActionType", "action_type", "action_type_id", "ActionTypeID"]:
         if f in data:
             action_id = data[f]
             break
+    
+    # Log alle gevonden waarden voor debugging
+    log.info(f"🔍 Gevonden waarden in webhook:")
+    log.info(f"  Ticket ID: {ticket_id}")
+    log.info(f"  Note text: {note_text}")
+    log.info(f"  Status change: {status_change}")
+    log.info(f"  Assigned agent: {assigned_agent}")
+    log.info(f"  Action ID: {action_id}")
     
     # Als we geen ticket_id hebben, log dit en stopt
     if not ticket_id:
