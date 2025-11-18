@@ -42,7 +42,7 @@ USER_CACHE = {
     "users": [],
     "timestamp": 0,
     "source": "none",
-    "max_users": 200  # Verhoogd voor volledige users opvraging
+    "max_users": 200
 }
 # Nu: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
@@ -127,24 +127,24 @@ def fetch_users(client_id, site_id):
     h = get_halo_headers()
     all_users = []
     page = 0
-    page_size = 100  # Max 100 per pagina (Halo API limiet)
+    page_size = 100
     
     while len(all_users) < USER_CACHE["max_users"]:
         params = {
             "client_id": client_id,
             "site_id": site_id,
-            "pageinate": True,  # Paginering inschakelen
+            "pageinate": True,
             "page": page,
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
         
-        r = halo_request(f"{HALO_API_BASE}/api/users", 
+        r = halo_request(f"{HALO_API_BASE}/api/Users",  # HOOFDLETTER 'U' in Users!
                          params=params, 
                          headers=h)
         
         if r.status_code != 200:
-            log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
+            log.warning(f"⚠️ /api/Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
             
         response_json = r.json()
@@ -378,6 +378,7 @@ def check_ticket_status_changes():
             if r.status_code == 200:
                 ticket_data = r.json()
                 current_status = ticket_data.get("StatusName") or ticket_data.get("status") or "Unknown"
+                log.info(f"📊 Huidige status van ticket {ticket_id}: {current_status} | Oude status: {status_info['status']}")
                 
                 if current_status != status_info["status"]:
                     TICKET_STATUS_TRACKER[ticket_id]["status"] = current_status
@@ -390,6 +391,8 @@ def check_ticket_status_changes():
                     if room_id:
                         send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
                         log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
+                    else:
+                        log.warning(f"⚠️ Geen Webex-room gevonden voor ticket {ticket_id}")
                     log.info(f"✅ Statuswijziging gedetecteerd voor ticket {ticket_id}: {status_info['status']} → {current_status}")
             else:
                 log.warning(f"⚠️ Ticket status check mislukt voor {ticket_id}: {r.status_code}")
@@ -475,35 +478,35 @@ def halo_action():
     
     # Controleer alle mogelijke veldnamen voor ticket ID
     ticket_id = None
-    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber", "ticket_id", "Ticket_ID"]:
+    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber", "Ticket_ID", "ticketid", "TicketID"]:
         if f in data:
             ticket_id = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor notitietekst
     note_text = None
-    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description"]:
+    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description", "notecontent", "NoteContent"]:
         if f in data:
             note_text = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor status
     status_change = None
-    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID"]:
+    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus"]:
         if f in data:
             status_change = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor toegewezen agent
     assigned_agent = None
-    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy"]:
+    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy", "assignedby", "AssignedBy", "assigned_to_name", "assignedToName"]:
         if f in data:
             assigned_agent = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor actie ID
     action_id = None
-    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id"]:
+    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id", "ActionID", "action_id"]:
         if f in data:
             action_id = data[f]
             break
