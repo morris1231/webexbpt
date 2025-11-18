@@ -127,7 +127,7 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
     return r  # Na max_retries, retourneer laatste response
 
 # --------------------------------------------------------------------------
-# USERS (verbeterde versie met juiste caching en paginering)
+# USERS (cache vernieuwt automatisch bij nieuwe deploy)
 # --------------------------------------------------------------------------
 
 USER_CACHE = {
@@ -139,7 +139,7 @@ USER_CACHE = {
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 
 def fetch_users(client_id, site_id):
-    """Haalt alle actieve users op van Halo voor de gevraagde client/site"""
+    """Haalt alle actieve users op voor de gewenste client/site"""
     h = get_halo_headers()
     all_users = []
     page = 1
@@ -157,7 +157,7 @@ def fetch_users(client_id, site_id):
         try:
             resp = r.json()
         except Exception as e:
-            log.error(f"Fout bij parsen van response pagina {page}: {e}")
+            log.error(f"💥 Fout bij parsen van pagina {page}: {e}")
             break
 
         if isinstance(resp, list):
@@ -168,7 +168,6 @@ def fetch_users(client_id, site_id):
             users = []
 
         if not users:
-            log.info(f"📭 Geen users meer gevonden op pagina {page}, stop.")
             break
 
         for u in users:
@@ -184,45 +183,36 @@ def fetch_users(client_id, site_id):
                         break
 
         log.info(f"📦 Totaal nu {len(all_users)} users na pagina {page}")
-
         if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
             break
-        page += 1  # Volgende pagina
+        page += 1
 
-    log.info(f"✅ {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
-    return all_users[:USER_CACHE["max_users"]]
+    USER_CACHE["users"] = all_users[:USER_CACHE["max_users"]]
+    USER_CACHE["timestamp"] = time.time()
+    USER_CACHE["source"] = f"client{client_id}_site{site_id}"
+    log.info(f"✅ {len(USER_CACHE['users'])} gebruikers opgehaald en gecached (bron: {USER_CACHE['source']})")
+    return USER_CACHE["users"]
 
 
 def get_users():
-    """Haalt gecachte gebruikers op, of vernieuwt de cache indien ouder dan 24h"""
+    """Gebruik cache als jonger dan 24u; nieuwe deploy = lege cache ⇒ wordt vanzelf opnieuw geladen"""
     now = time.time()
-    source = f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}"
-
-    if (
-        USER_CACHE["users"]
-        and (now - USER_CACHE["timestamp"] < CACHE_DURATION)
-        and USER_CACHE["source"] == source
-    ):
-        log.info(f"✅ Gebruikers uit cache (bron: {source}, leeftijd: {int(now - USER_CACHE['timestamp'])}s)")
+    if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
+        leeftijd = int(now - USER_CACHE["timestamp"])
+        log.info(f"✅ Gebruikers uit cache (bron: {USER_CACHE['source']}, leeftijd {leeftijd}s)")
         return USER_CACHE["users"]
 
-    users = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
-    USER_CACHE["users"] = users
-    USER_CACHE["timestamp"] = now
-    USER_CACHE["source"] = source
-
-    log.info(f"✅ Gebruikers vernieuwd en gecached (bron: {source}, aantal={len(users)})")
-    return users
+    # Nieuwe fetch bij geen of oude cache
+    return fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
 
 
 def get_user(email):
-    """Zoek gebruiker op e-mailadres in cache of mitst in Halo"""
     if not email:
         return None
     email = email.lower().strip()
     for u in get_users():
-        for field in ["EmailAddress", "emailaddress", "PrimaryEmail", "login", "email", "email1"]:
-            if u.get(field) and u[field].lower() == email:
+        for veld in ["EmailAddress", "emailaddress", "PrimaryEmail", "login", "email", "email1"]:
+            if u.get(veld) and u[veld].lower() == email:
                 return u
     return None
 # --------------------------------------------------------------------------
@@ -601,4 +591,5 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
