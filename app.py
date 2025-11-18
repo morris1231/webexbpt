@@ -30,8 +30,8 @@ HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 18))  # Client 18
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 12))        # Site 12
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  # Client 18
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))        # Site 12
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
@@ -584,3 +584,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
