@@ -37,19 +37,19 @@ WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
-# Gebruikers cache (alleen voor client 18 & site 12)
+# Gebruikers cache (alleen voor client 18 & site 18)
 USER_CACHE = {
     "users": [],
     "timestamp": 0,
     "source": "none",
-    "max_users": 150
+    "max_users": 200  # Verhoogd voor volledige users opvraging
 }
 # Nu: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
 # Om statuswijzigingen te detecteren: {ticket_id: {status: "Oud status", last_checked: timestamp}}
 TICKET_STATUS_TRACKER = {}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
-MAX_PAGES = 2  # Max 2 pagina's (100 + 50 = 150 users)
+MAX_PAGES = 3  # Max 3 pagina's (100 + 100 + 100 = 300 users)
 
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
 ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
@@ -130,18 +130,15 @@ def fetch_users(client_id, site_id):
     page_size = 100  # Max 100 per pagina (Halo API limiet)
     
     while len(all_users) < USER_CACHE["max_users"]:
-        # FIX 1: Voeg "pageinate": True toe om paginering in te schakelen
-        # FIX 2: Gebruik "page" in plaats van "page_no" voor HALO API
         params = {
             "client_id": client_id,
             "site_id": site_id,
-            "pageinate": True,  # Cruciale parameter voor paginering
-            "page": page,       # HALO gebruikt 'page' in plaats van 'page_no'
+            "pageinate": True,  # Paginering inschakelen
+            "page": page,
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
         
-        # Gebruik de helper functie voor de request
         r = halo_request(f"{HALO_API_BASE}/api/users", 
                          params=params, 
                          headers=h)
@@ -172,13 +169,11 @@ def fetch_users(client_id, site_id):
             ):
                 all_users.append(u)
         
-        # Stop als we de max hebben bereikt of geen volgende pagina
         if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
             break
             
         page += 1
     
-    # Beperk tot max_users
     all_users = all_users[:USER_CACHE["max_users"]]
     log.info(f"✅ {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
@@ -187,14 +182,12 @@ def get_users():
     now = time.time()
     source = f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}"
     
-    # Check cache
     if USER_CACHE["users"] and \
        (now - USER_CACHE["timestamp"] < CACHE_DURATION) and \
        USER_CACHE["source"] == source:
         log.info(f"✅ Gebruikers uit cache (bron: {source})")
         return USER_CACHE["users"]
     
-    # Haal nieuwe gebruikers op
     users = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     USER_CACHE["users"] = users
     USER_CACHE["timestamp"] = now
@@ -310,7 +303,6 @@ def create_halo_ticket(form, room_id):
     url = f"{HALO_API_BASE}/api/Tickets"
     log.info(f"➡️ Creëer Halo ticket met body: {json.dumps(body, indent=2)}")
     
-    # Belangrijke wijziging: json=[body] in plaats van json=body
     r = halo_request(url, method='POST', headers=h, json=[body])
     
     if not r.ok:
@@ -325,7 +317,6 @@ def create_halo_ticket(form, room_id):
     else:
         ticket = response
     
-    # FIX: Gebruik "StatusName" in plaats van "status" voor HALO statusveld
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
     current_status = ticket.get("StatusName") or ticket.get("status") or "Unknown"
     
@@ -335,12 +326,10 @@ def create_halo_ticket(form, room_id):
         return
     log.info(f"✅ Ticket aangemaakt: {tid}")
     
-    # Voeg ticket toe aan de room
     if room_id not in USER_TICKET_MAP:
         USER_TICKET_MAP[room_id] = []
     USER_TICKET_MAP[room_id].append(tid)
     
-    # Track status voor deze ticket
     TICKET_STATUS_TRACKER[tid] = {"status": current_status, "last_checked": time.time()}
     
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
@@ -351,7 +340,6 @@ def create_halo_ticket(form, room_id):
 # PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
 # -------------------------------------------------------------------------- 
 def add_public_note(ticket_id, text):
-    """Public note toevoegen via HALO Actions API (met Ticket_Id met underscore)"""
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return False
@@ -366,7 +354,6 @@ def add_public_note(ticket_id, text):
     ]
     log.info(f"➡️ Sturen public note naar Halo voor ticket {ticket_id}: {text}")
     
-    # Gebruik de helper functie voor de request
     r = halo_request(url, method='POST', headers=h, json=payload)
     
     if r.status_code in [200, 201]:
@@ -380,32 +367,26 @@ def add_public_note(ticket_id, text):
 # STATUS WIJZIGINGEN
 # -------------------------------------------------------------------------- 
 def check_ticket_status_changes():
-    """Controleer statuswijzigingen voor alle tickets in de tracker"""
     h = get_halo_headers()
     for ticket_id, status_info in list(TICKET_STATUS_TRACKER.items()):
         try:
-            # Haal de huidige status van het ticket op
             url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
             log.info(f"➡️ Controleer status van ticket {ticket_id}")
             
-            # Gebruik de helper functie voor de request
             r = halo_request(url, headers=h)
             
             if r.status_code == 200:
                 ticket_data = r.json()
-                # FIX: Gebruik "StatusName" in plaats van "status" voor HALO statusveld
                 current_status = ticket_data.get("StatusName") or ticket_data.get("status") or "Unknown"
-                # Controleer of de status is gewijzigd
+                
                 if current_status != status_info["status"]:
-                    # Update de status in de tracker
                     TICKET_STATUS_TRACKER[ticket_id]["status"] = current_status
-                    # Zoek de room waar dit ticket in zit
                     room_id = None
                     for rid, tickets in USER_TICKET_MAP.items():
                         if ticket_id in tickets:
                             room_id = rid
                             break
-                    # Stuur notificatie naar de juiste Webex room
+                    
                     if room_id:
                         send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
                         log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
@@ -436,7 +417,6 @@ def process_webex_event(payload):
             log.info("❌ Bericht is van de bot zelf, negeren")
             return
         
-        # Nu: check of ticket in deze room zit (geen per-user mapping meer)
         if "nieuwe melding" in text.lower():
             log.info("ℹ️ Bericht bevat 'nieuwe melding', stuur adaptive card")
             send_message(room_id, "👋 Hi! Je hebt 'nieuwe melding' gestuurd. Klik op de knop hieronder om een ticket aan te maken:\n\n"
@@ -444,13 +424,11 @@ def process_webex_event(payload):
             send_adaptive_card(room_id)
             return
         
-        # Check of er een ticketnummer in het bericht staat
         ticket_match = re.search(r'Ticket #(\d+)', text)
         if ticket_match:
             requested_tid = ticket_match.group(1)
             log.info(f"ℹ️ Bericht bevat ticket #{requested_tid}")
             
-            # Controleer of dit ticket in de huidige room zit
             if room_id in USER_TICKET_MAP and requested_tid in USER_TICKET_MAP[room_id]:
                 log.info(f"✅ Ticket #{requested_tid} gevonden in room {room_id}")
                 success = add_public_note(requested_tid, text)
@@ -463,7 +441,6 @@ def process_webex_event(payload):
                 send_message(room_id, f"❌ Ticket #{requested_tid} bestaat niet in deze room of is niet gekoppeld aan deze room.")
         else:
             log.info("ℹ️ Geen specifiek ticketnummer in bericht, voeg toe aan alle tickets in de room")
-            # Geen specifiek ticketnummer, voeg toe aan alle tickets in de room
             if room_id in USER_TICKET_MAP:
                 for tid in USER_TICKET_MAP[room_id]:
                     success = add_public_note(tid, text)
@@ -484,39 +461,56 @@ def process_webex_event(payload):
         log.info(f"ℹ️ Onbekende resource type: {res}")
 
 # -------------------------------------------------------------------------- 
-# HALO ACTION BUTTON WEBHOOK
+# HALO ACTION BUTTON WEBHOOK - VERBETERDE VERWERKING
 # -------------------------------------------------------------------------- 
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return {"status": "ignore"}
-    data = request.json if request.is_json else request.form.to_dict()
-    log.info(f"📥 Ontvangen Halo action data: {json.dumps(data, indent=2)}")
-    ticket_id = None
-    note_text = None
-    action_type = None
     
-    # FIX: Controleer meerdere mogelijke veldnamen voor action type
-    for f in ["actionid", "ActionId", "action_id", "action"]:
-        if f in data:
-            action_type = "action"
-            break
-            
-    # FIX: Controleer meerdere mogelijke veldnamen voor ticket ID
-    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber"]:
+    # Log alle ontvangen data voor debugging
+    data = request.json if request.is_json else request.form.to_dict()
+    log.info(f"📥 VOLLEDIGE HALO WEBHOOK DATA: {json.dumps(data, indent=2)}")
+    
+    # Controleer alle mogelijke veldnamen voor ticket ID
+    ticket_id = None
+    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber", "ticket_id", "Ticket_ID"]:
         if f in data:
             ticket_id = data[f]
             break
-            
-    # FIX: Controleer meerdere mogelijke veldnamen voor notitietekst
-    for f in ["outcome", "note", "text", "comment", "description", "public_note"]:
+    
+    # Controleer alle mogelijke veldnamen voor notitietekst
+    note_text = None
+    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description"]:
         if f in data:
             note_text = data[f]
             break
     
-    if not ticket_id or not note_text:
-        log.warning("❌ Onvoldoende data in webhook")
+    # Controleer alle mogelijke veldnamen voor status
+    status_change = None
+    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID"]:
+        if f in data:
+            status_change = data[f]
+            break
+    
+    # Controleer alle mogelijke veldnamen voor toegewezen agent
+    assigned_agent = None
+    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy"]:
+        if f in data:
+            assigned_agent = data[f]
+            break
+    
+    # Controleer alle mogelijke veldnamen voor actie ID
+    action_id = None
+    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id"]:
+        if f in data:
+            action_id = data[f]
+            break
+    
+    # Als we geen ticket_id hebben, log dit en stopt
+    if not ticket_id:
+        log.warning("❌ Geen ticket_id gevonden in webhook data")
         return {"status": "ignore"}
     
     # Zorg dat ticket_id een string is voor consistentie
@@ -533,25 +527,27 @@ def halo_action():
         log.warning(f"❌ Geen Webex-room voor ticket {ticket_id}")
         return {"status": "ignore"}
     
-    # Verwerk het type actie
-    if action_type == "action":
-        # Stuur notificatie naar de juiste Webex room
+    # Verwerk public notes
+    if note_text and action_id and str(action_id) == str(ACTION_ID_PUBLIC):
+        log.info(f"✅ Public note ontvangen voor ticket {ticket_id}")
         send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
-        log.info(f"✅ Note gestuurd naar room {room_id}")
-    elif "status" in data:
-        # FIX: Verwerk statuswijzigingen
-        new_status = data.get("status", "Unknown")
-        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {new_status}")
-        log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
-    elif "assigned_to" in data or "assignedTo" in data or "assignedagent" in data:
-        # Haal toegewezen agent op uit meerdere mogelijke velden
-        assigned_to = data.get("assigned_to", 
-                              data.get("assignedTo", 
-                              data.get("assignedagent", 
-                              data.get("agent", "onbekende gebruiker"))))
-        send_message(room_id, f"✅ **Ticket #{ticket_id} is toegewezen aan {assigned_to}**")
-        log.info(f"✅ Toewijzing gestuurd naar room {room_id}")
-    return {"status": "ok"}
+        return {"status": "ok"}
+    
+    # Verwerk statuswijzigingen
+    if status_change:
+        log.info(f"✅ Statuswijziging ontvangen voor ticket {ticket_id}: {status_change}")
+        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {status_change}")
+        return {"status": "ok"}
+    
+    # Verwerk toewijzingen
+    if assigned_agent:
+        log.info(f"✅ Toewijzing ontvangen voor ticket {ticket_id}: {assigned_agent}")
+        send_message(room_id, f"✅ **Ticket #{ticket_id} is toegewezen aan {assigned_agent}**")
+        return {"status": "ok"}
+    
+    # Als geen van de bovenstaande gevalen, log en stopt
+    log.warning("❌ Geen herkenbare actie in webhook data")
+    return {"status": "ignore"}
 
 # -------------------------------------------------------------------------- 
 # ROUTES
@@ -569,8 +565,7 @@ def initialize():
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return {"status": "error", "message": "WEBEX_BOT_TOKEN is niet ingesteld"}
-    get_users()  # Haal gebruikers op en cache ze
-    # Start statuswijziging check in een aparte thread
+    get_users()
     threading.Thread(target=status_check_loop, daemon=True).start()
     return {
         "status": "initialized",
@@ -579,11 +574,10 @@ def initialize():
     }
 
 def status_check_loop():
-    """Loopen om statuswijzigingen te controleren"""
     while True:
         try:
             check_ticket_status_changes()
-            time.sleep(60)  # Check elke minuut
+            time.sleep(60)
         except Exception as e:
             log.error(f"💥 Fout bij status check loop: {e}")
             time.sleep(60)
