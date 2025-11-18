@@ -19,7 +19,7 @@ log.info("✅ Logging gestart")
 # CONFIG
 # --------------------------------------------------------------------------
 load_dotenv()
-required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET"]
+required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET", "WEBEX_BOT_TOKEN"]
 missing = [k for k in required if not os.getenv(k)]
 if missing:
     log.critical(f"❌ Ontbrekende .env-variabelen: {missing}")
@@ -514,15 +514,17 @@ def process_webex_event(payload):
         log.info(f"ℹ️ Onbekende resource type: {res}")
 
 # -------------------------------------------------------------------------- 
-# HALO ACTION BUTTON WEBHOOK - DIEPGAANDE DEBUGGING
+# HALO ACTION BUTTON WEBHOOK - AUTHENTICATIE CHECK
 # -------------------------------------------------------------------------- 
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
-    if not WEBEX_HEADERS:
-        log.error("❌ WEBEX_HEADERS is niet ingesteld")
-        return {"status": "ignore"}
+    # --- CRUCIALE AUTHENTICATIE CHECK (VOEG DIT TOE) ---
+    auth = request.authorization
+    if not auth or auth.username != "Webexbot" or auth.password != "Webexbot2025":
+        log.error("❌ Ongeldige credentials voor Halo webhook")
+        return {"status": "unauthorized"}, 401
     
-    # Log alle ontvangen data voor debugging
+    # --- REST VAN JE CODE BEHOUWT JE ---
     data = request.json if request.is_json else request.form.to_dict()
     log.info(f"📥 VOLLEDIGE HALO WEBHOOK DATA: {json.dumps(data, indent=2)}")
     
