@@ -24,39 +24,27 @@ missing = [k for k in required if not os.getenv(k)]
 if missing:
     log.critical(f"❌ Ontbrekende .env-variabelen: {missing}")
     sys.exit(1)
+
 app = Flask(__name__)
+
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  # Client 12
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))        # Site 18
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
+
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
-# Gebruikers cache (alleen voor client 12 & site 18)
-USER_CACHE = {
-    "users": [],
-    "timestamp": 0,
-    "source": "none",
-    "max_users": 150
-}
-# Nu: {room_id: [ticket_id1, ticket_id2, ...]}
-USER_TICKET_MAP = {}
-# Om statuswijzigingen te detecteren: {ticket_id: {status: "Oud status", last_checked: timestamp}}
-TICKET_STATUS_TRACKER = {}
-CACHE_DURATION = 24 * 60 * 60  # 24 uur
-MAX_PAGES = 2  # Max 2 pagina's (100 + 50 = 150 users)
-
-# Nieuwe variabelen voor HALO actie-ID en notitieveld
 ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
-NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
+NOTE_FIELD_NAME  = os.getenv("NOTE_FIELD_NAME", "Note")
 
-# --------------------------------------------------------------------------
-# Controleer of WEBEX_TOKEN is ingesteld
-# --------------------------------------------------------------------------
+USER_TICKET_MAP = {}
+TICKET_STATUS_TRACKER = {}
+
 if not WEBEX_TOKEN:
     log.error("❌ WEBEX_BOT_TOKEN is niet ingesteld in .env bestand")
     sys.exit(1)
@@ -74,10 +62,12 @@ def get_halo_headers():
         "scope": "all"
     }
     log.info("➡️ Verbinding maken met HALO auth endpoint")
-    r = requests.post(HALO_AUTH_URL,
-                      headers={"Content-Type": "application/x-www-form-urlencoded"},
-                      data=urllib.parse.urlencode(payload),
-                      timeout=10)
+    r = requests.post(
+        HALO_AUTH_URL,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=urllib.parse.urlencode(payload),
+        timeout=10
+    )
     r.raise_for_status()
     token_info = r.json()
     log.info(f"✅ HALO auth succesvol: token expires in {token_info.get('expires_in', 'onbekend')} seconden")
@@ -85,7 +75,7 @@ def get_halo_headers():
             "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
-# HELPER FUNCTIE VOOR HALO REQUESTS MET RATE LIMIT HANDLING
+# Halo API helper
 # --------------------------------------------------------------------------
 def halo_request(url, method='GET', headers=None, params=None, json=None, max_retries=3):
     for attempt in range(max_retries):
@@ -99,37 +89,20 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
         except Exception as e:
             log.error(f"Request mislukt: {e}")
             if attempt < max_retries - 1:
-                wait_time = 1 * (attempt + 1)
-                log.warning(f"Retrying in {wait_time} seconden (poging {attempt+1}/{max_retries})")
-                time.sleep(wait_time)
+                time.sleep(1 * (attempt + 1))
                 continue
             else:
                 raise e
-
-        # Log de status code voor debugging
         log.info(f"Request status code: {r.status_code}")
-        
-        # Rate limit handling
         if r.status_code == 429:
-            retry_after = r.headers.get('Retry-After')
-            if retry_after:
-                wait_time = int(retry_after)
-            else:
-                # Wacht 5 minuten als de header niet aanwezig is
-                wait_time = 300
-            log.warning(f"Rate limit bereikt, wachten {wait_time} seconden")
-            time.sleep(wait_time)
+            time.sleep(int(r.headers.get('Retry-After', 300)))
             continue
-
-        # Andere status codes
         return r
-
-    return r  # Na max_retries, retourneer laatste response
+    return r
 
 # --------------------------------------------------------------------------
-# USERS (cache vernieuwt automatisch bij nieuwe deploy)
+# USERS + CACHE (juiste parameters + caching)
 # --------------------------------------------------------------------------
-
 USER_CACHE = {
     "users": [],
     "timestamp": 0,
@@ -139,16 +112,16 @@ USER_CACHE = {
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 
 def fetch_users(client_id, site_id):
-    """Haalt alle actieve users op voor de gewenste client/site"""
+    """Haalt alle actieve users op van Halo voor de gevraagde client/site"""
     h = get_halo_headers()
     all_users = []
     page = 1
-    page_size = 100  # Halo limiet per pagina
-
+    page_size = 100
     while len(all_users) < USER_CACHE["max_users"]:
-        params = {"client": client_id, "site": site_id, "page": page, "page_size": page_size}
+        # LET OP: originele parameter-namen met _id
+        params = {"client_id": client_id, "site_id": site_id,
+                  "page": page, "page_size": page_size}
         log.info(f"➡️ Haal users pagina {page} (client={client_id}, site={site_id})")
-
         r = halo_request(f"{HALO_API_BASE}/api/users", headers=h, params=params)
         if r.status_code != 200:
             log.warning(f"⚠️ /api/users pagina {page} -> {r.status_code}: {r.text[:200]}")
@@ -157,7 +130,7 @@ def fetch_users(client_id, site_id):
         try:
             resp = r.json()
         except Exception as e:
-            log.error(f"💥 Fout bij parsen van pagina {page}: {e}")
+            log.error(f"Fout bij parsen response pagina {page}: {e}")
             break
 
         if isinstance(resp, list):
@@ -193,18 +166,13 @@ def fetch_users(client_id, site_id):
     log.info(f"✅ {len(USER_CACHE['users'])} gebruikers opgehaald en gecached (bron: {USER_CACHE['source']})")
     return USER_CACHE["users"]
 
-
 def get_users():
-    """Gebruik cache als jonger dan 24u; nieuwe deploy = lege cache ⇒ wordt vanzelf opnieuw geladen"""
     now = time.time()
     if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
         leeftijd = int(now - USER_CACHE["timestamp"])
-        log.info(f"✅ Gebruikers uit cache (bron: {USER_CACHE['source']}, leeftijd {leeftijd}s)")
+        log.info(f"✅ Gebruikers uit cache (leeftijd {leeftijd}s, bron: {USER_CACHE['source']})")
         return USER_CACHE["users"]
-
-    # Nieuwe fetch bij geen of oude cache
     return fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
-
 
 def get_user(email):
     if not email:
@@ -591,5 +559,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
