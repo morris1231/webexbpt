@@ -130,10 +130,11 @@ def fetch_users(client_id, site_id):
     page_size = 100  # Max 100 per pagina (Halo API limiet)
     
     while len(all_users) < USER_CACHE["max_users"]:
+        # FIX: Gebruik 'page_no' in plaats van 'page' voor Halo API
         params = {
             "client_id": client_id,
             "site_id": site_id,
-            "page": page,
+            "page_no": page,  # Cruciale wijziging voor juiste paginering
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
@@ -305,12 +306,12 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
     # FIX 1: Gebruik /api/Tickets (hoofdletter T) in plaats van /api/tickets
-    # FIX 2: Stuur als enkele JSON object (niet als lijst)
+    # FIX 2: Stuur als JSON ARRAY (niet enkele object) - dit lost de 400-fout op
     url = f"{HALO_API_BASE}/api/Tickets"
     log.info(f"➡️ Creëer Halo ticket met body: {json.dumps(body, indent=2)}")
     
-    # Gebruik de helper functie voor de request
-    r = halo_request(url, method='POST', headers=h, json=body)  # GEEN [body] maar body
+    # Belangrijke wijziging: json=[body] in plaats van json=body
+    r = halo_request(url, method='POST', headers=h, json=[body])
     
     if not r.ok:
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
