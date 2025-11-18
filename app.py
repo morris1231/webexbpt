@@ -121,6 +121,31 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
     return r  # Na max_retries, retourneer laatste response
 
 # --------------------------------------------------------------------------
+# STATUS NAAM CONVERSIE (ID → NAAM)
+# --------------------------------------------------------------------------
+def get_status_name(status_id):
+    try:
+        # Alleen converteren als status_id een nummer is
+        if isinstance(status_id, str) and status_id.isdigit():
+            status_id = int(status_id)
+        if not isinstance(status_id, int):
+            return str(status_id)
+            
+        h = get_halo_headers()
+        url = f"{HALO_API_BASE}/api/Status/{status_id}"
+        r = halo_request(url, headers=h)
+        if r.status_code == 200:
+            status_data = r.json()
+            # Check meerdere mogelijke veldnamen voor statusnaam
+            name = status_data.get("name") or status_data.get("StatusName") or status_data.get("status_name") or status_data.get("Status")
+            if name:
+                return name
+        return str(status_id)
+    except Exception as e:
+        log.error(f"❌ Fout bij statusnaam conversie voor ID {status_id}: {e}")
+        return str(status_id)
+
+# --------------------------------------------------------------------------
 # USERS
 # --------------------------------------------------------------------------
 def fetch_users(client_id, site_id):
@@ -214,12 +239,14 @@ def send_message(room_id, text):
         return
     try:
         log.info(f"➡️ Sturen Webex bericht naar room {room_id}: '{text[:50]}...'") 
-        requests.post("https://webexapis.com/v1/messages",
+        response = requests.post("https://webexapis.com/v1/messages",
                       headers=WEBEX_HEADERS,
                       json={"roomId": room_id, "markdown": text}, timeout=10)
-        log.info(f"✅ Webex bericht verstuurd naar room {room_id}")
+        log.info(f"✅ Webex bericht verstuurd naar room {room_id} (status: {response.status_code})")
+        return response
     except Exception as e:
         log.error(f"❌ Webex send: {e}")
+        return None
 
 def send_adaptive_card(room_id):
     if not WEBEX_HEADERS:
@@ -320,6 +347,10 @@ def create_halo_ticket(form, room_id):
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
     current_status = ticket.get("Status") or ticket.get("status") or ticket.get("StatusName") or "Unknown"
     
+    # Converteer status ID naar naam als nodig
+    if isinstance(current_status, int) or (isinstance(current_status, str) and current_status.isdigit()):
+        current_status = get_status_name(current_status)
+    
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         log.error("❌ Geen ticket ID gevonden in Halo response")
@@ -392,6 +423,10 @@ def check_ticket_status_changes():
                                  ticket_data.get("status", {}).get("Status") or \
                                  ticket_data.get("status", {}).get("StatusName") or \
                                  "Unknown"
+                
+                # Converteer status ID naar naam als nodig
+                if isinstance(current_status, int) or (isinstance(current_status, str) and current_status.isdigit()):
+                    current_status = get_status_name(current_status)
                 
                 log.info(f"📊 Huidige status van ticket {ticket_id}: {current_status} | Oude status: {status_info['status']}")
                 
@@ -507,7 +542,7 @@ def halo_action():
     
     # Controleer alle mogelijke veldnamen voor status
     status_change = None
-    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus", "current_status", "NewStatus", "NewStatusName", "status_value", "StatusValue", "status_name", "StatusName", "status_text", "StatusText"]:
+    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus", "current_status", "NewStatus", "NewStatusName", "status_value", "StatusValue", "status_name", "StatusName", "status_text", "StatusText", "newstatus", "NewStatus", "status_id", "StatusID"]:
         if f in data:
             status_change = data[f]
             break
@@ -559,8 +594,16 @@ def halo_action():
         send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
         return {"status": "ok"}
     
-    # Verwerk statuswijzigingen
+    # Verwerk statuswijzigingen (converteer ID naar naam)
     if status_change:
+        # Converteer status ID naar naam als nodig
+        if isinstance(status_change, int) or (isinstance(status_change, str) and status_change.isdigit()):
+            status_name = get_status_name(status_change)
+            log.info(f"✅ Status ID {status_change} geconverteerd naar naam: {status_name}")
+            status_change = status_name
+        else:
+            status_name = status_change
+        
         log.info(f"✅ Statuswijziging ontvangen voor ticket {ticket_id}: {status_change}")
         send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {status_change}")
         return {"status": "ok"}
