@@ -235,14 +235,14 @@ def create_halo_ticket(form, room_id):
 # PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
-    """Public note toevoegen via HALO Actions API"""
+    """Public note toevoegen via HALO Actions API (met Ticket_Id met underscore)"""
     h = get_halo_headers()
-    url = f"{HALO_API_BASE}/api/Actions"  # Correcte endpoint met /api prefix
+    url = f"{HALO_API_BASE}/api/Actions"
     payload = [
         {
-            "TicketId": int(ticket_id),
+            "Ticket_Id": int(ticket_id),  # MET UNDERSCORE - zoals jij nodig hebt
             "ActionId": ACTION_ID_PUBLIC,
-            "note": text  # Note is top-level veld, niet in Fields
+            "outcome": text  # Note tekst in 'outcome' veld
         }
     ]
     try:
