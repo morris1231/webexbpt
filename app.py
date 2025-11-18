@@ -85,6 +85,41 @@ def get_halo_headers():
             "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
+# HELPER FUNCTIE VOOR HALO REQUESTS MET RATE LIMIT HANDLING
+# --------------------------------------------------------------------------
+def halo_request(url, method='GET', headers=None, params=None, json=None, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            if method == 'GET':
+                r = requests.get(url, headers=headers, params=params, json=json, timeout=15)
+            elif method == 'POST':
+                r = requests.post(url, headers=headers, params=params, json=json, timeout=15)
+            else:
+                raise ValueError(f"Onbekende methode: {method}")
+        except Exception as e:
+            log.error(f"Request mislukt: {e}")
+            if attempt < max_retries - 1:
+                wait_time = 1 * (attempt + 1)
+                log.warning(f"Retrying in {wait_time} seconden (poging {attempt+1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            else:
+                raise e
+
+        # Rate limit handling
+        if r.status_code == 429:
+            retry_after = r.headers.get('Retry-After')
+            wait_time = int(retry_after) if retry_after else 10
+            log.warning(f"Rate limit bereikt, wachten {wait_time} seconden")
+            time.sleep(wait_time)
+            continue
+
+        # Andere status codes
+        return r
+
+    return r  # Na max_retries, retourneer laatste response
+
+# --------------------------------------------------------------------------
 # USERS
 # --------------------------------------------------------------------------
 def fetch_users(client_id, site_id):
@@ -101,11 +136,16 @@ def fetch_users(client_id, site_id):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
-        r = requests.get(f"{HALO_API_BASE}/api/users", headers=h, params=params, timeout=15)
+        
+        # Gebruik de helper functie voor de request
+        r = halo_request(f"{HALO_API_BASE}/api/users", 
+                         params=params, 
+                         headers=h)
+        
         if r.status_code != 200:
             log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-        
+            
         response_json = r.json()
         users = []
         if isinstance(response_json, list):
@@ -264,7 +304,10 @@ def create_halo_ticket(form, room_id):
     }
     url = f"{HALO_API_BASE}/api/tickets"
     log.info(f"➡️ Creëer Halo ticket met body: {json.dumps(body, indent=2)}")
-    r = requests.post(url, headers=h, json=[body], timeout=20)
+    
+    # Gebruik de helper functie voor de request
+    r = halo_request(url, method='POST', headers=h, json=[body])
+    
     if not r.ok:
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         log.error(f"❌ Halo ticket aanmaken mislukt: {r.status_code} - {r.text}")
@@ -314,16 +357,15 @@ def add_public_note(ticket_id, text):
         }
     ]
     log.info(f"➡️ Sturen public note naar Halo voor ticket {ticket_id}: {text}")
-    try:
-        r = requests.post(url, headers=h, json=payload, timeout=15)
-        if r.status_code in [200, 201]:
-            log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
-            return True
-        else:
-            log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
-            return False
-    except Exception as e:
-        log.error(f"💥 Fout bij public note: {e}")
+    
+    # Gebruik de helper functie voor de request
+    r = halo_request(url, method='POST', headers=h, json=payload)
+    
+    if r.status_code in [200, 201]:
+        log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
+        return True
+    else:
+        log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
         return False
 
 # --------------------------------------------------------------------------
@@ -337,7 +379,10 @@ def check_ticket_status_changes():
             # Haal de huidige status van het ticket op
             url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
             log.info(f"➡️ Controleer status van ticket {ticket_id}")
-            r = requests.get(url, headers=h, timeout=10)
+            
+            # Gebruik de helper functie voor de request
+            r = halo_request(url, headers=h)
+            
             if r.status_code == 200:
                 ticket_data = r.json()
                 current_status = ticket_data.get("status", "Unknown")
