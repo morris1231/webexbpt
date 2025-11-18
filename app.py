@@ -408,8 +408,6 @@ def check_ticket_status_changes():
             
             if r.status_code == 200:
                 ticket_data = r.json()
-                # Log volledige ticket data voor debugging
-                log.info(f"📊 VOLLEDIGE TICKET DATA VOOR {ticket_id}: {json.dumps(ticket_data, indent=2)}")
                 
                 # Check alle mogelijke statusvelden (top-level en nested)
                 current_status = ticket_data.get("Status") or \
@@ -427,8 +425,6 @@ def check_ticket_status_changes():
                 # Converteer status ID naar naam als nodig
                 if isinstance(current_status, int) or (isinstance(current_status, str) and current_status.isdigit()):
                     current_status = get_status_name(current_status)
-                
-                log.info(f"📊 Huidige status van ticket {ticket_id}: {current_status} | Oude status: {status_info['status']}")
                 
                 if current_status != status_info["status"]:
                     TICKET_STATUS_TRACKER[ticket_id]["status"] = current_status
@@ -514,19 +510,29 @@ def process_webex_event(payload):
         log.info(f"ℹ️ Onbekende resource type: {res}")
 
 # -------------------------------------------------------------------------- 
-# HALO ACTION BUTTON WEBHOOK - AUTHENTICATIE CHECK
+# HALO ACTION BUTTON WEBHOOK - GEREDUCEERDE LOGGING
 # -------------------------------------------------------------------------- 
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
-    # --- CRUCIALE AUTHENTICATIE CHECK (VOEG DIT TOE) ---
+    # --- CRUCIALE AUTHENTICATIE CHECK ---
     auth = request.authorization
     if not auth or auth.username != "Webexbot" or auth.password != "Webexbot2025":
         log.error("❌ Ongeldige credentials voor Halo webhook")
         return {"status": "unauthorized"}, 401
     
-    # --- REST VAN JE CODE BEHOUWT JE ---
+    # --- GEREDUCEERDE LOGGING VAN WEBHOOK DATA ---
     data = request.json if request.is_json else request.form.to_dict()
-    log.info(f"📥 VOLLEDIGE HALO WEBHOOK DATA: {json.dumps(data, indent=2)}")
+    
+    # Log alleen relevante velden in plaats van volledige JSON
+    relevant_data = {
+        "ticket_id": data.get("ticket_id") or data.get("TicketId") or data.get("TicketNumber"),
+        "status": data.get("status") or data.get("Status"),
+        "action_id": data.get("actionid") or data.get("ActionId"),
+        "note": data.get("outcome") or data.get("note") or data.get("text"),
+        "assigned_agent": data.get("assigned_to") or data.get("assignedTo"),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    log.info(f"📥 HALO WEBHOOK DATA: {json.dumps(relevant_data, indent=2)}")
     
     # Controleer alle mogelijke veldnamen voor ticket ID
     ticket_id = None
@@ -562,14 +568,6 @@ def halo_action():
         if f in data:
             action_id = data[f]
             break
-    
-    # Log alle gevonden waarden voor debugging
-    log.info(f"🔍 Gevonden waarden in webhook:")
-    log.info(f"  Ticket ID: {ticket_id}")
-    log.info(f"  Note text: {note_text}")
-    log.info(f"  Status change: {status_change}")
-    log.info(f"  Assigned agent: {assigned_agent}")
-    log.info(f"  Action ID: {action_id}")
     
     # Als we geen ticket_id hebben, log dit en stopt
     if not ticket_id:
