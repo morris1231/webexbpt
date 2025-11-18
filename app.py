@@ -127,101 +127,96 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
     return r  # Na max_retries, retourneer laatste response
 
 # --------------------------------------------------------------------------
-# USERS
+# USERS (verbeterde versie met juiste caching en paginering)
 # --------------------------------------------------------------------------
+
+USER_CACHE = {
+    "users": [],
+    "timestamp": 0,
+    "source": "none",
+    "max_users": 150
+}
+CACHE_DURATION = 24 * 60 * 60  # 24 uur
+
 def fetch_users(client_id, site_id):
+    """Haalt alle actieve users op van Halo voor de gevraagde client/site"""
     h = get_halo_headers()
     all_users = []
-    page = 0
-    page_size = 100  # Max 100 per pagina (Halo API limiet)
-    
+    page = 1
+    page_size = 100  # Halo limiet per pagina
+
     while len(all_users) < USER_CACHE["max_users"]:
-        # Gebruik 'client' en 'site' in plaats van 'client_id' en 'site_id' (correcte parameters)
-        params = {
-            "client": client_id,
-            "site": site_id,
-            "page": page,
-            "page_size": page_size
-        }
-        log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
-        
-        # Gebruik de helper functie voor de request
-        r = halo_request(f"{HALO_API_BASE}/api/users", 
-                         params=params, 
-                         headers=h)
-        
-        # Log de volledige response voor debugging
-        log.info(f"Response text: {r.text[:500]}")
-        
+        params = {"client": client_id, "site": site_id, "page": page, "page_size": page_size}
+        log.info(f"➡️ Haal users pagina {page} (client={client_id}, site={site_id})")
+
+        r = halo_request(f"{HALO_API_BASE}/api/users", headers=h, params=params)
         if r.status_code != 200:
-            log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
+            log.warning(f"⚠️ /api/users pagina {page} -> {r.status_code}: {r.text[:200]}")
             break
-            
+
         try:
-            response_json = r.json()
-            # Log de totale aantal gebruikers als het in de response zit
-            if 'count' in response_json:
-                log.info(f"Total users in response: {response_json['count']}")
-            elif 'total' in response_json:
-                log.info(f"Total users in response: {response_json['total']}")
-            else:
-                log.info("Geen count/total veld in response")
-            
-            users = []
-            if isinstance(response_json, list):
-                users = response_json
-            elif isinstance(response_json, dict):
-                users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
-            
-            if not users:
-                break
-                
-            for u in users:
-                if "id" in u: u["id"] = int(u["id"])
-                if "client_id" in u: u["client_id"] = int(u["client_id"])
-                if "site_id" in u: u["site_id"] = int(u["site_id"])
-                if (
-                    u.get("use") == "user" and
-                    not u.get("inactive", True) and
-                    u.get("emailaddress") and
-                    "@" in u["emailaddress"]
-                ):
-                    all_users.append(u)
-            
-            # Stop als we de max hebben bereikt of geen volgende pagina
-            if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
-                break
-                
-            page += 1
+            resp = r.json()
         except Exception as e:
-            log.error(f"Fout bij parsen van response: {e}")
+            log.error(f"Fout bij parsen van response pagina {page}: {e}")
             break
-    
-    # Beperk tot max_users
-    all_users = all_users[:USER_CACHE["max_users"]]
+
+        if isinstance(resp, list):
+            users = resp
+        elif isinstance(resp, dict):
+            users = resp.get("users") or resp.get("items") or resp.get("data") or []
+        else:
+            users = []
+
+        if not users:
+            log.info(f"📭 Geen users meer gevonden op pagina {page}, stop.")
+            break
+
+        for u in users:
+            if not isinstance(u, dict):
+                continue
+            if "id" in u:
+                u["id"] = int(u["id"])
+            if u.get("use") == "user" and not u.get("inactive", True):
+                mail = u.get("emailaddress") or u.get("EmailAddress")
+                if mail and "@" in mail:
+                    all_users.append(u)
+                    if len(all_users) >= USER_CACHE["max_users"]:
+                        break
+
+        log.info(f"📦 Totaal nu {len(all_users)} users na pagina {page}")
+
+        if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
+            break
+        page += 1  # Volgende pagina
+
     log.info(f"✅ {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
-    return all_users
+    return all_users[:USER_CACHE["max_users"]]
+
 
 def get_users():
+    """Haalt gecachte gebruikers op, of vernieuwt de cache indien ouder dan 24h"""
     now = time.time()
     source = f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}"
-    
-    # Check cache
-    if USER_CACHE["users"] and \
-       (now - USER_CACHE["timestamp"] < CACHE_DURATION) and \
-       USER_CACHE["source"] == source:
-        log.info(f"✅ Gebruikers uit cache (bron: {source})")
+
+    if (
+        USER_CACHE["users"]
+        and (now - USER_CACHE["timestamp"] < CACHE_DURATION)
+        and USER_CACHE["source"] == source
+    ):
+        log.info(f"✅ Gebruikers uit cache (bron: {source}, leeftijd: {int(now - USER_CACHE['timestamp'])}s)")
         return USER_CACHE["users"]
-    
-    # Haal nieuwe gebruikers op
+
     users = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     USER_CACHE["users"] = users
     USER_CACHE["timestamp"] = now
     USER_CACHE["source"] = source
-    log.info(f"✅ Gebruikers opgehaald en gecached (bron: {source})")
+
+    log.info(f"✅ Gebruikers vernieuwd en gecached (bron: {source}, aantal={len(users)})")
     return users
 
+
 def get_user(email):
+    """Zoek gebruiker op e-mailadres in cache of mitst in Halo"""
     if not email:
         return None
     email = email.lower().strip()
@@ -230,7 +225,6 @@ def get_user(email):
             if u.get(field) and u[field].lower() == email:
                 return u
     return None
-
 # --------------------------------------------------------------------------
 # WEBEX HELPERS
 # --------------------------------------------------------------------------
@@ -607,3 +601,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
