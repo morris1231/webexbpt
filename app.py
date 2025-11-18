@@ -30,13 +30,13 @@ HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  # Client 18
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))        # Site 12
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))  # Client 12
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))        # Site 18
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
-# Gebruikers cache (alleen voor client 18 & site 12)
+# Gebruikers cache (alleen voor client 12 & site 18)
 USER_CACHE = {
     "users": [],
     "timestamp": 0,
@@ -106,10 +106,17 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
             else:
                 raise e
 
+        # Log de status code voor debugging
+        log.info(f"Request status code: {r.status_code}")
+        
         # Rate limit handling
         if r.status_code == 429:
             retry_after = r.headers.get('Retry-After')
-            wait_time = int(retry_after) if retry_after else 10
+            if retry_after:
+                wait_time = int(retry_after)
+            else:
+                # Wacht 5 minuten als de header niet aanwezig is
+                wait_time = 300
             log.warning(f"Rate limit bereikt, wachten {wait_time} seconden")
             time.sleep(wait_time)
             continue
@@ -129,9 +136,10 @@ def fetch_users(client_id, site_id):
     page_size = 100  # Max 100 per pagina (Halo API limiet)
     
     while len(all_users) < USER_CACHE["max_users"]:
+        # Gebruik 'client' en 'site' in plaats van 'client_id' en 'site_id' (correcte parameters)
         params = {
-            "client_id": client_id,
-            "site_id": site_id,
+            "client": client_id,
+            "site": site_id,
             "page": page,
             "page_size": page_size
         }
@@ -142,37 +150,52 @@ def fetch_users(client_id, site_id):
                          params=params, 
                          headers=h)
         
+        # Log de volledige response voor debugging
+        log.info(f"Response text: {r.text[:500]}")
+        
         if r.status_code != 200:
             log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
             
-        response_json = r.json()
-        users = []
-        if isinstance(response_json, list):
-            users = response_json
-        elif isinstance(response_json, dict):
-            users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
-        
-        if not users:
-            break
+        try:
+            response_json = r.json()
+            # Log de totale aantal gebruikers als het in de response zit
+            if 'count' in response_json:
+                log.info(f"Total users in response: {response_json['count']}")
+            elif 'total' in response_json:
+                log.info(f"Total users in response: {response_json['total']}")
+            else:
+                log.info("Geen count/total veld in response")
             
-        for u in users:
-            if "id" in u: u["id"] = int(u["id"])
-            if "client_id" in u: u["client_id"] = int(u["client_id"])
-            if "site_id" in u: u["site_id"] = int(u["site_id"])
-            if (
-                u.get("use") == "user" and
-                not u.get("inactive", True) and
-                u.get("emailaddress") and
-                "@" in u["emailaddress"]
-            ):
-                all_users.append(u)
-        
-        # Stop als we de max hebben bereikt of geen volgende pagina
-        if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
-            break
+            users = []
+            if isinstance(response_json, list):
+                users = response_json
+            elif isinstance(response_json, dict):
+                users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
             
-        page += 1
+            if not users:
+                break
+                
+            for u in users:
+                if "id" in u: u["id"] = int(u["id"])
+                if "client_id" in u: u["client_id"] = int(u["client_id"])
+                if "site_id" in u: u["site_id"] = int(u["site_id"])
+                if (
+                    u.get("use") == "user" and
+                    not u.get("inactive", True) and
+                    u.get("emailaddress") and
+                    "@" in u["emailaddress"]
+                ):
+                    all_users.append(u)
+            
+            # Stop als we de max hebben bereikt of geen volgende pagina
+            if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
+                break
+                
+            page += 1
+        except Exception as e:
+            log.error(f"Fout bij parsen van response: {e}")
+            break
     
     # Beperk tot max_users
     all_users = all_users[:USER_CACHE["max_users"]]
@@ -584,4 +607,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
-
