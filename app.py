@@ -53,6 +53,7 @@ NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
 # --------------------------------------------------------------------------
 if not WEBEX_TOKEN:
     log.error("❌ WEBEX_BOT_TOKEN is niet ingesteld in .env bestand")
+    sys.exit(1)
 else:
     log.info("✅ Webex bot token is ingesteld")
 
@@ -66,12 +67,15 @@ def get_halo_headers():
         "client_secret": HALO_CLIENT_SECRET,
         "scope": "all"
     }
+    log.info("➡️ Verbinding maken met HALO auth endpoint")
     r = requests.post(HALO_AUTH_URL,
                       headers={"Content-Type": "application/x-www-form-urlencoded"},
                       data=urllib.parse.urlencode(payload),
                       timeout=10)
     r.raise_for_status()
-    return {"Authorization": f"Bearer {r.json()['access_token']}",
+    token_info = r.json()
+    log.info(f"✅ HALO auth succesvol: token expires in {token_info.get('expires_in', 'onbekend')} seconden")
+    return {"Authorization": f"Bearer {token_info['access_token']}",
             "Content-Type": "application/json"}
 
 # --------------------------------------------------------------------------
@@ -143,9 +147,11 @@ def send_message(room_id, text):
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return
     try:
+        log.info(f"➡️ Sturen Webex bericht naar room {room_id}: '{text[:50]}...'")
         requests.post("https://webexapis.com/v1/messages",
                       headers=WEBEX_HEADERS,
                       json={"roomId": room_id, "markdown": text}, timeout=10)
+        log.info(f"✅ Webex bericht verstuurd naar room {room_id}")
     except Exception as e:
         log.error(f"❌ Webex send: {e}")
 
@@ -153,6 +159,7 @@ def send_adaptive_card(room_id):
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return
+    log.info(f"➡️ Sturen adaptive card naar room {room_id}")
     payload = {
         "roomId": room_id,
         "text": "✍ Vul dit formulier in:",
@@ -190,6 +197,7 @@ def send_adaptive_card(room_id):
     try:
         requests.post("https://webexapis.com/v1/messages",
                       headers=WEBEX_HEADERS, json=payload, timeout=10)
+        log.info(f"✅ Adaptive card verstuurd naar room {room_id}")
     except Exception as e:
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
 
@@ -205,6 +213,8 @@ def create_halo_ticket(form, room_id):
     if not user:
         send_message(room_id, "❌ Geen gebruiker gevonden in Halo.")
         return
+    log.info(f"✅ Gebruiker gevonden: {user.get('emailaddress')}")
+
     details = (
         "### 📝 Nieuwe melding details\n\n"
         f"- **Omschrijving:** {form['omschrijving']}\n"
@@ -225,9 +235,11 @@ def create_halo_ticket(form, room_id):
         "user_id": int(user["id"])
     }
     url = f"{HALO_API_BASE}/api/tickets"
+    log.info(f"➡️ Creëer Halo ticket met body: {json.dumps(body, indent=2)}")
     r = requests.post(url, headers=h, json=[body], timeout=20)
     if not r.ok:
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
+        log.error(f"❌ Halo ticket aanmaken mislukt: {r.status_code} - {r.text}")
         return
     response = r.json()
     if isinstance(response, list) and response:
@@ -239,11 +251,14 @@ def create_halo_ticket(form, room_id):
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
+        log.error("❌ Geen ticket ID gevonden in Halo response")
         return
-    
+    log.info(f"✅ Ticket aangemaakt: {tid}")
+
     # Maak een nieuwe room voor deze gebruiker als deze nog niet bestaat
     user_email = user.get("emailaddress", form["email"]).lower()
-    
+    log.info(f"ℹ️ Gebruiker email: {user_email}")
+
     # Als de gebruiker nog geen tickets heeft, maak dan een nieuwe room aan
     if user_email not in USER_TICKET_MAP:
         USER_TICKET_MAP[user_email] = {}
@@ -253,6 +268,7 @@ def create_halo_ticket(form, room_id):
             "title": f"Ticket Discussie - {user_email}",
             "isLocked": False
         }
+        log.info(f"➡️ Creëer nieuwe Webex room voor {user_email}: {json.dumps(room_payload)}")
         r = requests.post("https://webexapis.com/v1/rooms",
                           headers=WEBEX_HEADERS,
                           json=room_payload,
@@ -261,7 +277,7 @@ def create_halo_ticket(form, room_id):
             new_room_id = r.json()["id"]
             USER_TICKET_MAP[user_email][new_room_id] = []
             log.info(f"✅ Nieuwe Webex room aangemaakt voor {user_email}: {new_room_id}")
-            room_id = new_room_id
+            room_id = new_room_id  # Hier stellen we de room_id in op de nieuwe room id
         else:
             log.error(f"❌ Webex room aanmaken mislukt: {r.status_code} - {r.text}")
             room_id = None
@@ -276,9 +292,11 @@ def create_halo_ticket(form, room_id):
         USER_TICKET_MAP[user_email][room_id].append(tid)
         
         send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
+        log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id} voor gebruiker {user_email}")
         return tid
     else:
         send_message(room_id, f"✅ Ticket aangemaakt: **{tid}** maar geen Webex room voor deze gebruiker")
+        log.info(f"⚠️ Ticket {tid} aangemaakt maar geen room voor gebruiker {user_email}")
         return tid
 
 # --------------------------------------------------------------------------
@@ -298,6 +316,7 @@ def add_public_note(ticket_id, text):
             "outcome": text  # Note tekst in 'outcome' veld
         }
     ]
+    log.info(f"➡️ Sturen public note naar Halo voor ticket {ticket_id}: {text}")
     try:
         r = requests.post(url, headers=h, json=payload, timeout=15)
         if r.status_code in [200, 201]:
@@ -320,6 +339,7 @@ def check_ticket_status_changes():
         try:
             # Haal de huidige status van het ticket op
             url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
+            log.info(f"➡️ Controleer status van ticket {ticket_id}")
             r = requests.get(url, headers=h, timeout=10)
             if r.status_code == 200:
                 ticket_data = r.json()
@@ -359,13 +379,19 @@ def process_webex_event(payload):
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return
     res = payload.get("resource")
+    log.info(f"📩 Verwerken Webex event: resource={res}")
+    
     if res == "messages":
         mid = payload["data"]["id"]
+        log.info(f"📩 Verwerken bericht: id={mid}")
         msg = requests.get(f"https://webexapis.com/v1/messages/{mid}", headers=WEBEX_HEADERS).json()
         text = msg.get("text", "")
         room_id = msg.get("roomId")
         sender = msg.get("personEmail", "")
+        log.info(f"📩 Bericht ontvangen van {sender} in room {room_id}: '{text}'")
+        
         if sender and sender.endswith("@webex.bot"):
+            log.info("❌ Bericht is van de bot zelf, negeren")
             return
         
         # Controleer of de gebruiker een ticket heeft in deze room
@@ -376,10 +402,13 @@ def process_webex_event(payload):
                 break
         
         if not user_email:
-            # Geen ticket in deze room, dus geen actie
+            log.info("ℹ️ Geen ticket in deze room, geen actie")
+            # Stuur een bericht dat deze room niet voor tickets is
+            send_message(room_id, "ℹ️ Deze room is niet geconfigureerd voor ticketdiscussie. Stuur 'nieuwe melding' om een nieuwe ticket room te maken.")
             return
         
         if "nieuwe melding" in text.lower():
+            log.info("ℹ️ Bericht bevat 'nieuwe melding', stuur adaptive card")
             # Stuur een duidelijke instructie voor het aanmaken van een ticket
             send_message(room_id, "👋 Hi! Je hebt 'nieuwe melding' gestuurd. Klik op de knop hieronder om een ticket aan te maken:\n\n"
                                  "Je kunt ook een bericht sturen met 'Ticket #<nummer>' om een reactie te geven aan een specifiek ticket.")
@@ -389,6 +418,7 @@ def process_webex_event(payload):
             ticket_match = re.search(r'Ticket #(\d+)', text)
             if ticket_match:
                 requested_tid = ticket_match.group(1)
+                log.info(f"ℹ️ Bericht bevat ticket #{requested_tid}")
                 # Controleer of dit ticket bij de gebruiker hoort
                 ticket_found = False
                 for room_id_check, tickets in USER_TICKET_MAP[user_email].items():
@@ -397,11 +427,14 @@ def process_webex_event(payload):
                         break
                 
                 if ticket_found:
+                    log.info(f"✅ Ticket #{requested_tid} gevonden voor gebruiker {user_email}")
                     add_public_note(requested_tid, text)
                     send_message(room_id, f"📝 Bericht toegevoegd aan Halo ticket #{requested_tid}.")
                 else:
+                    log.info(f"❌ Ticket #{requested_tid} hoort niet bij {user_email}")
                     send_message(room_id, f"❌ Ticket #{requested_tid} hoort niet bij jouw tickets.")
             else:
+                log.info("ℹ️ Geen specifiek ticketnummer in bericht, voeg toe aan alle tickets in de room")
                 # Geen specifiek ticketnummer, voeg toe aan alle tickets in de room
                 for room_id_check, tickets in USER_TICKET_MAP[user_email].items():
                     if room_id == room_id_check:
@@ -412,10 +445,15 @@ def process_webex_event(payload):
     
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
+        log.info(f"📩 Verwerken attachmentActions: id={a_id}")
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{a_id}",
                               headers=WEBEX_HEADERS).json().get("inputs", {})
         room_id = payload["data"]["roomId"]
+        log.info(f"📩 attachmentActions in room {room_id} met inputs: {json.dumps(inputs, indent=2)}")
         create_halo_ticket(inputs, room_id)
+    
+    else:
+        log.info(f"ℹ️ Onbekende resource type: {res}")
 
 # --------------------------------------------------------------------------
 # HALO ACTION BUTTON WEBHOOK
@@ -509,4 +547,24 @@ def initialize():
         return {"status": "error", "message": "WEBEX_BOT_TOKEN is niet ingesteld"}
     
     get_users()
-    # Start statuswijziging check
+    # Start statuswijziging check in een aparte thread
+    threading.Thread(target=status_check_loop, daemon=True).start()
+    return {"status": "initialized", "cache_size": len(USER_CACHE['users']), "source": USER_CACHE["source"]}
+
+def status_check_loop():
+    """Loopen om statuswijzigingen te controleren"""
+    while True:
+        try:
+            check_ticket_status_changes()
+            time.sleep(60)  # Check elke minuut
+        except Exception as e:
+            log.error(f"💥 Fout bij status check loop: {e}")
+            time.sleep(60)
+
+# --------------------------------------------------------------------------
+# START
+# --------------------------------------------------------------------------
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    log.info(f"🚀 Start server op poort {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
