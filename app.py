@@ -40,7 +40,7 @@ USER_TICKET_MAP = {}
 # Om statuswijzigingen te detecteren: {ticket_id: {status: "Oud status", last_checked: timestamp}}
 TICKET_STATUS_TRACKER = {}
 CACHE_DURATION = 24 * 60 * 60
-MAX_PAGES = 10
+MAX_PAGES = 100  # Verhoogd om alle pagina's op te halen
 
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
 ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
@@ -82,10 +82,9 @@ def get_halo_headers():
 def fetch_users(client_id, site_id):
     h = get_halo_headers()
     all_users = []
-    page = 1
+    page = 0  # Start bij 0 voor paginatie
     page_size = 50
-    page_count = 0
-    while page_count < MAX_PAGES:
+    while True:
         params = {"client_id": client_id, "site_id": site_id, "page": page, "page_size": page_size}
         log.info(f"➡️ Fetching users page {page}")
         r = requests.get(f"{HALO_API_BASE}/api/users", headers=h, params=params, timeout=15)
@@ -114,7 +113,6 @@ def fetch_users(client_id, site_id):
         if len(users) < page_size:
             break
         page += 1
-        page_count += 1
     log.info(f"✅ {len(all_users)} gebruikers opgehaald")
     return all_users
 
@@ -411,31 +409,37 @@ def halo_action():
         action_type = "action"
     elif "status" in data:
         action_type = "status_change"
-    elif "assigned_to" in data:
+    elif "assigned_to" in data or "assignedTo" in data or "assignedagent" in data:
         action_type = "assignment"
+    
     # Haal ticket_id en notitie tekst op
-    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id"]:
+    for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber"]:
         if f in data:
             ticket_id = data[f]
             break
-    for f in ["note", "text", "Note", "note_text", "public_note", "comment", "outcome"]:
+    for f in ["note", "text", "Note", "note_text", "public_note", "comment", "outcome", "description"]:
         if f in data:
             note_text = data[f]
             break
+    
     if not ticket_id or not note_text:
         log.warning("❌ Onvoldoende data in webhook")
         return {"status": "ignore"}
+    
     # Zorg dat ticket_id een string is voor consistentie
     ticket_id = str(ticket_id)
+    
     # Zoek de room waar dit ticket in zit
     room_id = None
     for rid, tickets in USER_TICKET_MAP.items():
         if ticket_id in tickets:
             room_id = rid
             break
+    
     if not room_id:
         log.warning(f"❌ Geen Webex-room voor ticket {ticket_id}")
         return {"status": "ignore"}
+    
     # Verwerk het type actie
     if action_type == "action":
         # Stuur notificatie naar de juiste Webex room
@@ -446,8 +450,11 @@ def halo_action():
         send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {note_text}")
         log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
     elif action_type == "assignment":
-        # Stuur toewijzingsnotificatie
-        assigned_to = data.get("assigned_to", "onbekende gebruiker")
+        # Haal toegewezen agent op uit meerdere mogelijke velden
+        assigned_to = data.get("assigned_to", 
+                              data.get("assignedTo", 
+                              data.get("assignedagent", 
+                              data.get("agent", "onbekende gebruiker"))))
         send_message(room_id, f"✅ **Ticket #{ticket_id} is toegewezen aan {assigned_to}**")
         log.info(f"✅ Toewijzing gestuurd naar room {room_id}")
     return {"status": "ok"}
