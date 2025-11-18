@@ -139,7 +139,7 @@ def fetch_users(client_id, site_id):
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
         
-        r = halo_request(f"{HALO_API_BASE}/api/Users",  # HOOFDLETTER 'U' in Users!
+        r = halo_request(f"{HALO_API_BASE}/api/Users",
                          params=params, 
                          headers=h)
         
@@ -318,7 +318,7 @@ def create_halo_ticket(form, room_id):
         ticket = response
     
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
-    current_status = ticket.get("StatusName") or ticket.get("status") or "Unknown"
+    current_status = ticket.get("Status") or ticket.get("status") or "Unknown"
     
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
@@ -370,14 +370,24 @@ def check_ticket_status_changes():
     h = get_halo_headers()
     for ticket_id, status_info in list(TICKET_STATUS_TRACKER.items()):
         try:
+            # FIX: Voeg "includedetails=true" toe voor volledige ticket details
             url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
             log.info(f"➡️ Controleer status van ticket {ticket_id}")
-            
-            r = halo_request(url, headers=h)
+            r = halo_request(url, headers=h, params={"includedetails": True})
             
             if r.status_code == 200:
                 ticket_data = r.json()
-                current_status = ticket_data.get("StatusName") or ticket_data.get("status") or "Unknown"
+                # Log volledige ticket data voor debugging
+                log.info(f"Full ticket data for {ticket_id}: {json.dumps(ticket_data, indent=2)}")
+                
+                # Check meerdere mogelijke statusvelden
+                current_status = ticket_data.get("Status") or \
+                                 ticket_data.get("status") or \
+                                 ticket_data.get("StatusName") or \
+                                 ticket_data.get("status_name") or \
+                                 ticket_data.get("StatusID") or \
+                                 "Unknown"
+                
                 log.info(f"📊 Huidige status van ticket {ticket_id}: {current_status} | Oude status: {status_info['status']}")
                 
                 if current_status != status_info["status"]:
@@ -485,28 +495,28 @@ def halo_action():
     
     # Controleer alle mogelijke veldnamen voor notitietekst
     note_text = None
-    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description", "notecontent", "NoteContent"]:
+    for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description", "notecontent", "NoteContent", "note_body", "NoteBody"]:
         if f in data:
             note_text = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor status
     status_change = None
-    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus"]:
+    for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus", "current_status", "NewStatus", "NewStatusName"]:
         if f in data:
             status_change = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor toegewezen agent
     assigned_agent = None
-    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy", "assignedby", "AssignedBy", "assigned_to_name", "assignedToName"]:
+    for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy", "assignedby", "AssignedBy", "assigned_to_name", "assignedToName", "agent_name", "AgentName"]:
         if f in data:
             assigned_agent = data[f]
             break
     
     # Controleer alle mogelijke veldnamen voor actie ID
     action_id = None
-    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id", "ActionID", "action_id"]:
+    for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id", "ActionID", "action_id", "ActionType", "action_type"]:
         if f in data:
             action_id = data[f]
             break
@@ -527,7 +537,7 @@ def halo_action():
             break
     
     if not room_id:
-        log.warning(f"❌ Geen Webex-room voor ticket {ticket_id}")
+        log.warning(f"❌ Geen Webex-room gevonden voor ticket {ticket_id}")
         return {"status": "ignore"}
     
     # Verwerk public notes
