@@ -1,4 +1,4 @@
-import os, urllib.parse, logging, sys, time, threading, json
+import os, urllib.parse, logging, sys, time, threading, json, re
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
@@ -26,27 +26,24 @@ if missing:
     sys.exit(1)
 
 app = Flask(__name__)
-
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
-
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
-
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-
 USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
 TICKET_ROOM_MAP = {}
 CACHE_DURATION = 24 * 60 * 60
 MAX_PAGES = 10
 
-ACTION_ID_PUBLIC = 145
-NOTE_FIELD_NAME = "Note"
+# Nieuwe variabelen voor HALO actie-ID en notitieveld
+ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
+NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
 
 # --------------------------------------------------------------------------
 # HALO AUTH
@@ -199,7 +196,6 @@ def create_halo_ticket(form, room_id):
     )
     if form.get('impacttoelichting', '').strip():
         details += f"- **Impact toelichting:** {form['impacttoelichting']}\n"
-
     body = {
         "summary": form["omschrijving"][:100],
         "details": details,
@@ -210,7 +206,6 @@ def create_halo_ticket(form, room_id):
         "site_id": int(user.get("site_id", HALO_SITE_ID)),
         "user_id": int(user["id"])
     }
-
     url = f"{HALO_API_BASE}/api/tickets"
     r = requests.post(url, headers=h, json=[body], timeout=20)
     if not r.ok:
@@ -227,74 +222,42 @@ def create_halo_ticket(form, room_id):
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         return
-    TICKET_ROOM_MAP[room_id] = tid
+    
+    # Toevoegen aan TICKET_ROOM_MAP als lijst
+    if room_id not in TICKET_ROOM_MAP:
+        TICKET_ROOM_MAP[room_id] = []
+    TICKET_ROOM_MAP[room_id].append(tid)
+    
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
     return tid
 
 # --------------------------------------------------------------------------
-# ✅ PUBLIC NOTE FUNCTIE (POST en PUT varianten)
+# PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
 # --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
-    """Public note toevoegen – probeert alle bekende endpoint-, payload- en method-varianten."""
+    """Public note toevoegen via HALO Actions API"""
     h = get_halo_headers()
-    if not h:
-        log.error("❌ Geen HALO headers beschikbaar")
-        return False
-
-    # Ticket controleren
+    url = f"{HALO_API_BASE}/Actions"  # Juiste endpoint zoals in API-documentatie
+    payload = [
+        {
+            "TicketId": int(ticket_id),
+            "ActionId": ACTION_ID_PUBLIC,
+            "Fields": {
+                NOTE_FIELD_NAME: text
+            }
+        }
+    ]
     try:
-        chk = requests.get(f"{HALO_API_BASE}/api/tickets/{ticket_id}", headers=h, timeout=10)
-        if not chk.ok:
-            log.error(f"❌ Ticket {ticket_id} bestaat niet ({chk.status_code})")
+        r = requests.post(url, headers=h, json=payload, timeout=15)
+        if r.status_code in [200, 201]:
+            log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
+            return True
+        else:
+            log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
             return False
     except Exception as e:
-        log.error(f"❌ Ticket check mislukt: {e}")
+        log.error(f"💥 Fout bij public note: {e}")
         return False
-
-    endpoints = [
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/run",
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions/execute",
-        f"{HALO_API_BASE}/api/tickets/{ticket_id}/actions",
-        f"{HALO_API_BASE}/api/tickets/actions/run",
-        f"{HALO_API_BASE}/api/tickets/actions/execute",
-        f"{HALO_API_BASE}/api/tickets/actions",
-    ]
-
-    payloads = [
-        {"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Fields": {"Note": text}},
-        {"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Values": {"Note": text}},
-        [{"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Fields": {"Note": text}}],
-        [{"TicketId": int(ticket_id), "ActionId": ACTION_ID_PUBLIC, "Values": {"Note": text}}],
-    ]
-
-    # Eerst POST
-    for ep in endpoints:
-        for p in payloads:
-            try:
-                log.info(f"🚀 Test POST endpoint: {ep}")
-                r = requests.post(ep, headers=h, json=p, timeout=15)
-                if r.ok:
-                    log.info(f"✅ Public note succesvol toegevoegd via POST {ep}")
-                    return True
-                log.warning(f"⚠️ POST {ep} status {r.status_code}")
-            except Exception as e:
-                log.warning(f"💥 Fout bij POST {ep}: {e}")
-
-    # Daarna PUT proberen
-    for ep in endpoints:
-        for p in payloads:
-            try:
-                log.info(f"🚀 Test PUT endpoint: {ep}")
-                r = requests.put(ep, headers=h, json=p, timeout=15)
-                if r.ok:
-                    log.info(f"✅ Public note succesvol toegevoegd via PUT {ep}")
-                    return True
-                log.warning(f"⚠️ PUT {ep} status {r.status_code}")
-            except Exception as e:
-                log.warning(f"💥 Fout bij PUT {ep}: {e}")
-
-    log.error("❌ Geen van de endpoints werkte om een public note toe te voegen.")
-    return False
 
 # --------------------------------------------------------------------------
 # WEBEX EVENTS
@@ -312,8 +275,25 @@ def process_webex_event(payload):
         if "nieuwe melding" in text.lower():
             send_adaptive_card(room_id)
         elif room_id in TICKET_ROOM_MAP:
-            add_public_note(TICKET_ROOM_MAP[room_id], f"💬 **Van gebruiker:** {text}")
-            send_message(room_id, "📝 Bericht toegevoegd aan Halo als public note.")
+            # Check of er een ticketnummer in het bericht staat
+            ticket_match = re.search(r'Ticket #(\d+)', text)
+            ticket_ids = TICKET_ROOM_MAP[room_id]
+            
+            if ticket_match:
+                requested_tid = ticket_match.group(1)
+                if requested_tid in ticket_ids:
+                    add_public_note(requested_tid, text)
+                    send_message(room_id, f"📝 Bericht toegevoegd aan Halo ticket #{requested_tid}.")
+                else:
+                    send_message(room_id, f"❌ Ticket #{requested_tid} niet gevonden in deze room.")
+            else:
+                if len(ticket_ids) == 1:
+                    add_public_note(ticket_ids[0], text)
+                    send_message(room_id, f"📝 Bericht toegevoegd aan Halo ticket #{ticket_ids[0]}.")
+                else:
+                    # Toon alle tickets in de room
+                    ticket_list = "\n".join([f"- Ticket #{tid}" for tid in ticket_ids])
+                    send_message(room_id, f"Er zijn meerdere tickets in deze room. Gebruik 'Ticket #<nummer>' in je bericht. Huidige tickets:\n{ticket_list}")
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{a_id}",
@@ -340,9 +320,13 @@ def halo_action():
     if not ticket_id or not note_text:
         log.warning("❌ Onvoldoende data in webhook")
         return {"status": "ignore"}
+    
+    # Zorg dat ticket_id een string is voor consistentie
+    ticket_id = str(ticket_id)
+    
     found_room = False
-    for room_id, stored_tid in TICKET_ROOM_MAP.items():
-        if str(stored_tid) == str(ticket_id):
+    for room_id, ticket_ids in TICKET_ROOM_MAP.items():
+        if ticket_id in ticket_ids:
             send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
             found_room = True
             log.info(f"✅ Note gestuurd naar room {room_id}")
