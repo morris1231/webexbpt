@@ -130,11 +130,13 @@ def fetch_users(client_id, site_id):
     page_size = 100  # Max 100 per pagina (Halo API limiet)
     
     while len(all_users) < USER_CACHE["max_users"]:
-        # FIX: Gebruik 'page_no' in plaats van 'page' voor Halo API
+        # FIX 1: Voeg "pageinate": True toe om paginering in te schakelen
+        # FIX 2: Gebruik "page" in plaats van "page_no" voor HALO API
         params = {
             "client_id": client_id,
             "site_id": site_id,
-            "page_no": page,  # Cruciale wijziging voor juiste paginering
+            "pageinate": True,  # Cruciale parameter voor paginering
+            "page": page,       # HALO gebruikt 'page' in plaats van 'page_no'
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
@@ -305,8 +307,6 @@ def create_halo_ticket(form, room_id):
         "site_id": int(user.get("site_id", HALO_SITE_ID)),
         "user_id": int(user["id"])
     }
-    # FIX 1: Gebruik /api/Tickets (hoofdletter T) in plaats van /api/tickets
-    # FIX 2: Stuur als JSON ARRAY (niet enkele object) - dit lost de 400-fout op
     url = f"{HALO_API_BASE}/api/Tickets"
     log.info(f"➡️ Creëer Halo ticket met body: {json.dumps(body, indent=2)}")
     
@@ -324,7 +324,11 @@ def create_halo_ticket(form, room_id):
         ticket = response.get("data") or response.get("tickets", [None])[0] or response
     else:
         ticket = response
+    
+    # FIX: Gebruik "StatusName" in plaats van "status" voor HALO statusveld
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
+    current_status = ticket.get("StatusName") or ticket.get("status") or "Unknown"
+    
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         log.error("❌ Geen ticket ID gevonden in Halo response")
@@ -337,7 +341,6 @@ def create_halo_ticket(form, room_id):
     USER_TICKET_MAP[room_id].append(tid)
     
     # Track status voor deze ticket
-    current_status = ticket.get("status", "Unknown")
     TICKET_STATUS_TRACKER[tid] = {"status": current_status, "last_checked": time.time()}
     
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
@@ -390,7 +393,8 @@ def check_ticket_status_changes():
             
             if r.status_code == 200:
                 ticket_data = r.json()
-                current_status = ticket_data.get("status", "Unknown")
+                # FIX: Gebruik "StatusName" in plaats van "status" voor HALO statusveld
+                current_status = ticket_data.get("StatusName") or ticket_data.get("status") or "Unknown"
                 # Controleer of de status is gewijzigd
                 if current_status != status_info["status"]:
                     # Update de status in de tracker
@@ -492,20 +496,21 @@ def halo_action():
     ticket_id = None
     note_text = None
     action_type = None
-    # Detecteer action type (note, status change, etc.)
-    if "actionid" in data:
-        action_type = "action"
-    elif "status" in data:
-        action_type = "status_change"
-    elif "assigned_to" in data or "assignedTo" in data or "assignedagent" in data:
-        action_type = "assignment"
     
-    # Haal ticket_id en notitie tekst op
+    # FIX: Controleer meerdere mogelijke veldnamen voor action type
+    for f in ["actionid", "ActionId", "action_id", "action"]:
+        if f in data:
+            action_type = "action"
+            break
+            
+    # FIX: Controleer meerdere mogelijke veldnamen voor ticket ID
     for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber"]:
         if f in data:
             ticket_id = data[f]
             break
-    for f in ["note", "text", "Note", "note_text", "public_note", "comment", "outcome", "description"]:
+            
+    # FIX: Controleer meerdere mogelijke veldnamen voor notitietekst
+    for f in ["outcome", "note", "text", "comment", "description", "public_note"]:
         if f in data:
             note_text = data[f]
             break
@@ -533,11 +538,12 @@ def halo_action():
         # Stuur notificatie naar de juiste Webex room
         send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
         log.info(f"✅ Note gestuurd naar room {room_id}")
-    elif action_type == "status_change":
-        # Stuur statuswijziging notificatie
-        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {note_text}")
+    elif "status" in data:
+        # FIX: Verwerk statuswijzigingen
+        new_status = data.get("status", "Unknown")
+        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {new_status}")
         log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
-    elif action_type == "assignment":
+    elif "assigned_to" in data or "assignedTo" in data or "assignedagent" in data:
         # Haal toegewezen agent op uit meerdere mogelijke velden
         assigned_to = data.get("assigned_to", 
                               data.get("assignedTo", 
