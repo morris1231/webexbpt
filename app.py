@@ -30,17 +30,25 @@ HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
 HALO_CLIENT_ID = os.getenv("HALO_CLIENT_ID")
 HALO_CLIENT_SECRET = os.getenv("HALO_CLIENT_SECRET")
 HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
-HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
-HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
+HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 18))  # Client 18
+HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 12))        # Site 12
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
+
+# Gebruikers cache (alleen voor client 18 & site 12)
+USER_CACHE = {
+    "users": [],
+    "timestamp": 0,
+    "source": "none",
+    "max_users": 150
+}
 # Nu: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
 # Om statuswijzigingen te detecteren: {ticket_id: {status: "Oud status", last_checked: timestamp}}
 TICKET_STATUS_TRACKER = {}
-CACHE_DURATION = 24 * 60 * 60
-MAX_PAGES = 100  # Verhoogd om alle pagina's op te halen
+CACHE_DURATION = 24 * 60 * 60  # 24 uur
+MAX_PAGES = 2  # Max 2 pagina's (100 + 50 = 150 users)
 
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
 ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
@@ -82,23 +90,32 @@ def get_halo_headers():
 def fetch_users(client_id, site_id):
     h = get_halo_headers()
     all_users = []
-    page = 0  # Start bij 0 voor paginatie
-    page_size = 50
-    while True:
-        params = {"client_id": client_id, "site_id": site_id, "page": page, "page_size": page_size}
-        log.info(f"➡️ Fetching users page {page}")
+    page = 0
+    page_size = 100  # Max 100 per pagina (Halo API limiet)
+    
+    while len(all_users) < USER_CACHE["max_users"]:
+        params = {
+            "client_id": client_id,
+            "site_id": site_id,
+            "page": page,
+            "page_size": page_size
+        }
+        log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
         r = requests.get(f"{HALO_API_BASE}/api/users", headers=h, params=params, timeout=15)
         if r.status_code != 200:
             log.warning(f"⚠️ /api/users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
+        
         response_json = r.json()
         users = []
         if isinstance(response_json, list):
             users = response_json
         elif isinstance(response_json, dict):
             users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
+        
         if not users:
             break
+            
         for u in users:
             if "id" in u: u["id"] = int(u["id"])
             if "client_id" in u: u["client_id"] = int(u["client_id"])
@@ -110,15 +127,36 @@ def fetch_users(client_id, site_id):
                 "@" in u["emailaddress"]
             ):
                 all_users.append(u)
-        if len(users) < page_size:
+        
+        # Stop als we de max hebben bereikt of geen volgende pagina
+        if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
             break
+            
         page += 1
-    log.info(f"✅ {len(all_users)} gebruikers opgehaald")
+    
+    # Beperk tot max_users
+    all_users = all_users[:USER_CACHE["max_users"]]
+    log.info(f"✅ {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
 
 def get_users():
-    # Geen caching meer, haal altijd de gebruikers op
-    return fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    now = time.time()
+    source = f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}"
+    
+    # Check cache
+    if USER_CACHE["users"] and \
+       (now - USER_CACHE["timestamp"] < CACHE_DURATION) and \
+       USER_CACHE["source"] == source:
+        log.info(f"✅ Gebruikers uit cache (bron: {source})")
+        return USER_CACHE["users"]
+    
+    # Haal nieuwe gebruikers op
+    users = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
+    USER_CACHE["users"] = users
+    USER_CACHE["timestamp"] = now
+    USER_CACHE["source"] = source
+    log.info(f"✅ Gebruikers opgehaald en gecached (bron: {source})")
+    return users
 
 def get_user(email):
     if not email:
@@ -475,10 +513,14 @@ def initialize():
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return {"status": "error", "message": "WEBEX_BOT_TOKEN is niet ingesteld"}
-    get_users()  # Haal gebruikers op, geen caching
+    get_users()  # Haal gebruikers op en cache ze
     # Start statuswijziging check in een aparte thread
     threading.Thread(target=status_check_loop, daemon=True).start()
-    return {"status": "initialized", "source": "room-based ticket tracking"}
+    return {
+        "status": "initialized",
+        "source": f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}",
+        "cached_users": len(USER_CACHE["users"])
+    }
 
 def status_check_loop():
     """Loopen om statuswijzigingen te controleren"""
