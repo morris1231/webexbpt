@@ -262,42 +262,17 @@ def create_halo_ticket(form, room_id):
     # Als de gebruiker nog geen tickets heeft, maak dan een nieuwe room aan
     if user_email not in USER_TICKET_MAP:
         USER_TICKET_MAP[user_email] = {}
-        
-        # Maak een nieuwe Webex room voor deze gebruiker
-        room_payload = {
-            "title": f"Ticket Discussie - {user_email}",
-            "isLocked": False
-        }
-        log.info(f"➡️ Creëer nieuwe Webex room voor {user_email}: {json.dumps(room_payload)}")
-        r = requests.post("https://webexapis.com/v1/rooms",
-                          headers=WEBEX_HEADERS,
-                          json=room_payload,
-                          timeout=10)
-        if r.status_code == 200:
-            new_room_id = r.json()["id"]
-            USER_TICKET_MAP[user_email][new_room_id] = []
-            log.info(f"✅ Nieuwe Webex room aangemaakt voor {user_email}: {new_room_id}")
-            room_id = new_room_id  # Hier stellen we de room_id in op de nieuwe room id
-        else:
-            log.error(f"❌ Webex room aanmaken mislukt: {r.status_code} - {r.text}")
-            room_id = None
     
-    # Als er een room_id is (of we hebben er een gemaakt), voeg dan het ticket toe
-    if room_id:
-        # Zorg dat de room_id in de USER_TICKET_MAP staat
-        if room_id not in USER_TICKET_MAP[user_email]:
-            USER_TICKET_MAP[user_email][room_id] = []
-        
-        # Voeg het ticket toe aan de room
-        USER_TICKET_MAP[user_email][room_id].append(tid)
-        
-        send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
-        log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id} voor gebruiker {user_email}")
-        return tid
-    else:
-        send_message(room_id, f"✅ Ticket aangemaakt: **{tid}** maar geen Webex room voor deze gebruiker")
-        log.info(f"⚠️ Ticket {tid} aangemaakt maar geen room voor gebruiker {user_email}")
-        return tid
+    # Zorg dat de room_id in USER_TICKET_MAP staat
+    if room_id not in USER_TICKET_MAP[user_email]:
+        USER_TICKET_MAP[user_email][room_id] = []
+    
+    # Voeg het ticket toe aan de room
+    USER_TICKET_MAP[user_email][room_id].append(tid)
+    
+    send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
+    log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id} voor gebruiker {user_email}")
+    return tid
 
 # --------------------------------------------------------------------------
 # PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
@@ -401,12 +376,29 @@ def process_webex_event(payload):
                 user_email = email
                 break
         
+        # Als er geen gebruiker is gevonden, maar de gebruiker "nieuwe melding" stuurt, maak dan een nieuwe room aan
+        if not user_email and "nieuwe melding" in text.lower():
+            # Maak een nieuwe room aan voor deze gebruiker
+            user_email = sender  # We gebruiken de sender als email voor de gebruiker
+            
+            # Zorg dat de gebruiker een entry heeft in USER_TICKET_MAP
+            if user_email not in USER_TICKET_MAP:
+                USER_TICKET_MAP[user_email] = {}
+            
+            # Gebruik de huidige room als de nieuwe room
+            if room_id not in USER_TICKET_MAP[user_email]:
+                USER_TICKET_MAP[user_email][room_id] = []
+            
+            log.info(f"✅ Gebruiker {user_email} toegevoegd aan room {room_id}")
+        
+        # Als er nog steeds geen user_email is, dan is er iets mis
         if not user_email:
             log.info("ℹ️ Geen ticket in deze room, geen actie")
             # Stuur een bericht dat deze room niet voor tickets is
             send_message(room_id, "ℹ️ Deze room is niet geconfigureerd voor ticketdiscussie. Stuur 'nieuwe melding' om een nieuwe ticket room te maken.")
             return
         
+        # Nu kunnen we de "nieuwe melding" verwerken
         if "nieuwe melding" in text.lower():
             log.info("ℹ️ Bericht bevat 'nieuwe melding', stuur adaptive card")
             # Stuur een duidelijke instructie voor het aanmaken van een ticket
