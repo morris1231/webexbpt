@@ -115,16 +115,11 @@ def fetch_users(client_id, site_id):
             break
         page += 1
         page_count += 1
-    USER_CACHE["source"] = "/api/users (paginated)"
-    USER_CACHE["timestamp"] = time.time()
-    USER_CACHE["users"] = all_users
     log.info(f"✅ {len(all_users)} gebruikers opgehaald")
     return all_users
 
 def get_users():
-    now = time.time()
-    if USER_CACHE["users"] and (now - USER_CACHE["timestamp"] < CACHE_DURATION):
-        return USER_CACHE["users"]
+    # Geen caching meer, haal altijd de gebruikers op
     return fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
 
 def get_user(email):
@@ -252,7 +247,7 @@ def create_halo_ticket(form, room_id):
         return
     log.info(f"✅ Ticket aangemaakt: {tid}")
     
-    # Voeg ticket toe aan de room (geen per-user mapping meer)
+    # Voeg ticket toe aan de room
     if room_id not in USER_TICKET_MAP:
         USER_TICKET_MAP[room_id] = []
     USER_TICKET_MAP[room_id].append(tid)
@@ -473,7 +468,7 @@ def initialize():
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return {"status": "error", "message": "WEBEX_BOT_TOKEN is niet ingesteld"}
-    get_users()
+    get_users()  # Haal gebruikers op, geen caching
     # Start statuswijziging check in een aparte thread
     threading.Thread(target=status_check_loop, daemon=True).start()
     return {"status": "initialized", "source": "room-based ticket tracking"}
