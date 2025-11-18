@@ -35,8 +35,7 @@ HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-USER_CACHE = {"users": [], "timestamp": 0, "source": "none"}
-# Nu: {user_email: {room_id: [ticket_id1, ticket_id2, ...]}}
+# Nu: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
 # Om statuswijzigingen te detecteren: {ticket_id: {status: "Oud status", last_checked: timestamp}}
 TICKET_STATUS_TRACKER = {}
@@ -252,19 +251,18 @@ def create_halo_ticket(form, room_id):
         log.error("❌ Geen ticket ID gevonden in Halo response")
         return
     log.info(f"✅ Ticket aangemaakt: {tid}")
-    # Maak een nieuwe room voor deze gebruiker als deze nog niet bestaat
-    user_email = user.get("emailaddress", form["email"]).lower()
-    log.info(f"ℹ️ Gebruiker email: {user_email}")
-    # Als de gebruiker nog geen tickets heeft, maak dan een nieuwe room aan
-    if user_email not in USER_TICKET_MAP:
-        USER_TICKET_MAP[user_email] = {}
-    # Zorg dat de room_id in USER_TICKET_MAP staat
-    if room_id not in USER_TICKET_MAP[user_email]:
-        USER_TICKET_MAP[user_email][room_id] = []
-    # Voeg het ticket toe aan de room
-    USER_TICKET_MAP[user_email][room_id].append(tid)
+    
+    # Voeg ticket toe aan de room (geen per-user mapping meer)
+    if room_id not in USER_TICKET_MAP:
+        USER_TICKET_MAP[room_id] = []
+    USER_TICKET_MAP[room_id].append(tid)
+    
+    # Track status voor deze ticket
+    current_status = ticket.get("status", "Unknown")
+    TICKET_STATUS_TRACKER[tid] = {"status": current_status, "last_checked": time.time()}
+    
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
-    log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id} voor gebruiker {user_email}")
+    log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id}")
     return tid
 
 # --------------------------------------------------------------------------
@@ -274,14 +272,14 @@ def add_public_note(ticket_id, text):
     """Public note toevoegen via HALO Actions API (met Ticket_Id met underscore)"""
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
-        return
+        return False
     h = get_halo_headers()
     url = f"{HALO_API_BASE}/api/Actions"
     payload = [
         {
-            "Ticket_Id": int(ticket_id),  # MET UNDERSCORE - zoals jij nodig hebt
+            "Ticket_Id": int(ticket_id),
             "ActionId": ACTION_ID_PUBLIC,
-            "outcome": text  # Note tekst in 'outcome' veld
+            "outcome": text
         }
     ]
     log.info(f"➡️ Sturen public note naar Halo voor ticket {ticket_id}: {text}")
@@ -316,19 +314,16 @@ def check_ticket_status_changes():
                 if current_status != status_info["status"]:
                     # Update de status in de tracker
                     TICKET_STATUS_TRACKER[ticket_id]["status"] = current_status
-                    # Zoek de gebruiker die dit ticket heeft
-                    user_email = None
-                    for email, rooms in USER_TICKET_MAP.items():
-                        for room_id, tickets in rooms.items():
-                            if ticket_id in tickets:
-                                user_email = email
-                                break
-                        if user_email:
+                    # Zoek de room waar dit ticket in zit
+                    room_id = None
+                    for rid, tickets in USER_TICKET_MAP.items():
+                        if ticket_id in tickets:
+                            room_id = rid
                             break
                     # Stuur notificatie naar de juiste Webex room
-                    if user_email:
-                        for room_id in USER_TICKET_MAP[user_email]:
-                            send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
+                    if room_id:
+                        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
+                        log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
                     log.info(f"✅ Statuswijziging gedetecteerd voor ticket {ticket_id}: {status_info['status']} → {current_status}")
             else:
                 log.warning(f"⚠️ Ticket status check mislukt voor {ticket_id}: {r.status_code}")
@@ -355,69 +350,43 @@ def process_webex_event(payload):
         if sender and sender.endswith("@webex.bot"):
             log.info("❌ Bericht is van de bot zelf, negeren")
             return
-        # Controleer of de gebruiker een ticket heeft in deze room
-        user_email = None
-        for email, rooms in USER_TICKET_MAP.items():
-            if room_id in rooms:
-                user_email = email
-                break
-        # Als er geen gebruiker is gevonden, maar de gebruiker "nieuwe melding" stuurt, maak dan een nieuwe room aan
-        if not user_email and "nieuwe melding" in text.lower():
-            # Maak een nieuwe room aan voor deze gebruiker
-            user_email = sender  # We gebruiken de sender als email voor de gebruiker
-            # Zorg dat de gebruiker een entry heeft in USER_TICKET_MAP
-            if user_email not in USER_TICKET_MAP:
-                USER_TICKET_MAP[user_email] = {}
-            # Gebruik de huidige room als de nieuwe room
-            if room_id not in USER_TICKET_MAP[user_email]:
-                USER_TICKET_MAP[user_email][room_id] = []
-            log.info(f"✅ Gebruiker {user_email} toegevoegd aan room {room_id}")
-        # Als er nog steeds geen user_email is, dan is er iets mis
-        if not user_email:
-            log.info("ℹ️ Geen ticket in deze room, geen actie")
-            # Stuur een bericht dat deze room niet voor tickets is
-            send_message(room_id, "ℹ️ Deze room is niet geconfigureerd voor ticketdiscussie. Stuur 'nieuwe melding' om een nieuwe ticket room te maken.")
-            return
-        # Nu kunnen we de "nieuwe melding" verwerken
+        
+        # Nu: check of ticket in deze room zit (geen per-user mapping meer)
         if "nieuwe melding" in text.lower():
             log.info("ℹ️ Bericht bevat 'nieuwe melding', stuur adaptive card")
-            # Stuur een duidelijke instructie voor het aanmaken van een ticket
             send_message(room_id, "👋 Hi! Je hebt 'nieuwe melding' gestuurd. Klik op de knop hieronder om een ticket aan te maken:\n\n"
                                  "Je kunt ook een bericht sturen met 'Ticket #<nummer>' om een reactie te geven aan een specifiek ticket.")
             send_adaptive_card(room_id)
-        else:
-            # Check of er een ticketnummer in het bericht staat
-            ticket_match = re.search(r'Ticket #(\d+)', text)
-            if ticket_match:
-                requested_tid = ticket_match.group(1)
-                log.info(f"ℹ️ Bericht bevat ticket #{requested_tid}")
-                # Controleer of dit ticket bij de gebruiker hoort
-                ticket_found = False
-                for room_id_check, tickets in USER_TICKET_MAP[user_email].items():
-                    if requested_tid in tickets:
-                        ticket_found = True
-                        break
-                if ticket_found:
-                    log.info(f"✅ Ticket #{requested_tid} gevonden voor gebruiker {user_email}")
-                    success = add_public_note(requested_tid, text)
-                    if success:
-                        send_message(room_id, f"📝 Bericht toegevoegd aan Halo ticket #{requested_tid}.")
-                    else:
-                        send_message(room_id, f"❌ Kan geen notitie toevoegen aan ticket #{requested_tid}. Probeer het opnieuw.")
+            return
+        
+        # Check of er een ticketnummer in het bericht staat
+        ticket_match = re.search(r'Ticket #(\d+)', text)
+        if ticket_match:
+            requested_tid = ticket_match.group(1)
+            log.info(f"ℹ️ Bericht bevat ticket #{requested_tid}")
+            
+            # Controleer of dit ticket in de huidige room zit
+            if room_id in USER_TICKET_MAP and requested_tid in USER_TICKET_MAP[room_id]:
+                log.info(f"✅ Ticket #{requested_tid} gevonden in room {room_id}")
+                success = add_public_note(requested_tid, text)
+                if success:
+                    send_message(room_id, f"📝 Bericht toegevoegd aan Halo ticket #{requested_tid}.")
                 else:
-                    log.info(f"❌ Ticket #{requested_tid} hoort niet bij {user_email}")
-                    send_message(room_id, f"❌ Ticket #{requested_tid} hoort niet bij jouw tickets.")
+                    send_message(room_id, f"❌ Kan geen notitie toevoegen aan ticket #{requested_tid}. Probeer het opnieuw.")
             else:
-                log.info("ℹ️ Geen specifiek ticketnummer in bericht, voeg toe aan alle tickets in de room")
-                # Geen specifiek ticketnummer, voeg toe aan alle tickets in de room
-                for room_id_check, tickets in USER_TICKET_MAP[user_email].items():
-                    if room_id == room_id_check:
-                        for tid in tickets:
-                            success = add_public_note(tid, text)
-                            if not success:
-                                log.error(f"❌ Notitie toevoegen aan ticket {tid} mislukt")
-                        send_message(room_id, f"📝 Bericht toegevoegd aan alle jouw tickets.")
-                        break
+                log.info(f"❌ Ticket #{requested_tid} bestaat niet in deze room")
+                send_message(room_id, f"❌ Ticket #{requested_tid} bestaat niet in deze room of is niet gekoppeld aan deze room.")
+        else:
+            log.info("ℹ️ Geen specifiek ticketnummer in bericht, voeg toe aan alle tickets in de room")
+            # Geen specifiek ticketnummer, voeg toe aan alle tickets in de room
+            if room_id in USER_TICKET_MAP:
+                for tid in USER_TICKET_MAP[room_id]:
+                    success = add_public_note(tid, text)
+                    if not success:
+                        log.error(f"❌ Notitie toevoegen aan ticket {tid} mislukt")
+                send_message(room_id, f"📝 Bericht toegevoegd aan alle jouw tickets in deze room.")
+            else:
+                send_message(room_id, "ℹ️ Geen tickets gevonden in deze room. Stuur 'nieuwe melding' om een ticket aan te maken.")
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         log.info(f"📩 Verwerken attachmentActions: id={a_id}")
@@ -463,35 +432,29 @@ def halo_action():
         return {"status": "ignore"}
     # Zorg dat ticket_id een string is voor consistentie
     ticket_id = str(ticket_id)
-    # Zoek de gebruiker die dit ticket heeft
-    user_email = None
-    for email, rooms in USER_TICKET_MAP.items():
-        for room_id, tickets in rooms.items():
-            if ticket_id in tickets:
-                user_email = email
-                break
-        if user_email:
+    # Zoek de room waar dit ticket in zit
+    room_id = None
+    for rid, tickets in USER_TICKET_MAP.items():
+        if ticket_id in tickets:
+            room_id = rid
             break
-    if not user_email:
+    if not room_id:
         log.warning(f"❌ Geen Webex-room voor ticket {ticket_id}")
         return {"status": "ignore"}
     # Verwerk het type actie
     if action_type == "action":
         # Stuur notificatie naar de juiste Webex room
-        for room_id in USER_TICKET_MAP[user_email]:
-            send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
-            log.info(f"✅ Note gestuurd naar room {room_id}")
+        send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
+        log.info(f"✅ Note gestuurd naar room {room_id}")
     elif action_type == "status_change":
         # Stuur statuswijziging notificatie
-        for room_id in USER_TICKET_MAP[user_email]:
-            send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {note_text}")
-            log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
+        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {note_text}")
+        log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
     elif action_type == "assignment":
         # Stuur toewijzingsnotificatie
         assigned_to = data.get("assigned_to", "onbekende gebruiker")
-        for room_id in USER_TICKET_MAP[user_email]:
-            send_message(room_id, f"✅ **Ticket #{ticket_id} is toegewezen aan {assigned_to}**")
-            log.info(f"✅ Toewijzing gestuurd naar room {room_id}")
+        send_message(room_id, f"✅ **Ticket #{ticket_id} is toegewezen aan {assigned_to}**")
+        log.info(f"✅ Toewijzing gestuurd naar room {room_id}")
     return {"status": "ok"}
 
 # --------------------------------------------------------------------------
@@ -513,7 +476,7 @@ def initialize():
     get_users()
     # Start statuswijziging check in een aparte thread
     threading.Thread(target=status_check_loop, daemon=True).start()
-    return {"status": "initialized", "cache_size": len(USER_CACHE['users']), "source": USER_CACHE["source"]}
+    return {"status": "initialized", "source": "room-based ticket tracking"}
 
 def status_check_loop():
     """Loopen om statuswijzigingen te controleren"""
