@@ -595,64 +595,86 @@ def _extract_status_change(action: dict):
     return old_s, new_s
 
 def _get_agent_name_from_action(action: dict):
-    # zoek in meerdere velden; retourneer 'Onbekend' als niets gevonden
-    candidates = [
-        action.get("agentname"), action.get("AgentName"), action.get("agent_name"),
-        action.get("createdbyname"), action.get("createdby_name"), action.get("createdby"),
-        action.get("author"), action.get("ownername"),
+    """Probeer een menselijke naam te halen uit zoveel mogelijk varianten.
+    Fallback: 'Onbekend'. We zoeken case-insensitief naar keys met 'name' of bekende container objecten.
+    """
+    if not isinstance(action, dict):
+        return "Onbekend"
+    # Direct bekende key varianten
+    direct_keys = [
+        "agentname", "AgentName", "agent_name", "createdbyname", "createdby_name",
+        "createdby", "author", "ownername", "OwnerName", "technicianname", "TechnicianName",
+        "username", "user_name", "UserName"
     ]
-    # dict met naam
-    for k in ["agent", "user", "createdbyuser", "owner"]:
+    for k in direct_keys:
         v = action.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    # Object containers met mogelijke sub-naamvelden
+    obj_keys = ["agent", "user", "createdbyuser", "owner", "technician", "assigned_to_user", "created_by", "createdby", "creator"]
+    name_fields = ["displayname", "display_name", "full_name", "fullname", "name", "username"]
+    for ok in obj_keys:
+        v = action.get(ok)
         if isinstance(v, dict):
-            candidates.append(v.get("name") or v.get("displayname") or v.get("full_name"))
-    for c in candidates:
-        if isinstance(c, str) and c.strip():
-            return c.strip()
+            for nf in name_fields:
+                nv = v.get(nf)
+                if isinstance(nv, str) and nv.strip():
+                    return nv.strip()
+    # Generieke scan: eerste string value waarvan key 'name' bevat
+    for k, v in action.items():
+        if "name" in str(k).lower() and isinstance(v, str) and v.strip():
+            return v.strip()
     return "Onbekend"
 
 def classify_action_to_message(ticket_id, action):
-    """Maakt een Webex-bericht o.b.v. een action. Geeft None terug als we het negeren."""
+    """Zet een HALO action om naar een compacte, begrijpelijke Webex melding.
+    Regels:
+    - Assignment → 🧩 Ticket #X toegewezen aan Naam
+    - Statuswijziging (gefilterde relevante statussen) → ⚠️ Ticket #X → NieuweStatus [agent]
+    - Note (publiek/privé) → 📝 Ticket #X | Naam: tekst (eerste regel)
+    - Onderdruk lege 'External Note' / type labels zonder content
+    """
     a_type = (action.get("type") or action.get("actiontype") or action.get("ActionType") or "").lower()
-    # Alleen HTML/body velden voor notes; outcome gebruiken we voorzichtig omdat systeemacties dit ook vullen
-    a_note_html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body")
+    html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body")
     outcome = (action.get("outcome") or action.get("Outcome") or "").strip()
     is_private = bool(action.get("private") or action.get("isprivate") or action.get("private_note"))
     agent_name = _get_agent_name_from_action(action)
 
-    # 1) Toewijzing (voorkom 2-3 systeemmeldingen als 'Assigned', 'Re-Assign')
+    # 1) Assignment
     assignee = action.get("assignedto") or action.get("assigned_to") or action.get("assignedname") \
         or action.get("AssignedTo") or action.get("AssignedToName") or action.get("assignee") \
         or (action.get("assigned_to_user") or {}).get("name")
-    if assignee:
-        return f"🧩 Ticket #{ticket_id} toegewezen aan {assignee}"
+    if assignee and str(assignee).strip():
+        return f"🧩 Ticket #{ticket_id} toegewezen aan {str(assignee).strip()}"
 
-    # 2) Statuswijziging (system action)
+    # 2) Status change
     old_s, new_s = _extract_status_change(action)
-    if ("status" in a_type) or new_s or (outcome and outcome.lower() in KNOWN_STATUS_NAMES and "note" not in a_type):
-        if isinstance(new_s, (int, str)) and str(new_s).isdigit():
-            new_s = get_status_name(int(new_s))
-        if isinstance(old_s, (int, str)) and str(old_s).isdigit():
-            old_s = get_status_name(int(old_s))
-        # Als we alleen outcome hebben (bijv. 'Responded'), toon als nieuwe status
-        if not new_s and outcome:
-            new_s = outcome
-        # Onderdruk assignment-achtige statusnamen om dubbele meldingen te voorkomen
-        if (new_s or "").strip().lower() in {"assigned", "re-assign"}:
+    status_candidate = new_s or (outcome if outcome.lower() in KNOWN_STATUS_NAMES else None)
+    if status_candidate:
+        if isinstance(status_candidate, (int, str)) and str(status_candidate).isdigit():
+            status_candidate = get_status_name(int(status_candidate))
+        status_text = str(status_candidate).strip() or "onbekend"
+        # Filter irrelevante / dubbele statuslabels
+        ignored = {"assigned", "re-assign"}
+        if status_text.lower() in ignored:
             return None
-        old_s = old_s or "onbekend"
-        new_s = new_s or "onbekend"
-        return f"⚠️ Ticket #{ticket_id} status gewijzigd naar {new_s}"
+        agent_part = f" (agent: {agent_name})" if agent_name != "Onbekend" else ""
+        return f"⚠️ Ticket #{ticket_id} → {status_text}{agent_part}"
 
-    # 3) Agent note (privé of publiek). Gebruik outcome als er geen HTML/body is en het geen statuswoord is.
-    if ("note" in a_type) or a_note_html or (outcome and outcome.lower() not in KNOWN_STATUS_NAMES):
-        visibility = "(privé) " if is_private else ""
-        content = (a_note_html or outcome or "").strip()
-        if not content:
+    # 3) Notes (publiek/privé). Outcome alleen gebruiken als het geen puur type label is.
+    content_source = html or outcome
+    if ("note" in a_type) or content_source:
+        # Onderdruk type labels zonder inhoud
+        if html is None and outcome.lower() in {"external note", "internal note", "public note"}:
             return None
-        return f"📝 {visibility}Agentnote door {agent_name} op Ticket #{ticket_id}:\n{content}"
+        raw = (content_source or "").strip()
+        if not raw:
+            return None
+        # Neem alleen eerste regel voor compactheid
+        first_line = raw.splitlines()[0].strip()
+        priv = "🔒" if is_private else ""
+        return f"📝 {priv}Ticket #{ticket_id} | {agent_name}: {first_line}"
 
-    # Andere types (email, sla-hold, etc.) negeren voorlopig
     return None
 
 def check_ticket_actions():
