@@ -52,12 +52,38 @@ ROOM_TICKETS_BY_USER = {}
 TICKET_STATUS_TRACKER = {}
 # Bijhouden van laatste verwerkte actie per ticket: {ticket_id: last_action_id}
 ACTION_TRACKER = {}
+# Onboarding: onthoud wie we al een eerste uitleg hebben gestuurd (room_id + user)
+ONBOARD_SEEN = set()
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 MAX_PAGES = 3  # Max 3 pagina's (100 + 100 + 100 = 300 users)
 
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
 ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
 NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
+
+# Bekende statusnamen om systeemstatus-acties te herkennen (kan per omgeving afwijken)
+KNOWN_STATUS_NAMES = set(s.lower() for s in [
+    "new", "open", "in progress", "responded", "resolved", "closed",
+    "on hold", "awaiting customer", "awaiting user", "awaiting third party",
+    "re-assign", "assigned", "pending", "cancelled",
+])
+
+CLOSED_STATUS_NAMES = set(s.lower() for s in [
+    "resolved", "closed", "cancelled", "canceled", "completed", "done"
+])
+
+def is_ticket_open(ticket_id: str) -> bool:
+    info = TICKET_STATUS_TRACKER.get(str(ticket_id)) or {}
+    name = (info.get("status") or "").strip()
+    if not name:
+        try:
+            tdata = fetch_ticket_details(ticket_id)
+            name = _extract_ticket_status(tdata)
+            TICKET_STATUS_TRACKER[str(ticket_id)] = {"status": name, "last_checked": time.time()}
+        except Exception:
+            # Als we het niet weten, ga uit van open om niets te missen
+            return True
+    return name.lower() not in CLOSED_STATUS_NAMES
 
 # --------------------------------------------------------------------------
 # Controleer of WEBEX_TOKEN is ingesteld
@@ -303,7 +329,11 @@ def send_reply_card(room_id, sender_email):
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return
     tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get((sender_email or "").lower(), [])
-    choices = [{"title": f"Ticket #{t}", "value": str(t)} for t in tickets]
+    choices = []
+    for t in tickets:
+        status = (TICKET_STATUS_TRACKER.get(str(t)) or {}).get("status", "").strip()
+        label = f"#{t}" + (f" — {status}" if status else "")
+        choices.append({"title": label, "value": str(t)})
     if not choices:
         subtitle = "Ik zie nog geen tickets die aan jou gekoppeld zijn in deze ruimte."
     else:
@@ -321,7 +351,7 @@ def send_reply_card(room_id, sender_email):
                 "body": [
                     {"type": "TextBlock", "text": "💬 Reageer op ticket", "weight": "bolder", "size": "medium"},
                     {"type": "TextBlock", "text": subtitle, "wrap": True, "spacing": "small"},
-                    {"type": "Input.ChoiceSet", "id": "ticket", "label": "Jouw tickets", "choices": choices, "isMultiSelect": False, "style": "compact"},
+                    {"type": "Input.ChoiceSet", "id": "ticket", "label": "Kies ticket", "choices": choices, "isMultiSelect": False, "style": "compact", "placeholder": "Kies ticket"},
                     {"type": "TextBlock", "text": "Of voer handmatig een ticketnummer in:", "wrap": True, "spacing": "small"},
                     {"type": "Input.Text", "id": "ticket_manual", "placeholder": "Bijv. 12345"},
                     {"type": "TextBlock", "text": "Bericht (wordt als publieke note geplaatst):", "wrap": True, "spacing": "small"},
@@ -520,31 +550,63 @@ def _extract_status_change(action: dict):
         new_s = new_s or action["status"].get("name")
     return old_s, new_s
 
+def _get_agent_name_from_action(action: dict):
+    # zoek in meerdere velden; retourneer 'Onbekend' als niets gevonden
+    candidates = [
+        action.get("agentname"), action.get("AgentName"), action.get("agent_name"),
+        action.get("createdbyname"), action.get("createdby_name"), action.get("createdby"),
+        action.get("author"), action.get("ownername"),
+    ]
+    # dict met naam
+    for k in ["agent", "user", "createdbyuser", "owner"]:
+        v = action.get(k)
+        if isinstance(v, dict):
+            candidates.append(v.get("name") or v.get("displayname") or v.get("full_name"))
+    for c in candidates:
+        if isinstance(c, str) and c.strip():
+            return c.strip()
+    return "Onbekend"
+
 def classify_action_to_message(ticket_id, action):
     """Maakt een Webex-bericht o.b.v. een action. Geeft None terug als we het negeren."""
     a_type = (action.get("type") or action.get("actiontype") or action.get("ActionType") or "").lower()
-    a_note_html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body") or action.get("outcome")
+    # Alleen HTML/body velden voor notes; outcome gebruiken we voorzichtig omdat systeemacties dit ook vullen
+    a_note_html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body")
+    outcome = (action.get("outcome") or action.get("Outcome") or "").strip()
     is_private = bool(action.get("private") or action.get("isprivate") or action.get("private_note"))
+    agent_name = _get_agent_name_from_action(action)
 
-    # 1) Statuswijziging (system action)
+    # 1) Toewijzing (voorkom 2-3 systeemmeldingen als 'Assigned', 'Re-Assign')
+    assignee = action.get("assignedto") or action.get("assigned_to") or action.get("assignedname") \
+        or action.get("AssignedTo") or action.get("AssignedToName") or action.get("assignee") \
+        or (action.get("assigned_to_user") or {}).get("name")
+    if assignee:
+        return f"🧩 Ticket #{ticket_id} toegewezen aan {assignee}"
+
+    # 2) Statuswijziging (system action)
     old_s, new_s = _extract_status_change(action)
-    if ("status" in a_type) or new_s:
+    if ("status" in a_type) or new_s or (outcome and outcome.lower() in KNOWN_STATUS_NAMES and "note" not in a_type):
         if isinstance(new_s, (int, str)) and str(new_s).isdigit():
             new_s = get_status_name(int(new_s))
         if isinstance(old_s, (int, str)) and str(old_s).isdigit():
             old_s = get_status_name(int(old_s))
+        # Als we alleen outcome hebben (bijv. 'Responded'), toon als nieuwe status
+        if not new_s and outcome:
+            new_s = outcome
+        # Onderdruk assignment-achtige statusnamen om dubbele meldingen te voorkomen
+        if (new_s or "").strip().lower() in {"assigned", "re-assign"}:
+            return None
         old_s = old_s or "onbekend"
         new_s = new_s or "onbekend"
-        return f"⚠️ Statuswijziging voor ticket #{ticket_id}: {old_s} → {new_s}"
+        return f"⚠️ Ticket #{ticket_id} status gewijzigd naar {new_s}"
 
-    # 2) Agent note (privé of publiek)
-    if ("note" in a_type) or a_note_html:
-        author = action.get("agentname") or action.get("createdby") or action.get("author") or "Agent"
+    # 3) Agent note (privé of publiek). Gebruik outcome als er geen HTML/body is en het geen statuswoord is.
+    if ("note" in a_type) or a_note_html or (outcome and outcome.lower() not in KNOWN_STATUS_NAMES):
         visibility = "(privé) " if is_private else ""
-        content = (a_note_html or "").strip()
+        content = (a_note_html or outcome or "").strip()
         if not content:
             return None
-        return f"📝 {visibility}Nieuwe agent note van {author} op ticket #{ticket_id}:\n{content}"
+        return f"📝 {visibility}Agentnote door {agent_name} op Ticket #{ticket_id}:\n{content}"
 
     # Andere types (email, sla-hold, etc.) negeren voorlopig
     return None
@@ -686,6 +748,22 @@ def process_webex_event(payload):
             log.info("❌ Bericht is van de bot zelf, negeren")
             return
         
+        # Eerste keer in deze ruimte? Geef korte, eenmalige uitleg
+        key = (room_id, (sender or "").lower())
+        if key not in ONBOARD_SEEN:
+            ONBOARD_SEEN.add(key)
+            send_message(
+                room_id,
+                """
+                👋 Welkom! Zo gebruik je de ticketbot eenvoudig:
+                - Typ `nieuwe melding` om een ticket aan te maken
+                - Typ gewoon een bericht om te reageren op jouw ticket (als je er precies 1 open hebt)
+                - Heb je meerdere open tickets? Typ `reageer` en kies er één
+                - Bestaand ticket koppelen: `link #12345`
+                - Overzicht van jouw tickets: `mijn tickets`
+                """
+            )
+        
         # Trigger voor keuze-kaart om een ticket te selecteren
         triggers = ["reageer", "reactie", "reply", "note", "notitie", "kies ticket"]
         if any(t in text.lower() for t in triggers):
@@ -750,21 +828,22 @@ def process_webex_event(payload):
                 log.info(f"❌ Ticket #{requested_tid} is niet gekoppeld aan afzender {sender_email} in deze room")
                 send_message(room_id, f"❌ Ticket #{requested_tid} is niet gekoppeld aan jou in deze room.")
         else:
-            # Geen ticketnummer: voeg alleen toe aan tickets van de afzender in deze room
+            # Geen ticketnummer: als gebruiker precies 1 open ticket heeft, plaats daar direct de note
             sender_email = (sender or "").strip().lower()
-            user_tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get(sender_email, [])
-            if user_tickets:
-                errors = 0
-                for tid in user_tickets:
-                    success = add_public_note(tid, text)
-                    if not success:
-                        errors += 1
-                if errors:
-                    send_message(room_id, f"⚠️ Bericht toegevoegd aan {len(user_tickets)-errors} van jouw tickets; {errors} mislukt.")
+            all_user_tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get(sender_email, [])
+            open_tickets = [t for t in all_user_tickets if is_ticket_open(t)]
+            if len(open_tickets) == 1:
+                tid = open_tickets[0]
+                ok = add_public_note(tid, text)
+                if ok:
+                    send_message(room_id, f"📝 Bericht toegevoegd aan jouw ticket #{tid}.")
                 else:
-                    send_message(room_id, f"📝 Bericht toegevoegd aan jouw {len(user_tickets)} ticket(s) in deze room.")
+                    send_message(room_id, f"❌ Kon geen notitie toevoegen aan ticket #{tid}.")
+            elif len(open_tickets) > 1:
+                send_message(room_id, "Je hebt meerdere open tickets. Kies er één om te reageren:")
+                send_reply_card(room_id, sender_email)
             else:
-                send_message(room_id, "ℹ️ Ik vond geen tickets die aan jou gekoppeld zijn in deze room. Voeg 'Ticket #<nummer>' toe of maak eerst een ticket aan.")
+                send_message(room_id, "ℹ️ Ik vond geen open tickets die aan jou gekoppeld zijn in deze room.")
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         log.info(f"📩 Verwerken attachmentActions: id={a_id}")
