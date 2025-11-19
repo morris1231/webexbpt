@@ -594,37 +594,63 @@ def _extract_status_change(action: dict):
         new_s = new_s or action["status"].get("name")
     return old_s, new_s
 
+def _full_name_from_obj(obj: dict):
+    if not isinstance(obj, dict):
+        return None
+    # Prefer expliciete voor/achternaam
+    first_keys = ["firstname", "first_name", "forename", "givenname", "given_name"]
+    last_keys  = ["lastname", "last_name", "surname", "familyname", "family_name"]
+    first = next((obj.get(k) for k in first_keys if isinstance(obj.get(k), str) and obj.get(k).strip()), None)
+    last  = next((obj.get(k) for k in last_keys  if isinstance(obj.get(k), str) and obj.get(k).strip()), None)
+    if first and last:
+        return f"{first.strip()} {last.strip()}"
+    # Anders display/full name varianten
+    for k in ["displayname", "display_name", "full_name", "fullname", "name"]:
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
 def _get_agent_name_from_action(action: dict):
-    """Probeer een menselijke naam te halen uit zoveel mogelijk varianten.
-    Fallback: 'Onbekend'. We zoeken case-insensitief naar keys met 'name' of bekende container objecten.
+    """Haal een persoonsnaam (voornaam + achternaam indien beschikbaar) van de uitvoerder.
+    We vermijden generieke '*Name' velden zoals 'StatusName' om foute matches te voorkomen.
     """
     if not isinstance(action, dict):
         return "Onbekend"
-    # Direct bekende key varianten
-    direct_keys = [
-        "agentname", "AgentName", "agent_name", "createdbyname", "createdby_name",
-        "createdby", "author", "ownername", "OwnerName", "technicianname", "TechnicianName",
-        "username", "user_name", "UserName"
-    ]
-    for k in direct_keys:
+    # 1) Specifieke stringvelden die direct de agentnaam bevatten
+    for k in ["agentname", "AgentName", "agent_name", "createdbyname", "createdby_name", "author", "ownername", "OwnerName", "technicianname", "TechnicianName"]:
         v = action.get(k)
         if isinstance(v, str) and v.strip():
             return v.strip()
-    # Object containers met mogelijke sub-naamvelden
-    obj_keys = ["agent", "user", "createdbyuser", "owner", "technician", "assigned_to_user", "created_by", "createdby", "creator"]
-    name_fields = ["displayname", "display_name", "full_name", "fullname", "name", "username"]
-    for ok in obj_keys:
-        v = action.get(ok)
-        if isinstance(v, dict):
-            for nf in name_fields:
-                nv = v.get(nf)
-                if isinstance(nv, str) and nv.strip():
-                    return nv.strip()
-    # Generieke scan: eerste string value waarvan key 'name' bevat
-    for k, v in action.items():
-        if "name" in str(k).lower() and isinstance(v, str) and v.strip():
-            return v.strip()
+    # 2) Bekende container-objecten
+    for ok in ["agent", "created_by", "createdbyuser", "createdby", "creator", "technician", "owner", "assigned_to_user"]:
+        name = _full_name_from_obj(action.get(ok) or {})
+        if name:
+            return name
+    # 3) Vermijd status/user payloads die geen uitvoerder zijn; geen generieke scan meer
     return "Onbekend"
+
+def _get_assignee_name(action: dict):
+    """Haal de volledige naam van de toegewezen agent uit de action."""
+    if not isinstance(action, dict):
+        return None
+    # Object-varianten eerst (voorkeur)
+    for ok in [
+        "assigned_to_user", "assignee", "assigned_to", "owner", "agent", "technician",
+        "AssignedToUser", "AssignedUser"
+    ]:
+        nm = _full_name_from_obj(action.get(ok) or {})
+        if nm:
+            return nm
+    # String fallback keys
+    for k in [
+        "assignedname", "AssignedToName", "assigned_to_name", "assignedto", "assigned_to",
+        "AssignedTo", "assignee", "ownername", "OwnerName"
+    ]:
+        v = action.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
 
 def classify_action_to_message(ticket_id, action):
     """Zet een HALO action om naar een compacte, begrijpelijke Webex melding.
@@ -641,11 +667,9 @@ def classify_action_to_message(ticket_id, action):
     agent_name = _get_agent_name_from_action(action)
 
     # 1) Assignment
-    assignee = action.get("assignedto") or action.get("assigned_to") or action.get("assignedname") \
-        or action.get("AssignedTo") or action.get("AssignedToName") or action.get("assignee") \
-        or (action.get("assigned_to_user") or {}).get("name")
-    if assignee and str(assignee).strip():
-        return f"🧩 Ticket #{ticket_id} toegewezen aan {str(assignee).strip()}"
+    assignee = _get_assignee_name(action)
+    if isinstance(assignee, str) and assignee.strip():
+        return f"🧩 Ticket #{ticket_id} toegewezen aan {assignee.strip()}"
 
     # 2) Status change
     old_s, new_s = _extract_status_change(action)
@@ -658,8 +682,7 @@ def classify_action_to_message(ticket_id, action):
         ignored = {"assigned", "re-assign"}
         if status_text.lower() in ignored:
             return None
-        agent_part = f" (agent: {agent_name})" if agent_name != "Onbekend" else ""
-        return f"⚠️ Ticket #{ticket_id} → {status_text}{agent_part}"
+        return f"⚠️ Ticket #{ticket_id} status gewijzigd naar: {status_text}"
 
     # 3) Notes (publiek/privé). Outcome alleen gebruiken als het geen puur type label is.
     content_source = html or outcome
@@ -672,8 +695,9 @@ def classify_action_to_message(ticket_id, action):
             return None
         # Neem alleen eerste regel voor compactheid
         first_line = raw.splitlines()[0].strip()
-        priv = "🔒" if is_private else ""
-        return f"📝 {priv}Ticket #{ticket_id} | {agent_name}: {first_line}"
+        priv = " 🔒" if is_private else ""
+        name = agent_name if agent_name != "Onbekend" else "Onbekende gebruiker"
+        return f"📝 Ticket #{ticket_id}{priv} | {name}: {first_line}"
 
     return None
 
