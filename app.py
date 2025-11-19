@@ -44,6 +44,9 @@ USER_CACHE = {
     "source": "none",
     "max_users": 200
 }
+STATE_LOCK = threading.Lock()
+STATE_FILE = os.getenv("BOT_STATE_FILE", "bot_state.json")
+
 # Nu: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
 # Per room per gebruiker: {room_id: {user_email_lower: [ticket_id, ...]}}
@@ -54,6 +57,44 @@ TICKET_STATUS_TRACKER = {}
 ACTION_TRACKER = {}
 # Onboarding: onthoud wie we al een eerste uitleg hebben gestuurd (room_id + user)
 ONBOARD_SEEN = set()
+
+def _load_state():
+    if not os.path.exists(STATE_FILE):
+        return
+    try:
+        with open(STATE_FILE, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        with STATE_LOCK:
+            USER_TICKET_MAP.update(raw.get('USER_TICKET_MAP', {}))
+            ROOM_TICKETS_BY_USER.update(raw.get('ROOM_TICKETS_BY_USER', {}))
+            TICKET_STATUS_TRACKER.update(raw.get('TICKET_STATUS_TRACKER', {}))
+            ACTION_TRACKER.update(raw.get('ACTION_TRACKER', {}))
+            ONBOARD_SEEN.update({tuple(x) for x in raw.get('ONBOARD_SEEN', [])})
+        log.info(f"💾 State geladen uit {STATE_FILE}")
+    except Exception as e:
+        log.error(f"❌ State laden mislukt: {e}")
+
+def _save_state(async_save=True):
+    def _do_save():
+        try:
+            with STATE_LOCK:
+                payload = {
+                    'USER_TICKET_MAP': USER_TICKET_MAP,
+                    'ROOM_TICKETS_BY_USER': ROOM_TICKETS_BY_USER,
+                    'TICKET_STATUS_TRACKER': TICKET_STATUS_TRACKER,
+                    'ACTION_TRACKER': ACTION_TRACKER,
+                    'ONBOARD_SEEN': [list(x) for x in ONBOARD_SEEN]
+                }
+            tmp = STATE_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, STATE_FILE)
+        except Exception as e:
+            log.error(f"❌ State opslaan mislukt: {e}")
+    if async_save:
+        threading.Thread(target=_do_save, daemon=True).start()
+    else:
+        _do_save()
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 MAX_PAGES = 3  # Max 3 pagina's (100 + 100 + 100 = 300 users)
 
@@ -476,25 +517,28 @@ def create_halo_ticket(form, room_id):
         return
     log.info(f"✅ Ticket aangemaakt: {tid}")
     
-    if room_id not in USER_TICKET_MAP:
-        USER_TICKET_MAP[room_id] = []
-    USER_TICKET_MAP[room_id].append(tid)
+    with STATE_LOCK:
+        USER_TICKET_MAP.setdefault(room_id, []).append(tid)
     # Koppel ticket aan opgegeven eindgebruikers-e-mailadres in deze room
     owner_email = (form.get("email") or "").strip().lower()
     if owner_email:
-        ROOM_TICKETS_BY_USER.setdefault(room_id, {}).setdefault(owner_email, []).append(tid)
+        with STATE_LOCK:
+            ROOM_TICKETS_BY_USER.setdefault(room_id, {}).setdefault(owner_email, []).append(tid)
     
-    TICKET_STATUS_TRACKER[tid] = {"status": current_status, "last_checked": time.time()}
+    with STATE_LOCK:
+        TICKET_STATUS_TRACKER[tid] = {"status": current_status, "last_checked": time.time()}
     # Initialiseer ACTION_TRACKER op huidige hoogste action-id zodat we geen oude acties posten
     try:
         latest_actions = get_actions_for_ticket(int(tid), None)
         if latest_actions:
             last = latest_actions[-1]
-            ACTION_TRACKER[str(tid)] = int(last.get("_id_int", last.get("id", 0)) or 0)
+            with STATE_LOCK:
+                ACTION_TRACKER[str(tid)] = int(last.get("_id_int", last.get("id", 0)) or 0)
     except Exception as e:
         log.warning(f"⚠️ Kon initiële Actions niet ophalen voor ticket {tid}: {e}")
     
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
+    _save_state()
     log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id}")
     return tid
 
@@ -614,14 +658,17 @@ def classify_action_to_message(ticket_id, action):
 def check_ticket_actions():
     # Verzamel unieke ticket-ids uit alle rooms
     all_ticket_ids = set()
-    for tickets in USER_TICKET_MAP.values():
+    with STATE_LOCK:
+        current_map = {k: list(v) for k, v in USER_TICKET_MAP.items()}
+        tracker_snapshot = dict(ACTION_TRACKER)
+    for tickets in current_map.values():
         for t in tickets:
             all_ticket_ids.add(str(t))
     if not all_ticket_ids:
         return
 
     for tid in list(all_ticket_ids):
-        last_seen = ACTION_TRACKER.get(str(tid))
+        last_seen = tracker_snapshot.get(str(tid))
         try:
             actions = get_actions_for_ticket(int(tid), last_seen)
         except Exception as e:
@@ -639,7 +686,7 @@ def check_ticket_actions():
             if msg:
                 # Zoek passende room
                 room_id = None
-                for rid, tickets in USER_TICKET_MAP.items():
+                for rid, tickets in current_map.items():
                     if str(tid) in tickets:
                         room_id = rid
                         break
@@ -647,7 +694,9 @@ def check_ticket_actions():
                     send_message(room_id, msg)
             if a_id > max_id:
                 max_id = a_id
-        ACTION_TRACKER[str(tid)] = int(max_id)
+        with STATE_LOCK:
+            ACTION_TRACKER[str(tid)] = int(max_id)
+    _save_state()
 
 # -------------------------------------------------------------------------- 
 # PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
@@ -671,6 +720,7 @@ def add_public_note(ticket_id, text):
     
     if r.status_code in [200, 201]:
         log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
+        _save_state()
         return True
     else:
         log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
@@ -750,8 +800,11 @@ def process_webex_event(payload):
         
         # Eerste keer in deze ruimte? Geef korte, eenmalige uitleg
         key = (room_id, (sender or "").lower())
-        if key not in ONBOARD_SEEN:
-            ONBOARD_SEEN.add(key)
+        with STATE_LOCK:
+            first_time = key not in ONBOARD_SEEN
+            if first_time:
+                ONBOARD_SEEN.add(key)
+        if first_time:
             send_message(
                 room_id,
                 """
@@ -811,11 +864,11 @@ def process_webex_event(payload):
             # Alleen toestaan als dit ticket aan afzender gekoppeld is binnen deze room
             sender_email = (sender or "").strip().lower()
             allowed = False
-            if room_id in ROOM_TICKETS_BY_USER and sender_email in ROOM_TICKETS_BY_USER[room_id]:
-                allowed = requested_tid in ROOM_TICKETS_BY_USER[room_id][sender_email]
-            if not allowed and room_id in USER_TICKET_MAP:
-                # Fallback: als we nog geen per-gebruiker mapping hebben, val terug op oude lijst
-                allowed = requested_tid in USER_TICKET_MAP[room_id]
+            with STATE_LOCK:
+                if room_id in ROOM_TICKETS_BY_USER and sender_email in ROOM_TICKETS_BY_USER[room_id]:
+                    allowed = requested_tid in ROOM_TICKETS_BY_USER[room_id][sender_email]
+                if not allowed and room_id in USER_TICKET_MAP:
+                    allowed = requested_tid in USER_TICKET_MAP[room_id]
 
             if allowed:
                 log.info(f"✅ Ticket #{requested_tid} toegestaan voor afzender {sender_email} in room {room_id}")
@@ -830,7 +883,8 @@ def process_webex_event(payload):
         else:
             # Geen ticketnummer: als gebruiker precies 1 open ticket heeft, plaats daar direct de note
             sender_email = (sender or "").strip().lower()
-            all_user_tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get(sender_email, [])
+            with STATE_LOCK:
+                all_user_tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get(sender_email, [])
             open_tickets = [t for t in all_user_tickets if is_ticket_open(t)]
             if len(open_tickets) == 1:
                 tid = open_tickets[0]
