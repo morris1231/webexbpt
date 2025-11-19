@@ -626,6 +626,7 @@ def get_actions_for_ticket(ticket_id, last_seen_action_id):
         "count": 50,
         "includehtmlnote": True,
         "includeattachments": True,
+        "includedetails": True,
         # Belangrijk: GEEN excludesys / excludeprivate / agentonly / conversationonly / emailonly / slaonly
     }
     url = f"{HALO_API_BASE}/api/Actions"
@@ -824,7 +825,25 @@ def check_ticket_actions():
             continue
 
         if not actions:
-            continue
+            # Herstelpad: als last_seen te ver in de toekomst staat, reset lager
+            if last_seen is not None:
+                try:
+                    latest_any = get_actions_for_ticket(int(tid), None)
+                except Exception:
+                    latest_any = []
+                if latest_any:
+                    latest_id = latest_any[-1].get("_id_int", 0)
+                    if int(latest_id or 0) < int(last_seen or 0):
+                        reset_seen = max(0, int(latest_id) - 2)
+                        with STATE_LOCK:
+                            ACTION_TRACKER[str(tid)] = reset_seen
+                        # Probeer direct opnieuw met de lagere last_seen
+                        try:
+                            actions = get_actions_for_ticket(int(tid), reset_seen)
+                        except Exception:
+                            actions = []
+            if not actions:
+                continue
 
         # Bepaal hoogste id en verwerk berichten
         max_id = last_seen or 0
@@ -858,7 +877,7 @@ def add_public_note(ticket_id, text):
     payload = [
         {
             "Ticket_Id": int(ticket_id),
-            "ActionTypeId": ACTION_ID_PUBLIC,
+            "ActionId": ACTION_ID_PUBLIC,
             "outcome": text
         }
     ]
@@ -1317,4 +1336,12 @@ def link_ticket_to_user(room_id, sender_email, ticket_id):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
+    # Start polling loops ook bij directe run, zonder /initialize te hoeven aanroepen
+    try:
+        _load_state()
+        threading.Thread(target=action_check_loop, daemon=True).start()
+        # Optioneel: status loop als extra vangnet
+        threading.Thread(target=status_check_loop, daemon=True).start()
+    except Exception as e:
+        log.warning(f"⚠️ Kon polling loops niet starten bij boot: {e}")
     app.run(host="0.0.0.0", port=port, debug=False)
