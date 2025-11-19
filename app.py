@@ -46,6 +46,8 @@ USER_CACHE = {
 }
 STATE_LOCK = threading.Lock()
 STATE_FILE = os.getenv("BOT_STATE_FILE", "bot_state.json")
+NAME_CACHE_TTL = int(os.getenv("NAME_CACHE_TTL", 6 * 60 * 60))  # 6 uur
+AGENT_NAME_CACHE = {"agents": {}, "users": {}}  # {"id": {"name": str, "ts": epoch}}
 
 # Nu: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
@@ -215,6 +217,72 @@ def get_status_name(status_id):
     except Exception as e:
         log.error(f"❌ Fout bij statusnaam conversie voor ID {status_id}: {e}")
         return str(status_id)
+
+# --------------------------------------------------------------------------
+# AGENT/USER NAME LOOKUPS (CACHED)
+# --------------------------------------------------------------------------
+def _cache_get(kind: str, key: str):
+    try:
+        entry = AGENT_NAME_CACHE.get(kind, {}).get(str(key))
+        if entry and (time.time() - entry.get("ts", 0) < NAME_CACHE_TTL):
+            return entry.get("name")
+    except Exception:
+        pass
+    return None
+
+def _cache_set(kind: str, key: str, name: str):
+    try:
+        AGENT_NAME_CACHE.setdefault(kind, {})[str(key)] = {"name": name, "ts": time.time()}
+    except Exception:
+        pass
+
+def get_agent_name_by_id(agent_id):
+    if agent_id is None:
+        return None
+    try:
+        if isinstance(agent_id, str) and agent_id.isdigit():
+            agent_id = int(agent_id)
+        name = _cache_get("agents", agent_id)
+        if name:
+            return name
+        h = get_halo_headers()
+        url = f"{HALO_API_BASE}/api/Agent/{int(agent_id)}"
+        r = halo_request(url, headers=h, params={"includedetails": True})
+        if r.status_code != 200:
+            log.debug(f"ℹ️ Agent {agent_id} niet gevonden ({r.status_code})")
+            return None
+        data = r.json()
+        name = _full_name_from_obj(data) or data.get("displayname") or data.get("name")
+        if isinstance(name, str) and name.strip():
+            _cache_set("agents", agent_id, name.strip())
+            return name.strip()
+    except Exception as e:
+        log.debug(f"ℹ️ Agent lookup fout voor id {agent_id}: {e}")
+    return None
+
+def get_user_name_by_id(user_id):
+    if user_id is None:
+        return None
+    try:
+        if isinstance(user_id, str) and user_id.isdigit():
+            user_id = int(user_id)
+        name = _cache_get("users", user_id)
+        if name:
+            return name
+        h = get_halo_headers()
+        url = f"{HALO_API_BASE}/api/Users/{int(user_id)}"
+        r = halo_request(url, headers=h, params={"includedetails": True})
+        if r.status_code != 200:
+            log.debug(f"ℹ️ User {user_id} niet gevonden ({r.status_code})")
+            return None
+        data = r.json()
+        name = _full_name_from_obj(data) or data.get("displayname") or data.get("name")
+        if isinstance(name, str) and name.strip():
+            _cache_set("users", user_id, name.strip())
+            return name.strip()
+    except Exception as e:
+        log.debug(f"ℹ️ User lookup fout voor id {user_id}: {e}")
+    return None
 
 # --------------------------------------------------------------------------
 # USERS
@@ -627,7 +695,18 @@ def _get_agent_name_from_action(action: dict):
         name = _full_name_from_obj(action.get(ok) or {})
         if name:
             return name
-    # 3) Vermijd status/user payloads die geen uitvoerder zijn; geen generieke scan meer
+    # 3) Lookup via IDs (agent/user)
+    id_candidates = [
+        action.get("createdbyid") or action.get("created_by_id"),
+        action.get("agentid") or action.get("agent_id"),
+        action.get("ownerid") or action.get("owner_id"),
+        action.get("technicianid") or action.get("technician_id"),
+        action.get("userid") or action.get("user_id"),
+    ]
+    for cid in id_candidates:
+        nm = get_agent_name_by_id(cid) or get_user_name_by_id(cid)
+        if nm:
+            return nm
     return "Onbekend"
 
 def _get_assignee_name(action: dict):
@@ -640,6 +719,11 @@ def _get_assignee_name(action: dict):
         "AssignedToUser", "AssignedUser"
     ]:
         nm = _full_name_from_obj(action.get(ok) or {})
+        if nm:
+            return nm
+    # ID varianten
+    for kid in ["assignedtoid", "assigned_to_id", "assignee_id", "ownerid", "owner_id", "agentid", "agent_id"]:
+        nm = get_agent_name_by_id(action.get(kid)) or get_user_name_by_id(action.get(kid))
         if nm:
             return nm
     # String fallback keys
