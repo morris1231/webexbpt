@@ -101,7 +101,7 @@ CACHE_DURATION = 24 * 60 * 60  # 24 uur
 MAX_PAGES = 3  # Max 3 pagina's (100 + 100 + 100 = 300 users)
 
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
-ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
+ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 78))
 NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
 
 # Bekende statusnamen om systeemstatus-acties te herkennen (kan per omgeving afwijken)
@@ -600,8 +600,11 @@ def create_halo_ticket(form, room_id):
         latest_actions = get_actions_for_ticket(int(tid), None)
         if latest_actions:
             last = latest_actions[-1]
+            last_id = int(last.get("_id_int", last.get("id", 0)) or 0)
+            # Seed iets vóór het laatste zodat recente eerdere notes alsnog gepost worden
+            seed_id = max(0, last_id - 5)
             with STATE_LOCK:
-                ACTION_TRACKER[str(tid)] = int(last.get("_id_int", last.get("id", 0)) or 0)
+                ACTION_TRACKER[str(tid)] = seed_id
     except Exception as e:
         log.warning(f"⚠️ Kon initiële Actions niet ophalen voor ticket {tid}: {e}")
     
@@ -695,13 +698,21 @@ def _get_agent_name_from_action(action: dict):
         name = _full_name_from_obj(action.get(ok) or {})
         if name:
             return name
-    # 3) Lookup via IDs (agent/user)
-    id_candidates = [
-        action.get("createdbyid") or action.get("created_by_id"),
-        action.get("agentid") or action.get("agent_id"),
-        action.get("ownerid") or action.get("owner_id"),
-        action.get("technicianid") or action.get("technician_id"),
-        action.get("userid") or action.get("user_id"),
+    # 3) Lookup via IDs (agent/user) — brede key-ondersteuning
+    id_candidates = []
+    for k, v in (action or {}).items():
+        kl = str(k).lower()
+        if not (isinstance(v, (str, int))):
+            continue
+        if "id" in kl and any(w in kl for w in ["agent", "user", "created", "creator", "owner", "tech", "assigned"]):
+            id_candidates.append(v)
+    # Voeg bekende varianten expliciet toe
+    id_candidates += [
+        action.get("createdbyid"), action.get("created_by_id"), action.get("CreatedById"),
+        action.get("agentid"), action.get("agent_id"), action.get("AgentId"),
+        action.get("ownerid"), action.get("owner_id"),
+        action.get("technicianid"), action.get("technician_id"),
+        action.get("userid"), action.get("user_id"), action.get("UserId"),
     ]
     for cid in id_candidates:
         nm = get_agent_name_by_id(cid) or get_user_name_by_id(cid)
@@ -722,7 +733,12 @@ def _get_assignee_name(action: dict):
         if nm:
             return nm
     # ID varianten
-    for kid in ["assignedtoid", "assigned_to_id", "assignee_id", "ownerid", "owner_id", "agentid", "agent_id"]:
+    # Alle ID-achtige velden die betrekking hebben op toewijzing
+    id_keys = [
+        "assignedtoid", "assigned_to_id", "assignee_id", "ownerid", "owner_id",
+        "agentid", "agent_id", "AssignedToId", "AssignedUserId"
+    ]
+    for kid in id_keys:
         nm = get_agent_name_by_id(action.get(kid)) or get_user_name_by_id(action.get(kid))
         if nm:
             return nm
@@ -745,8 +761,9 @@ def classify_action_to_message(ticket_id, action):
     - Onderdruk lege 'External Note' / type labels zonder content
     """
     a_type = (action.get("type") or action.get("actiontype") or action.get("ActionType") or "").lower()
-    html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body")
-    outcome = (action.get("outcome") or action.get("Outcome") or "").strip()
+    # Brede verzameling note/content velden (HTML en plain)
+    html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body") or action.get("NoteBody")
+    outcome = (action.get("outcome") or action.get("Outcome") or action.get("note") or action.get("Note") or action.get("text") or action.get("notecontent") or action.get("NoteContent") or action.get("description") or "").strip()
     is_private = bool(action.get("private") or action.get("isprivate") or action.get("private_note"))
     agent_name = _get_agent_name_from_action(action)
 
@@ -772,7 +789,7 @@ def classify_action_to_message(ticket_id, action):
     content_source = html or outcome
     if ("note" in a_type) or content_source:
         # Onderdruk type labels zonder inhoud
-        if html is None and outcome.lower() in {"external note", "internal note", "public note"}:
+        if html is None and outcome.lower() in {"external note", "internal note", "public note", "note"}:
             return None
         raw = (content_source or "").strip()
         if not raw:
@@ -780,7 +797,8 @@ def classify_action_to_message(ticket_id, action):
         # Neem alleen eerste regel voor compactheid
         first_line = raw.splitlines()[0].strip()
         priv = " 🔒" if is_private else ""
-        name = agent_name if agent_name != "Onbekend" else "Onbekende gebruiker"
+        fallback_assignee = _get_assignee_name(action)
+        name = agent_name if agent_name != "Onbekend" else (fallback_assignee or "Onbekende gebruiker")
         return f"📝 Ticket #{ticket_id}{priv} | {name}: {first_line}"
 
     return None
@@ -840,7 +858,7 @@ def add_public_note(ticket_id, text):
     payload = [
         {
             "Ticket_Id": int(ticket_id),
-            "ActionId": ACTION_ID_PUBLIC,
+            "ActionTypeId": ACTION_ID_PUBLIC,
             "outcome": text
         }
     ]
@@ -1191,6 +1209,7 @@ def initialize():
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return {"status": "error", "message": "WEBEX_BOT_TOKEN is niet ingesteld"}
+    _load_state()
     get_users()
     # Gebruik Actions-polling als primaire updatebron
     threading.Thread(target=action_check_loop, daemon=True).start()
@@ -1282,7 +1301,9 @@ def link_ticket_to_user(room_id, sender_email, ticket_id):
         try:
             latest = get_actions_for_ticket(int(ticket_id), None)
             if latest:
-                ACTION_TRACKER[str(ticket_id)] = int(latest[-1].get("_id_int", latest[-1].get("id", 0)) or 0)
+                last = latest[-1]
+                last_id = int(last.get("_id_int", last.get("id", 0)) or 0)
+                ACTION_TRACKER[str(ticket_id)] = max(0, last_id - 5)
         except Exception as e:
             log.warning(f"⚠️ Kon Actions voor ticket {ticket_id} niet initialiseren: {e}")
         send_message(room_id, f"🔗 Ticket #{ticket_id} is gekoppeld aan jou in deze ruimte. Je ontvangt updates en kunt nu reageren.")
