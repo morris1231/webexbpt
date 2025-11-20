@@ -37,6 +37,16 @@ WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
 
+# Algemene settings
+DEDUPE_SECONDS = int(os.getenv("DEDUPE_SECONDS", 30))  # tijdsvenster voor het negeren van identieke webhook events
+
+# Optionele filtering/controle van status notificaties:
+# - STATUS_NOTIFY_WHITELIST: komma gescheiden namen waarvoor een melding gestuurd wordt (case-insensitive)
+#   Voorbeeld: "Assigned,In Progress"
+# - POLL_STATUS_ENABLED: "1" om de periodieke status polling aan te zetten, anders uit (default uit)
+STATUS_NOTIFY_WHITELIST = [s.strip().lower() for s in os.getenv("STATUS_NOTIFY_WHITELIST", "").split(',') if s.strip()]
+POLL_STATUS_ENABLED = os.getenv("POLL_STATUS_ENABLED", "0") in ["1", "true", "True"]
+
 # Gebruikers cache (alleen voor client 18 & site 18)
 USER_CACHE = {
     "users": [],
@@ -44,89 +54,18 @@ USER_CACHE = {
     "source": "none",
     "max_users": 200
 }
-STATE_LOCK = threading.Lock()
-STATE_FILE = os.getenv("BOT_STATE_FILE", "bot_state.json")
-NAME_CACHE_TTL = int(os.getenv("NAME_CACHE_TTL", 6 * 60 * 60))  # 6 uur
-AGENT_NAME_CACHE = {"agents": {}, "users": {}}  # {"id": {"name": str, "ts": epoch}}
-
-# Nu: {room_id: [ticket_id1, ticket_id2, ...]}
+# Mapping van room naar tickets: {room_id: [ticket_id1, ticket_id2, ...]}
 USER_TICKET_MAP = {}
-# Per room per gebruiker: {room_id: {user_email_lower: [ticket_id, ...]}}
-ROOM_TICKETS_BY_USER = {}
-# Om statuswijzigingen te detecteren: {ticket_id: {status: "Oud status", last_checked: timestamp}}
+# Status & assignee tracker: {ticket_id: {status: str, assignee: str|None, last_checked: ts}}
 TICKET_STATUS_TRACKER = {}
-# Bijhouden van laatste verwerkte actie per ticket: {ticket_id: last_action_id}
-ACTION_TRACKER = {}
-# Onboarding: onthoud wie we al een eerste uitleg hebben gestuurd (room_id + user)
-ONBOARD_SEEN = set()
-
-def _load_state():
-    if not os.path.exists(STATE_FILE):
-        return
-    try:
-        with open(STATE_FILE, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-        with STATE_LOCK:
-            USER_TICKET_MAP.update(raw.get('USER_TICKET_MAP', {}))
-            ROOM_TICKETS_BY_USER.update(raw.get('ROOM_TICKETS_BY_USER', {}))
-            TICKET_STATUS_TRACKER.update(raw.get('TICKET_STATUS_TRACKER', {}))
-            ACTION_TRACKER.update(raw.get('ACTION_TRACKER', {}))
-            ONBOARD_SEEN.update({tuple(x) for x in raw.get('ONBOARD_SEEN', [])})
-        log.info(f"💾 State geladen uit {STATE_FILE}")
-    except Exception as e:
-        log.error(f"❌ State laden mislukt: {e}")
-
-def _save_state(async_save=True):
-    def _do_save():
-        try:
-            with STATE_LOCK:
-                payload = {
-                    'USER_TICKET_MAP': USER_TICKET_MAP,
-                    'ROOM_TICKETS_BY_USER': ROOM_TICKETS_BY_USER,
-                    'TICKET_STATUS_TRACKER': TICKET_STATUS_TRACKER,
-                    'ACTION_TRACKER': ACTION_TRACKER,
-                    'ONBOARD_SEEN': [list(x) for x in ONBOARD_SEEN]
-                }
-            tmp = STATE_FILE + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
-            os.replace(tmp, STATE_FILE)
-        except Exception as e:
-            log.error(f"❌ State opslaan mislukt: {e}")
-    if async_save:
-        threading.Thread(target=_do_save, daemon=True).start()
-    else:
-        _do_save()
+# Cache voor duplicate webhook events: {(ticket_id, type, hash): timestamp}
+LAST_WEBHOOK_EVENTS = {}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 MAX_PAGES = 3  # Max 3 pagina's (100 + 100 + 100 = 300 users)
 
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
-ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 78))
+ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
 NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
-
-# Bekende statusnamen om systeemstatus-acties te herkennen (kan per omgeving afwijken)
-KNOWN_STATUS_NAMES = set(s.lower() for s in [
-    "new", "open", "in progress", "responded", "resolved", "closed",
-    "on hold", "awaiting customer", "awaiting user", "awaiting third party",
-    "re-assign", "assigned", "pending", "cancelled",
-])
-
-CLOSED_STATUS_NAMES = set(s.lower() for s in [
-    "resolved", "closed", "cancelled", "canceled", "completed", "done"
-])
-
-def is_ticket_open(ticket_id: str) -> bool:
-    info = TICKET_STATUS_TRACKER.get(str(ticket_id)) or {}
-    name = (info.get("status") or "").strip()
-    if not name:
-        try:
-            tdata = fetch_ticket_details(ticket_id)
-            name = _extract_ticket_status(tdata)
-            TICKET_STATUS_TRACKER[str(ticket_id)] = {"status": name, "last_checked": time.time()}
-        except Exception:
-            # Als we het niet weten, ga uit van open om niets te missen
-            return True
-    return name.lower() not in CLOSED_STATUS_NAMES
 
 # --------------------------------------------------------------------------
 # Controleer of WEBEX_TOKEN is ingesteld
@@ -217,72 +156,6 @@ def get_status_name(status_id):
     except Exception as e:
         log.error(f"❌ Fout bij statusnaam conversie voor ID {status_id}: {e}")
         return str(status_id)
-
-# --------------------------------------------------------------------------
-# AGENT/USER NAME LOOKUPS (CACHED)
-# --------------------------------------------------------------------------
-def _cache_get(kind: str, key: str):
-    try:
-        entry = AGENT_NAME_CACHE.get(kind, {}).get(str(key))
-        if entry and (time.time() - entry.get("ts", 0) < NAME_CACHE_TTL):
-            return entry.get("name")
-    except Exception:
-        pass
-    return None
-
-def _cache_set(kind: str, key: str, name: str):
-    try:
-        AGENT_NAME_CACHE.setdefault(kind, {})[str(key)] = {"name": name, "ts": time.time()}
-    except Exception:
-        pass
-
-def get_agent_name_by_id(agent_id):
-    if agent_id is None:
-        return None
-    try:
-        if isinstance(agent_id, str) and agent_id.isdigit():
-            agent_id = int(agent_id)
-        name = _cache_get("agents", agent_id)
-        if name:
-            return name
-        h = get_halo_headers()
-        url = f"{HALO_API_BASE}/api/Agent/{int(agent_id)}"
-        r = halo_request(url, headers=h, params={"includedetails": True})
-        if r.status_code != 200:
-            log.debug(f"ℹ️ Agent {agent_id} niet gevonden ({r.status_code})")
-            return None
-        data = r.json()
-        name = _full_name_from_obj(data) or data.get("displayname") or data.get("name")
-        if isinstance(name, str) and name.strip():
-            _cache_set("agents", agent_id, name.strip())
-            return name.strip()
-    except Exception as e:
-        log.debug(f"ℹ️ Agent lookup fout voor id {agent_id}: {e}")
-    return None
-
-def get_user_name_by_id(user_id):
-    if user_id is None:
-        return None
-    try:
-        if isinstance(user_id, str) and user_id.isdigit():
-            user_id = int(user_id)
-        name = _cache_get("users", user_id)
-        if name:
-            return name
-        h = get_halo_headers()
-        url = f"{HALO_API_BASE}/api/Users/{int(user_id)}"
-        r = halo_request(url, headers=h, params={"includedetails": True})
-        if r.status_code != 200:
-            log.debug(f"ℹ️ User {user_id} niet gevonden ({r.status_code})")
-            return None
-        data = r.json()
-        name = _full_name_from_obj(data) or data.get("displayname") or data.get("name")
-        if isinstance(name, str) and name.strip():
-            _cache_set("users", user_id, name.strip())
-            return name.strip()
-    except Exception as e:
-        log.debug(f"ℹ️ User lookup fout voor id {user_id}: {e}")
-    return None
 
 # --------------------------------------------------------------------------
 # USERS
@@ -433,95 +306,6 @@ def send_adaptive_card(room_id):
     except Exception as e:
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
 
-def send_reply_card(room_id, sender_email):
-    if not WEBEX_HEADERS:
-        log.error("❌ WEBEX_HEADERS is niet ingesteld")
-        return
-    tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get((sender_email or "").lower(), [])
-    choices = []
-    for t in tickets:
-        status = (TICKET_STATUS_TRACKER.get(str(t)) or {}).get("status", "").strip()
-        label = f"#{t}" + (f" — {status}" if status else "")
-        choices.append({"title": label, "value": str(t)})
-    if not choices:
-        subtitle = "Ik zie nog geen tickets die aan jou gekoppeld zijn in deze ruimte."
-    else:
-        subtitle = "Kies hieronder je ticket of vul een nummer in."
-    log.info(f"➡️ Sturen reply card naar room {room_id} voor {sender_email} met {len(choices)} opties")
-    card = {
-        "roomId": room_id,
-        "text": "Reageer op een ticket",
-        "attachments": [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type": "AdaptiveCard",
-                "version": "1.4",
-                "body": [
-                    {"type": "TextBlock", "text": "💬 Reageer op ticket", "weight": "bolder", "size": "medium"},
-                    {"type": "TextBlock", "text": subtitle, "wrap": True, "spacing": "small"},
-                    {"type": "Input.ChoiceSet", "id": "ticket", "label": "Kies ticket", "choices": choices, "isMultiSelect": False, "style": "compact", "placeholder": "Kies ticket"},
-                    {"type": "TextBlock", "text": "Of voer handmatig een ticketnummer in:", "wrap": True, "spacing": "small"},
-                    {"type": "Input.Text", "id": "ticket_manual", "placeholder": "Bijv. 12345"},
-                    {"type": "TextBlock", "text": "Bericht (wordt als publieke note geplaatst):", "wrap": True, "spacing": "small"},
-                    {"type": "Input.Text", "id": "message", "isMultiline": True, "placeholder": "Je bericht...", "maxLength": 4000, "label": "Bericht", "required": True}
-                ],
-                "actions": [
-                    {"type": "Action.Submit", "title": "📨 Verstuur reactie", "data": {"formType": "reply", "sender": (sender_email or "").lower()}}
-                ]
-            }
-        }]
-    }
-    try:
-        requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card, timeout=10)
-        log.info(f"✅ Reply card verstuurd naar room {room_id}")
-    except Exception as e:
-        log.error(f"❌ Reply card versturen mislukt: {e}")
-
-def send_my_tickets_card(room_id, sender_email):
-    if not WEBEX_HEADERS:
-        log.error("❌ WEBEX_HEADERS is niet ingesteld")
-        return
-    user_lower = (sender_email or "").lower()
-    tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get(user_lower, [])
-    items = []
-    for t in tickets:
-        status = (TICKET_STATUS_TRACKER.get(str(t)) or {}).get("status", "onbekend")
-        items.append({
-            "type": "ColumnSet",
-            "columns": [
-                {"type": "Column", "width": "auto", "items": [{"type": "TextBlock", "text": f"# {t}", "weight": "bolder"}]},
-                {"type": "Column", "width": "stretch", "items": [{"type": "TextBlock", "text": f"Status: {status}", "wrap": True}]}
-            ]
-        })
-    if not items:
-        items = [{"type": "TextBlock", "text": "Je hebt nog geen gekoppelde tickets in deze ruimte.", "wrap": True}]
-
-    card = {
-        "roomId": room_id,
-        "text": "Jouw tickets",
-        "attachments": [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type": "AdaptiveCard",
-                "version": "1.4",
-                "body": [
-                    {"type": "TextBlock", "text": "📋 Jouw tickets in deze ruimte", "weight": "bolder", "size": "medium"},
-                    {"type": "Container", "items": items, "spacing": "small"}
-                ],
-                "actions": [
-                    {"type": "Action.Submit", "title": "💬 Reageer op ticket", "data": {"formType": "openReply", "sender": user_lower}}
-                ]
-            }
-        }]
-    }
-    try:
-        requests.post("https://webexapis.com/v1/messages", headers=WEBEX_HEADERS, json=card, timeout=10)
-        log.info(f"✅ My tickets card verstuurd naar room {room_id}")
-    except Exception as e:
-        log.error(f"❌ My tickets card versturen mislukt: {e}")
-
 # --------------------------------------------------------------------------
 # HALO TICKETS
 # --------------------------------------------------------------------------
@@ -585,285 +369,16 @@ def create_halo_ticket(form, room_id):
         return
     log.info(f"✅ Ticket aangemaakt: {tid}")
     
-    with STATE_LOCK:
-        USER_TICKET_MAP.setdefault(room_id, []).append(tid)
-    # Koppel ticket aan opgegeven eindgebruikers-e-mailadres in deze room
-    owner_email = (form.get("email") or "").strip().lower()
-    if owner_email:
-        with STATE_LOCK:
-            ROOM_TICKETS_BY_USER.setdefault(room_id, {}).setdefault(owner_email, []).append(tid)
+    if room_id not in USER_TICKET_MAP:
+        USER_TICKET_MAP[room_id] = []
+    USER_TICKET_MAP[room_id].append(tid)
     
-    with STATE_LOCK:
-        TICKET_STATUS_TRACKER[tid] = {"status": current_status, "last_checked": time.time()}
-    # Initialiseer ACTION_TRACKER op huidige hoogste action-id zodat we geen oude acties posten
-    try:
-        latest_actions = get_actions_for_ticket(int(tid), None)
-        if latest_actions:
-            last = latest_actions[-1]
-            last_id = int(last.get("_id_int", last.get("id", 0)) or 0)
-            # Seed iets vóór het laatste zodat recente eerdere notes alsnog gepost worden
-            seed_id = max(0, last_id - 5)
-            with STATE_LOCK:
-                ACTION_TRACKER[str(tid)] = seed_id
-    except Exception as e:
-        log.warning(f"⚠️ Kon initiële Actions niet ophalen voor ticket {tid}: {e}")
+    # Init tracker zonder assignee
+    TICKET_STATUS_TRACKER[tid] = {"status": current_status, "assignee": None, "last_checked": time.time()}
     
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
-    _save_state()
     log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id}")
     return tid
-
-# -------------------------------------------------------------------------- 
-# HALO ACTIONS POLLING (statuswijzigingen + agent notes)
-# -------------------------------------------------------------------------- 
-def get_actions_for_ticket(ticket_id, last_seen_action_id):
-    """Haalt Actions op voor één ticket. Filtert niets uit zodat systeem- en privé-acties zichtbaar zijn.
-    Retourneert op id gesorteerde lijst en respecteert last_seen_action_id indien opgegeven.
-    """
-    h = get_halo_headers()
-    params = {
-        "ticket_id": int(ticket_id),
-        "count": 50,
-        "includehtmlnote": True,
-        "includeattachments": True,
-        "includedetails": True,
-        # Belangrijk: GEEN excludesys / excludeprivate / agentonly / conversationonly / emailonly / slaonly
-    }
-    url = f"{HALO_API_BASE}/api/Actions"
-    r = halo_request(url, headers=h, params=params)
-    if r.status_code != 200:
-        log.warning(f"⚠️ Actions ophalen voor ticket {ticket_id} gaf {r.status_code}: {r.text[:200]}")
-        return []
-    data = r.json()
-    # Accepteer meerdere mogelijke containers
-    actions = []
-    if isinstance(data, list):
-        actions = data
-    elif isinstance(data, dict):
-        actions = data.get("root") or data.get("actions") or data.get("items") or []
-    
-    # Normaliseer id naar int en sorteer
-    norm_actions = []
-    for a in actions:
-        try:
-            a_id = int(a.get("id") or a.get("ActionId") or a.get("action_id") or 0)
-        except Exception:
-            a_id = 0
-        a["_id_int"] = a_id
-        norm_actions.append(a)
-    norm_actions.sort(key=lambda x: x.get("_id_int", 0))
-    
-    if last_seen_action_id is not None:
-        norm_actions = [a for a in norm_actions if a.get("_id_int", 0) > int(last_seen_action_id)]
-    return norm_actions
-
-def _extract_status_change(action: dict):
-    # Zoek diverse veldnamen voor status van/naar
-    old_s = action.get("statusfrom") or action.get("status_from") or action.get("oldstatus") or action.get("fromstatus")
-    new_s = action.get("statusto") or action.get("status_to") or action.get("newstatus") or action.get("tostatus")
-    # Soms zitten de namen in sub-objecten
-    if isinstance(action.get("status"), dict):
-        new_s = new_s or action["status"].get("name")
-    return old_s, new_s
-
-def _full_name_from_obj(obj: dict):
-    if not isinstance(obj, dict):
-        return None
-    # Prefer expliciete voor/achternaam
-    first_keys = ["firstname", "first_name", "forename", "givenname", "given_name"]
-    last_keys  = ["lastname", "last_name", "surname", "familyname", "family_name"]
-    first = next((obj.get(k) for k in first_keys if isinstance(obj.get(k), str) and obj.get(k).strip()), None)
-    last  = next((obj.get(k) for k in last_keys  if isinstance(obj.get(k), str) and obj.get(k).strip()), None)
-    if first and last:
-        return f"{first.strip()} {last.strip()}"
-    # Anders display/full name varianten
-    for k in ["displayname", "display_name", "full_name", "fullname", "name"]:
-        v = obj.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
-
-def _get_agent_name_from_action(action: dict):
-    """Haal een persoonsnaam (voornaam + achternaam indien beschikbaar) van de uitvoerder.
-    We vermijden generieke '*Name' velden zoals 'StatusName' om foute matches te voorkomen.
-    """
-    if not isinstance(action, dict):
-        return "Onbekend"
-    # 1) Specifieke stringvelden die direct de agentnaam bevatten
-    for k in ["agentname", "AgentName", "agent_name", "createdbyname", "createdby_name", "author", "ownername", "OwnerName", "technicianname", "TechnicianName"]:
-        v = action.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    # 2) Bekende container-objecten
-    for ok in ["agent", "created_by", "createdbyuser", "createdby", "creator", "technician", "owner", "assigned_to_user"]:
-        name = _full_name_from_obj(action.get(ok) or {})
-        if name:
-            return name
-    # 3) Lookup via IDs (agent/user) — brede key-ondersteuning
-    id_candidates = []
-    for k, v in (action or {}).items():
-        kl = str(k).lower()
-        if not (isinstance(v, (str, int))):
-            continue
-        if "id" in kl and any(w in kl for w in ["agent", "user", "created", "creator", "owner", "tech", "assigned"]):
-            id_candidates.append(v)
-    # Voeg bekende varianten expliciet toe
-    id_candidates += [
-        action.get("createdbyid"), action.get("created_by_id"), action.get("CreatedById"),
-        action.get("agentid"), action.get("agent_id"), action.get("AgentId"),
-        action.get("ownerid"), action.get("owner_id"),
-        action.get("technicianid"), action.get("technician_id"),
-        action.get("userid"), action.get("user_id"), action.get("UserId"),
-    ]
-    for cid in id_candidates:
-        nm = get_agent_name_by_id(cid) or get_user_name_by_id(cid)
-        if nm:
-            return nm
-    return "Onbekend"
-
-def _get_assignee_name(action: dict):
-    """Haal de volledige naam van de toegewezen agent uit de action."""
-    if not isinstance(action, dict):
-        return None
-    # Object-varianten eerst (voorkeur)
-    for ok in [
-        "assigned_to_user", "assignee", "assigned_to", "owner", "agent", "technician",
-        "AssignedToUser", "AssignedUser"
-    ]:
-        nm = _full_name_from_obj(action.get(ok) or {})
-        if nm:
-            return nm
-    # ID varianten
-    # Alle ID-achtige velden die betrekking hebben op toewijzing
-    id_keys = [
-        "assignedtoid", "assigned_to_id", "assignee_id", "ownerid", "owner_id",
-        "agentid", "agent_id", "AssignedToId", "AssignedUserId"
-    ]
-    for kid in id_keys:
-        nm = get_agent_name_by_id(action.get(kid)) or get_user_name_by_id(action.get(kid))
-        if nm:
-            return nm
-    # String fallback keys
-    for k in [
-        "assignedname", "AssignedToName", "assigned_to_name", "assignedto", "assigned_to",
-        "AssignedTo", "assignee", "ownername", "OwnerName"
-    ]:
-        v = action.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
-
-def classify_action_to_message(ticket_id, action):
-    """Zet een HALO action om naar een compacte, begrijpelijke Webex melding.
-    Regels:
-    - Assignment → 🧩 Ticket #X toegewezen aan Naam
-    - Statuswijziging (gefilterde relevante statussen) → ⚠️ Ticket #X → NieuweStatus [agent]
-    - Note (publiek/privé) → 📝 Ticket #X | Naam: tekst (eerste regel)
-    - Onderdruk lege 'External Note' / type labels zonder content
-    """
-    a_type = (action.get("type") or action.get("actiontype") or action.get("ActionType") or "").lower()
-    # Brede verzameling note/content velden (HTML en plain)
-    html = action.get("htmlbody") or action.get("notehtml") or action.get("notebody") or action.get("body") or action.get("NoteBody")
-    outcome = (action.get("outcome") or action.get("Outcome") or action.get("note") or action.get("Note") or action.get("text") or action.get("notecontent") or action.get("NoteContent") or action.get("description") or "").strip()
-    is_private = bool(action.get("private") or action.get("isprivate") or action.get("private_note"))
-    agent_name = _get_agent_name_from_action(action)
-
-    # 1) Assignment
-    assignee = _get_assignee_name(action)
-    if isinstance(assignee, str) and assignee.strip():
-        return f"🧩 Ticket #{ticket_id} toegewezen aan {assignee.strip()}"
-
-    # 2) Status change
-    old_s, new_s = _extract_status_change(action)
-    status_candidate = new_s or (outcome if outcome.lower() in KNOWN_STATUS_NAMES else None)
-    if status_candidate:
-        if isinstance(status_candidate, (int, str)) and str(status_candidate).isdigit():
-            status_candidate = get_status_name(int(status_candidate))
-        status_text = str(status_candidate).strip() or "onbekend"
-        # Filter irrelevante / dubbele statuslabels
-        ignored = {"assigned", "re-assign"}
-        if status_text.lower() in ignored:
-            return None
-        return f"⚠️ Ticket #{ticket_id} status gewijzigd naar: {status_text}"
-
-    # 3) Notes (publiek/privé). Outcome alleen gebruiken als het geen puur type label is.
-    content_source = html or outcome
-    if ("note" in a_type) or content_source:
-        # Onderdruk type labels zonder inhoud
-        if html is None and outcome.lower() in {"external note", "internal note", "public note", "note"}:
-            return None
-        raw = (content_source or "").strip()
-        if not raw:
-            return None
-        # Neem alleen eerste regel voor compactheid
-        first_line = raw.splitlines()[0].strip()
-        priv = " 🔒" if is_private else ""
-        fallback_assignee = _get_assignee_name(action)
-        name = agent_name if agent_name != "Onbekend" else (fallback_assignee or "Onbekende gebruiker")
-        return f"📝 Ticket #{ticket_id}{priv} | {name}: {first_line}"
-
-    return None
-
-def check_ticket_actions():
-    # Verzamel unieke ticket-ids uit alle rooms
-    all_ticket_ids = set()
-    with STATE_LOCK:
-        current_map = {k: list(v) for k, v in USER_TICKET_MAP.items()}
-        tracker_snapshot = dict(ACTION_TRACKER)
-    for tickets in current_map.values():
-        for t in tickets:
-            all_ticket_ids.add(str(t))
-    if not all_ticket_ids:
-        return
-
-    for tid in list(all_ticket_ids):
-        last_seen = tracker_snapshot.get(str(tid))
-        try:
-            actions = get_actions_for_ticket(int(tid), last_seen)
-        except Exception as e:
-            log.error(f"❌ Fout bij ophalen Actions voor ticket {tid}: {e}")
-            continue
-
-        if not actions:
-            # Herstelpad: als last_seen te ver in de toekomst staat, reset lager
-            if last_seen is not None:
-                try:
-                    latest_any = get_actions_for_ticket(int(tid), None)
-                except Exception:
-                    latest_any = []
-                if latest_any:
-                    latest_id = latest_any[-1].get("_id_int", 0)
-                    if int(latest_id or 0) < int(last_seen or 0):
-                        reset_seen = max(0, int(latest_id) - 2)
-                        with STATE_LOCK:
-                            ACTION_TRACKER[str(tid)] = reset_seen
-                        # Probeer direct opnieuw met de lagere last_seen
-                        try:
-                            actions = get_actions_for_ticket(int(tid), reset_seen)
-                        except Exception:
-                            actions = []
-            if not actions:
-                continue
-
-        # Bepaal hoogste id en verwerk berichten
-        max_id = last_seen or 0
-        for a in actions:
-            a_id = a.get("_id_int", 0)
-            msg = classify_action_to_message(str(tid), a)
-            if msg:
-                # Zoek passende room
-                room_id = None
-                for rid, tickets in current_map.items():
-                    if str(tid) in tickets:
-                        room_id = rid
-                        break
-                if room_id:
-                    send_message(room_id, msg)
-            if a_id > max_id:
-                max_id = a_id
-        with STATE_LOCK:
-            ACTION_TRACKER[str(tid)] = int(max_id)
-    _save_state()
 
 # -------------------------------------------------------------------------- 
 # PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
@@ -887,7 +402,6 @@ def add_public_note(ticket_id, text):
     
     if r.status_code in [200, 201]:
         log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
-        _save_state()
         return True
     else:
         log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
@@ -925,20 +439,46 @@ def check_ticket_status_changes():
                 if isinstance(current_status, int) or (isinstance(current_status, str) and current_status.isdigit()):
                     current_status = get_status_name(current_status)
                 
-                if current_status != status_info["status"]:
-                    TICKET_STATUS_TRACKER[ticket_id]["status"] = current_status
+                # Detecteer nieuwe toegewezen agent
+                current_assignee = ticket_data.get("assigned_to") or \
+                                   ticket_data.get("AssignedTo") or \
+                                   ticket_data.get("assigned_user") or \
+                                   ticket_data.get("agent") or \
+                                   ticket_data.get("Agent") or \
+                                   ticket_data.get("assignee") or \
+                                   ticket_data.get("Assignee")
+
+                assignee_changed = False
+                if current_assignee and current_assignee != status_info.get("assignee"):
+                    assignee_changed = True
+                    TICKET_STATUS_TRACKER[ticket_id]["assignee"] = current_assignee
                     room_id = None
                     for rid, tickets in USER_TICKET_MAP.items():
                         if ticket_id in tickets:
                             room_id = rid
                             break
-                    
                     if room_id:
-                        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
-                        log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
+                        send_message(room_id, f"✅ **Ticket #{ticket_id} geassigned aan {current_assignee}**")
+                        log.info(f"✅ Assignment update gestuurd naar room {room_id}")
+
+                if current_status != status_info["status"]:
+                    # Alleen melden als whitelist leeg is uitgeschakeld OF als de nieuwe status in de whitelist zit
+                    if STATUS_NOTIFY_WHITELIST and current_status.lower() not in STATUS_NOTIFY_WHITELIST:
+                        log.info(f"🔕 Status {status_info['status']} → {current_status} genegeerd (niet in whitelist)")
                     else:
-                        log.warning(f"⚠️ Geen Webex-room gevonden voor ticket {ticket_id}")
-                    log.info(f"✅ Statuswijziging gedetecteerd voor ticket {ticket_id}: {status_info['status']} → {current_status}")
+                        TICKET_STATUS_TRACKER[ticket_id]["status"] = current_status
+                        room_id = None
+                        for rid, tickets in USER_TICKET_MAP.items():
+                            if ticket_id in tickets:
+                                room_id = rid
+                                break
+
+                        if room_id:
+                            send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
+                            log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
+                        else:
+                            log.warning(f"⚠️ Geen Webex-room gevonden voor ticket {ticket_id}")
+                        log.info(f"✅ Statuswijziging gedetecteerd voor ticket {ticket_id}: {status_info['status']} → {current_status}")
             else:
                 log.warning(f"⚠️ Ticket status check mislukt voor {ticket_id}: {r.status_code}")
         except Exception as e:
@@ -965,58 +505,6 @@ def process_webex_event(payload):
             log.info("❌ Bericht is van de bot zelf, negeren")
             return
         
-        # Eerste keer in deze ruimte? Geef korte, eenmalige uitleg
-        key = (room_id, (sender or "").lower())
-        with STATE_LOCK:
-            first_time = key not in ONBOARD_SEEN
-            if first_time:
-                ONBOARD_SEEN.add(key)
-        if first_time:
-            send_message(
-                room_id,
-                """
-                👋 Welkom! Zo gebruik je de ticketbot eenvoudig:
-                - Typ `nieuwe melding` om een ticket aan te maken
-                - Typ gewoon een bericht om te reageren op jouw ticket (als je er precies 1 open hebt)
-                - Heb je meerdere open tickets? Typ `reageer` en kies er één
-                - Bestaand ticket koppelen: `link #12345`
-                - Overzicht van jouw tickets: `mijn tickets`
-                """
-            )
-        
-        # Trigger voor keuze-kaart om een ticket te selecteren
-        triggers = ["reageer", "reactie", "reply", "note", "notitie", "kies ticket"]
-        if any(t in text.lower() for t in triggers):
-            send_reply_card(room_id, sender)
-            return
-
-        # Toon kaart met eigen tickets
-        if any(t in text.lower() for t in ["mijn tickets", "tickets", "lijst", "overzicht"]):
-            send_my_tickets_card(room_id, sender)
-            return
-
-        # Help / menu
-        if any(t == text.lower().strip() for t in ["help", "?", "menu"]):
-            send_message(
-                room_id,
-                """
-                **🚀 Webex Halo bot — snelle hulp**
-                - Typ `nieuwe melding` om een ticket aan te maken
-                - Typ `reageer` om een ticket te kiezen en een reactie te sturen
-                - Typ `mijn tickets` voor een overzicht van jouw tickets
-                - Typ `link #12345` om een bestaand ticket aan jezelf te koppelen
-                - Typ `Ticket #12345 jouw bericht` om direct te reageren op dat ticket
-                """
-            )
-            return
-
-        # Link bestaand ticket aan afzender: "link #12345" of "koppel #12345"
-        m_link = re.search(r"(?:link|koppel)\s*#?(\d+)", text.lower())
-        if m_link:
-            link_tid = m_link.group(1)
-            link_ticket_to_user(room_id, sender, link_tid)
-            return
-
         if "nieuwe melding" in text.lower():
             log.info("ℹ️ Bericht bevat 'nieuwe melding', stuur adaptive card")
             send_message(room_id, "👋 Hi! Je hebt 'nieuwe melding' gestuurd. Klik op de knop hieronder om een ticket aan te maken:\n\n"
@@ -1028,78 +516,35 @@ def process_webex_event(payload):
         if ticket_match:
             requested_tid = ticket_match.group(1)
             log.info(f"ℹ️ Bericht bevat ticket #{requested_tid}")
-            # Alleen toestaan als dit ticket aan afzender gekoppeld is binnen deze room
-            sender_email = (sender or "").strip().lower()
-            allowed = False
-            with STATE_LOCK:
-                if room_id in ROOM_TICKETS_BY_USER and sender_email in ROOM_TICKETS_BY_USER[room_id]:
-                    allowed = requested_tid in ROOM_TICKETS_BY_USER[room_id][sender_email]
-                if not allowed and room_id in USER_TICKET_MAP:
-                    allowed = requested_tid in USER_TICKET_MAP[room_id]
-
-            if allowed:
-                log.info(f"✅ Ticket #{requested_tid} toegestaan voor afzender {sender_email} in room {room_id}")
+            
+            if room_id in USER_TICKET_MAP and requested_tid in USER_TICKET_MAP[room_id]:
+                log.info(f"✅ Ticket #{requested_tid} gevonden in room {room_id}")
                 success = add_public_note(requested_tid, text)
                 if success:
-                    send_message(room_id, f"📝 Bericht toegevoegd aan jouw ticket #{requested_tid}.")
+                    send_message(room_id, f"📝 Bericht toegevoegd aan Halo ticket #{requested_tid}.")
                 else:
                     send_message(room_id, f"❌ Kan geen notitie toevoegen aan ticket #{requested_tid}. Probeer het opnieuw.")
             else:
-                log.info(f"❌ Ticket #{requested_tid} is niet gekoppeld aan afzender {sender_email} in deze room")
-                send_message(room_id, f"❌ Ticket #{requested_tid} is niet gekoppeld aan jou in deze room.")
+                log.info(f"❌ Ticket #{requested_tid} bestaat niet in deze room")
+                send_message(room_id, f"❌ Ticket #{requested_tid} bestaat niet in deze room of is niet gekoppeld aan deze room.")
         else:
-            # Geen ticketnummer: als gebruiker precies 1 open ticket heeft, plaats daar direct de note
-            sender_email = (sender or "").strip().lower()
-            with STATE_LOCK:
-                all_user_tickets = ROOM_TICKETS_BY_USER.get(room_id, {}).get(sender_email, [])
-            open_tickets = [t for t in all_user_tickets if is_ticket_open(t)]
-            if len(open_tickets) == 1:
-                tid = open_tickets[0]
-                ok = add_public_note(tid, text)
-                if ok:
-                    send_message(room_id, f"📝 Bericht toegevoegd aan jouw ticket #{tid}.")
-                else:
-                    send_message(room_id, f"❌ Kon geen notitie toevoegen aan ticket #{tid}.")
-            elif len(open_tickets) > 1:
-                send_message(room_id, "Je hebt meerdere open tickets. Kies er één om te reageren:")
-                send_reply_card(room_id, sender_email)
+            log.info("ℹ️ Geen specifiek ticketnummer in bericht, voeg toe aan alle tickets in de room")
+            if room_id in USER_TICKET_MAP:
+                for tid in USER_TICKET_MAP[room_id]:
+                    success = add_public_note(tid, text)
+                    if not success:
+                        log.error(f"❌ Notitie toevoegen aan ticket {tid} mislukt")
+                send_message(room_id, f"📝 Bericht toegevoegd aan alle jouw tickets in deze room.")
             else:
-                send_message(room_id, "ℹ️ Ik vond geen open tickets die aan jou gekoppeld zijn in deze room.")
+                send_message(room_id, "ℹ️ Geen tickets gevonden in deze room. Stuur 'nieuwe melding' om een ticket aan te maken.")
     elif res == "attachmentActions":
         a_id = payload["data"]["id"]
         log.info(f"📩 Verwerken attachmentActions: id={a_id}")
-        action_payload = requests.get(f"https://webexapis.com/v1/attachment/actions/{a_id}",
-                              headers=WEBEX_HEADERS).json()
-        inputs = action_payload.get("inputs", {})
+        inputs = requests.get(f"https://webexapis.com/v1/attachment/actions/{a_id}",
+                              headers=WEBEX_HEADERS).json().get("inputs", {})
         room_id = payload["data"]["roomId"]
         log.info(f"📩 attachmentActions in room {room_id} met inputs: {json.dumps(inputs, indent=2)}")
-        form_type = (inputs.get("formType") or inputs.get("form_type") or "").lower()
-        if form_type == "reply":
-            # Reply form afhandelen
-            sender = (inputs.get("sender") or "").lower()
-            selected = (inputs.get("ticket") or "").strip()
-            manual = (inputs.get("ticket_manual") or "").strip()
-            message = (inputs.get("message") or "").strip()
-            tid = manual if manual else selected
-            if not (tid and tid.isdigit()):
-                send_message(room_id, "❌ Geen geldig ticketnummer opgegeven.")
-                return
-            # Controleer of ticket aan afzender gekoppeld is
-            allowed = tid in ROOM_TICKETS_BY_USER.get(room_id, {}).get(sender, [])
-            if not allowed:
-                send_message(room_id, f"❌ Ticket #{tid} is niet aan jou gekoppeld in deze room.")
-                return
-            ok = add_public_note(tid, message)
-            if ok:
-                send_message(room_id, f"📝 Reactie geplaatst op ticket #{tid}.")
-            else:
-                send_message(room_id, f"❌ Reactie plaatsen op ticket #{tid} mislukt.")
-        elif form_type == "openReply":
-            sender = (inputs.get("sender") or "").lower()
-            send_reply_card(room_id, sender)
-        else:
-            # Default: oude kaart voor nieuw ticket
-            create_halo_ticket(inputs, room_id)
+        create_halo_ticket(inputs, room_id)
     else:
         log.info(f"ℹ️ Onbekende resource type: {res}")
 
@@ -1182,10 +627,44 @@ def halo_action():
         log.warning(f"❌ Geen Webex-room gevonden voor ticket {ticket_id}")
         return {"status": "ignore"}
     
-    # Verwerk public notes
-    if note_text and action_id and str(action_id) == str(ACTION_ID_PUBLIC):
-        log.info(f"✅ Public note ontvangen voor ticket {ticket_id}")
-        send_message(room_id, f"📥 **Nieuwe public note vanuit Halo:**\n{note_text}")
+    # Achterhaal auteur / agent naam (voor notities en assignments)
+    note_author = None
+    for f in ["note_author", "author", "created_by", "CreatedBy", "user", "User", "username", "Username", "agent", "Agent", "action_user", "ActionUser", "entered_by", "EnteredBy"]:
+        if f in data and data[f]:
+            note_author = data[f]
+            break
+    # Losse voor/achternaam velden samenvoegen indien aanwezig
+    first_name = data.get("first_name") or data.get("FirstName") or data.get("firstname")
+    last_name = data.get("last_name") or data.get("LastName") or data.get("lastname")
+    if (first_name or last_name) and not note_author:
+        note_author = f"{first_name or ''} {last_name or ''}".strip()
+
+    # Tracker initialiseren indien onbekend
+    if ticket_id not in TICKET_STATUS_TRACKER:
+        TICKET_STATUS_TRACKER[ticket_id] = {"status": None, "assignee": None, "last_checked": time.time()}
+
+    # Dedupe helper (best effort binnen single process)
+    def is_duplicate(kind: str, content: str):
+        key_hash = hash(f"{kind}:{ticket_id}:{content.strip()}")
+        now = time.time()
+        ts = LAST_WEBHOOK_EVENTS.get(key_hash)
+        if ts and now - ts < DEDUPE_SECONDS:
+            return True
+        LAST_WEBHOOK_EVENTS[key_hash] = now
+        for k, v in list(LAST_WEBHOOK_EVENTS.items()):
+            if now - v > DEDUPE_SECONDS * 2:
+                del LAST_WEBHOOK_EVENTS[k]
+        return False
+
+    # Public / agent note detection: stuur bij elke note_text tenzij leeg.
+    # We beperken duplicates; actie_id hoeft niet exact te matchen.
+    if note_text and str(note_text).strip():
+        if is_duplicate("note", note_text):
+            log.info(f"🔁 Duplicate note genegeerd voor ticket {ticket_id}")
+            return {"status": "duplicate"}
+        log.info(f"✅ Note ontvangen voor ticket {ticket_id}")
+        author_segment = f" door {note_author}" if note_author else ""
+        send_message(room_id, f"📥 **Public note{author_segment}**\n{note_text}")
         return {"status": "ok"}
     
     # Verwerk statuswijzigingen (converteer ID naar naam)
@@ -1197,15 +676,38 @@ def halo_action():
             status_change = status_name
         else:
             status_name = status_change
-        
-        log.info(f"✅ Statuswijziging ontvangen voor ticket {ticket_id}: {status_change}")
-        send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Nieuwe status: {status_change}")
+
+        # Filter via whitelist (indien ingesteld). Alleen versturen als whitelist leeg OF status in whitelist.
+        prev_status = TICKET_STATUS_TRACKER[ticket_id]["status"]
+        if prev_status == status_name:
+            log.info(f"🔁 Status '{status_name}' al bekend voor ticket {ticket_id}; geen bericht")
+        elif STATUS_NOTIFY_WHITELIST and status_name.lower() not in STATUS_NOTIFY_WHITELIST:
+            log.info(f"🔕 Webhook status '{status_name}' genegeerd (niet in whitelist)")
+            TICKET_STATUS_TRACKER[ticket_id]["status"] = status_name  # Update zonder notificatie
+        else:
+            if is_duplicate("status", status_name):
+                log.info(f"🔁 Duplicate status event genegeerd voor ticket {ticket_id}: {status_name}")
+                return {"status": "duplicate"}
+            log.info(f"✅ Statuswijziging ontvangen voor ticket {ticket_id}: {status_name}")
+            send_message(room_id, f"⚠️ Ticket #{ticket_id} status gewijzigd naar: **{status_name}**")
+            TICKET_STATUS_TRACKER[ticket_id]["status"] = status_name
         return {"status": "ok"}
     
     # Verwerk toewijzingen
     if assigned_agent:
-        log.info(f"✅ Toewijzing ontvangen voor ticket {ticket_id}: {assigned_agent}")
-        send_message(room_id, f"✅ **Ticket #{ticket_id} is toegewezen aan {assigned_agent}**")
+        assignee_display = assigned_agent
+        if (first_name or last_name) and not assigned_agent:
+            assignee_display = f"{first_name or ''} {last_name or ''}".strip()
+        prev_assignee = TICKET_STATUS_TRACKER[ticket_id].get("assignee")
+        if prev_assignee == assignee_display:
+            log.info(f"🔁 Assignee '{assignee_display}' al bekend voor ticket {ticket_id}; geen bericht")
+        else:
+            if is_duplicate("assignment", assignee_display):
+                log.info(f"🔁 Duplicate assignment genegeerd voor ticket {ticket_id}")
+                return {"status": "duplicate"}
+            log.info(f"✅ Toewijzing ontvangen voor ticket {ticket_id}: {assignee_display}")
+            send_message(room_id, f"✅ Ticket #{ticket_id} geassigned naar **{assignee_display}**")
+            TICKET_STATUS_TRACKER[ticket_id]["assignee"] = assignee_display
         return {"status": "ok"}
     
     # Als geen van de bovenstaande gevalen, log en stopt
@@ -1228,14 +730,56 @@ def initialize():
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return {"status": "error", "message": "WEBEX_BOT_TOKEN is niet ingesteld"}
-    _load_state()
     get_users()
-    # Gebruik Actions-polling als primaire updatebron
-    threading.Thread(target=action_check_loop, daemon=True).start()
+    # Start poller alleen als expliciet aangezet
+    if POLL_STATUS_ENABLED:
+        threading.Thread(target=status_check_loop, daemon=True).start()
     return {
         "status": "initialized",
         "source": f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}",
         "cached_users": len(USER_CACHE["users"])
+    }
+
+@app.route("/health", methods=["GET"])
+def health():
+    return {
+        "status": "ok",
+        "tickets_tracked": len(TICKET_STATUS_TRACKER),
+        "rooms": len(USER_TICKET_MAP)
+    }
+
+@app.route("/tickets/<room_id>", methods=["GET"])
+def list_room_tickets(room_id):
+    tickets = USER_TICKET_MAP.get(room_id, [])
+    result = []
+    for tid in tickets:
+        info = TICKET_STATUS_TRACKER.get(tid, {})
+        result.append({
+            "ticket_id": tid,
+            "status": info.get("status"),
+            "assignee": info.get("assignee")
+        })
+    return {"tickets": result}
+
+@app.route("/ticket/<ticket_id>", methods=["GET"])
+def ticket_details(ticket_id):
+    h = get_halo_headers()
+    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
+    r = halo_request(url, headers=h, params={"includedetails": True})
+    if r.status_code != 200:
+        return {"error": "not_found", "status_code": r.status_code}, r.status_code
+    data = r.json()
+    # Versimpelde extractie
+    status_val = data.get("Status") or data.get("status") or data.get("StatusName")
+    if isinstance(status_val, int) or (isinstance(status_val, str) and status_val.isdigit()):
+        status_val = get_status_name(status_val)
+    assignee_val = data.get("assigned_to") or data.get("AssignedTo") or data.get("assignee")
+    return {
+        "ticket_id": ticket_id,
+        "status": status_val,
+        "assignee": assignee_val,
+        "summary": data.get("Summary") or data.get("summary"),
+        "details": data.get("Details") or data.get("details")
     }
 
 def status_check_loop():
@@ -1247,101 +791,10 @@ def status_check_loop():
             log.error(f"💥 Fout bij status check loop: {e}")
             time.sleep(60)
 
-def action_check_loop():
-    while True:
-        try:
-            check_ticket_actions()
-            # Iets sneller dan status-check zodat notes vlot doorkomen
-            time.sleep(30)
-        except Exception as e:
-            log.error(f"💥 Fout bij actions check loop: {e}")
-            time.sleep(30)
-
-# -------------------------------------------------------------------------- 
-# LINK BESTAAND TICKET AAN GEBRUIKER IN ROOM
-# -------------------------------------------------------------------------- 
-def fetch_ticket_details(ticket_id):
-    h = get_halo_headers()
-    url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
-    r = halo_request(url, headers=h, params={"includedetails": True})
-    if r.status_code != 200:
-        raise RuntimeError(f"Ticket {ticket_id} ophalen mislukt: {r.status_code}")
-    return r.json()
-
-def _extract_ticket_status(ticket_data):
-    current_status = ticket_data.get("Status") or \
-                     ticket_data.get("status") or \
-                     ticket_data.get("StatusName") or \
-                     ticket_data.get("status_name") or \
-                     ticket_data.get("StatusID") or \
-                     (ticket_data.get("ticket_status") or {}).get("name") or \
-                     (ticket_data.get("status") or {}).get("name") or \
-                     (ticket_data.get("status") or {}).get("status") or \
-                     "Unknown"
-    if isinstance(current_status, int) or (isinstance(current_status, str) and str(current_status).isdigit()):
-        current_status = get_status_name(current_status)
-    return current_status
-
-def _ticket_belongs_to_user(ticket_data, user_obj, sender_email_lower):
-    # 1) Matching user id
-    t_uid = ticket_data.get("user_id") or ticket_data.get("UserID") or ticket_data.get("userid")
-    if t_uid and user_obj and int(t_uid) == int(user_obj.get("id")):
-        return True
-    # 2) Matching email
-    possible_emails = [
-        ticket_data.get("user", {}).get("emailaddress") if isinstance(ticket_data.get("user"), dict) else None,
-        ticket_data.get("UserEmail"), ticket_data.get("EmailAddress"), ticket_data.get("emailaddress"),
-        ticket_data.get("useremail"), ticket_data.get("user_email"),
-    ]
-    possible_emails = [e.lower() for e in possible_emails if isinstance(e, str)]
-    return sender_email_lower in possible_emails
-
-def link_ticket_to_user(room_id, sender_email, ticket_id):
-    sender_lower = (sender_email or "").strip().lower()
-    try:
-        user_obj = get_user(sender_lower)
-        if not user_obj:
-            send_message(room_id, "❌ Ik vond jouw gebruiker niet in Halo op basis van je e-mailadres.")
-            return
-        tdata = fetch_ticket_details(ticket_id)
-        if not _ticket_belongs_to_user(tdata, user_obj, sender_lower):
-            send_message(room_id, f"❌ Ticket #{ticket_id} lijkt niet van jou te zijn.")
-            return
-        # Registreer mapping
-        ROOM_TICKETS_BY_USER.setdefault(room_id, {}).setdefault(sender_lower, [])
-        if str(ticket_id) not in ROOM_TICKETS_BY_USER[room_id][sender_lower]:
-            ROOM_TICKETS_BY_USER[room_id][sender_lower].append(str(ticket_id))
-        USER_TICKET_MAP.setdefault(room_id, [])
-        if str(ticket_id) not in USER_TICKET_MAP[room_id]:
-            USER_TICKET_MAP[room_id].append(str(ticket_id))
-        # Status tracker
-        TICKET_STATUS_TRACKER[str(ticket_id)] = {"status": _extract_ticket_status(tdata), "last_checked": time.time()}
-        # Action tracker op laatst bekende actie zetten
-        try:
-            latest = get_actions_for_ticket(int(ticket_id), None)
-            if latest:
-                last = latest[-1]
-                last_id = int(last.get("_id_int", last.get("id", 0)) or 0)
-                ACTION_TRACKER[str(ticket_id)] = max(0, last_id - 5)
-        except Exception as e:
-            log.warning(f"⚠️ Kon Actions voor ticket {ticket_id} niet initialiseren: {e}")
-        send_message(room_id, f"🔗 Ticket #{ticket_id} is gekoppeld aan jou in deze ruimte. Je ontvangt updates en kunt nu reageren.")
-    except Exception as e:
-        log.error(f"❌ Linken van ticket {ticket_id} mislukt: {e}")
-        send_message(room_id, f"❌ Linken van ticket #{ticket_id} is mislukt.")
-
 # -------------------------------------------------------------------------- 
 # START
 # -------------------------------------------------------------------------- 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
-    # Start polling loops ook bij directe run, zonder /initialize te hoeven aanroepen
-    try:
-        _load_state()
-        threading.Thread(target=action_check_loop, daemon=True).start()
-        # Optioneel: status loop als extra vangnet
-        threading.Thread(target=status_check_loop, daemon=True).start()
-    except Exception as e:
-        log.warning(f"⚠️ Kon polling loops niet starten bij boot: {e}")
     app.run(host="0.0.0.0", port=port, debug=False)
