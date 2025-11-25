@@ -657,79 +657,60 @@ def empty_knowledge_base():
     h = get_halo_headers()
     all_ids = []
     page = 0
-    page_size = 100
-    total_articles = 0
-    total_pages = 0
-    
+    page_size = 50  # Maximaal 50 per pagina (gezien HALO-API limiet)
     while True:
-        # Gebruik "page" in plaats van "page_no" voor HALO API
         params = {
-            "pageinate": True,
-            "page_size": page_size,
-            "page": page,  # Correctie: page in plaats van page_no
-            "count": 1000  # Extra parameter om alle artikelen op te halen in één keer
+            "paginate": True,  # ✅ CORRECTE SPELLING (geen "pageinate")
+            "pageSize": page_size,  # ✅ camelCase (geen snake_case)
+            "page": page
         }
         url = f"{HALO_API_BASE}/api/KBArticle"
         log.info(f"➡️ Ophalen KB artikelen (pagina {page}, page_size={page_size})")
         r = halo_request(url, headers=h, params=params)
-        
         if r.status_code != 200:
             log.error(f"❌ Fout bij ophalen KB artikelen: {r.status_code} - {r.text[:500]}")
             break
-            
         data = r.json()
         log.info(f"📩 API Response (pagina {page}): {json.dumps(data, indent=2)[:500]}...")
         
-        # Handle verschillende mogelijke response formaten
+        # Verwerk response data
         articles = []
         if isinstance(data, dict):
-            if "root" in data:
-                articles = data["root"]
-            elif "data" in data:
-                articles = data["data"]
-            elif "items" in data:
-                articles = data["items"]
-            elif "articles" in data:
-                articles = data["articles"]
-            elif "KBArticles" in data:
-                articles = data["KBArticles"]
-            else:
-                # Probeer de data direct als lijst
-                if isinstance(data, list):
-                    articles = data
-                else:
-                    log.warning(f"⚠️ Onbekende response structuur: {json.dumps(data, indent=2)[:200]}")
+            # Check verschillende mogelijke response-structuren
+            for key in ["root", "data", "items", "articles", "KBArticles"]:
+                if key in data:
+                    articles = data[key]
+                    break
+            if not articles and isinstance(data, list):
+                articles = data
         elif isinstance(data, list):
             articles = data
-        else:
-            log.warning(f"⚠️ Onbekende response type: {type(data)}")
         
         if not articles:
             log.info(f"✅ Geen artikelen meer gevonden (pagina {page})")
             break
             
-        # Log details van de eerste paar artikelen
+        # Log eerste paar artikelen
         for i, article in enumerate(articles[:3]):
             article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID")
-            log.info(f"🔍 Artikel {i+1}: ID={article_id}, Title={article.get('Title') or article.get('title')}")
+            title = article.get("Title") or article.get("title")
+            log.info(f"🔍 Artikel {i+1}: ID={article_id}, Title={title}")
         
+        # Verzamel alle IDs
         for article in articles:
             article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID") or article.get("ArticleId")
-            if article_id is not None:
+            if article_id:
                 all_ids.append(str(article_id))
             else:
                 log.warning(f"⚠️ Artikel heeft geen ID: {json.dumps(article, indent=2)[:200]}")
-                
-        total_articles += len(articles)
-        total_pages = page + 1
         
+        # Stop als minder dan page_size artikelen
         if len(articles) < page_size:
-            log.info(f"✅ Eind van pagina's bereikt (totaal {total_articles} artikelen in {total_pages} pagina's)")
+            log.info(f"✅ Eind van pagina's bereikt (totaal {len(all_ids)} artikelen)")
             break
-            
         page += 1
-        
-    log.info(f"🔍 Totaal {len(all_ids)} KB artikelen gevonden om te verwijderen")
+
+    # Verwijder artikelen
     deleted_count = 0
     for i, article_id in enumerate(all_ids):
         url = f"{HALO_API_BASE}/api/KBArticle/{article_id}"
@@ -740,7 +721,7 @@ def empty_knowledge_base():
             log.info(f"✅ KB artikel {article_id} verwijderd")
         else:
             log.error(f"❌ Fout bij verwijderen KB artikel {article_id}: {r.status_code} - {r.text[:500]}")
-            
+    
     log.info(f"✅ Totaal {deleted_count} KB artikelen verwijderd van {len(all_ids)} gevonden")
     return deleted_count
 # --------------------------------------------------------------------------
@@ -821,4 +802,5 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
