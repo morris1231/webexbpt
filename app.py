@@ -658,50 +658,90 @@ def empty_knowledge_base():
     all_ids = []
     page = 0
     page_size = 100
+    total_articles = 0
+    total_pages = 0
+    
     while True:
+        # Gebruik "page" in plaats van "page_no" voor HALO API
         params = {
             "pageinate": True,
             "page_size": page_size,
-            "page_no": page
+            "page": page,  # Correctie: page in plaats van page_no
+            "count": 1000  # Extra parameter om alle artikelen op te halen in één keer
         }
         url = f"{HALO_API_BASE}/api/KBArticle"
+        log.info(f"➡️ Ophalen KB artikelen (pagina {page}, page_size={page_size})")
         r = halo_request(url, headers=h, params=params)
+        
         if r.status_code != 200:
-            log.error(f"❌ Fout bij ophalen KB artikelen: {r.status_code} - {r.text[:200]}")
+            log.error(f"❌ Fout bij ophalen KB artikelen: {r.status_code} - {r.text[:500]}")
             break
             
         data = r.json()
+        log.info(f"📩 API Response (pagina {page}): {json.dumps(data, indent=2)[:500]}...")
+        
         # Handle verschillende mogelijke response formaten
-        if isinstance(data, dict) and "root" in data:
-            articles = data["root"]
-        elif isinstance(data, dict) and "data" in data:
-            articles = data["data"]
+        articles = []
+        if isinstance(data, dict):
+            if "root" in data:
+                articles = data["root"]
+            elif "data" in data:
+                articles = data["data"]
+            elif "items" in data:
+                articles = data["items"]
+            elif "articles" in data:
+                articles = data["articles"]
+            elif "KBArticles" in data:
+                articles = data["KBArticles"]
+            else:
+                # Probeer de data direct als lijst
+                if isinstance(data, list):
+                    articles = data
+                else:
+                    log.warning(f"⚠️ Onbekende response structuur: {json.dumps(data, indent=2)[:200]}")
+        elif isinstance(data, list):
+            articles = data
         else:
-            articles = data if isinstance(data, list) else []
-            
+            log.warning(f"⚠️ Onbekende response type: {type(data)}")
+        
         if not articles:
+            log.info(f"✅ Geen artikelen meer gevonden (pagina {page})")
             break
             
-        for article in articles:
+        # Log details van de eerste paar artikelen
+        for i, article in enumerate(articles[:3]):
             article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID")
+            log.info(f"🔍 Artikel {i+1}: ID={article_id}, Title={article.get('Title') or article.get('title')}")
+        
+        for article in articles:
+            article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID") or article.get("ArticleId")
             if article_id is not None:
                 all_ids.append(str(article_id))
+            else:
+                log.warning(f"⚠️ Artikel heeft geen ID: {json.dumps(article, indent=2)[:200]}")
                 
+        total_articles += len(articles)
+        total_pages = page + 1
+        
         if len(articles) < page_size:
+            log.info(f"✅ Eind van pagina's bereikt (totaal {total_articles} artikelen in {total_pages} pagina's)")
             break
             
         page += 1
         
+    log.info(f"🔍 Totaal {len(all_ids)} KB artikelen gevonden om te verwijderen")
     deleted_count = 0
-    for article_id in all_ids:
+    for i, article_id in enumerate(all_ids):
         url = f"{HALO_API_BASE}/api/KBArticle/{article_id}"
+        log.info(f"➡️ Verwijderen KB artikel {i+1}/{len(all_ids)}: {article_id}")
         r = halo_request(url, method='DELETE', headers=h)
         if r.status_code in [200, 204]:
             deleted_count += 1
             log.info(f"✅ KB artikel {article_id} verwijderd")
         else:
-            log.error(f"❌ Fout bij verwijderen KB artikel {article_id}: {r.status_code} - {r.text[:200]}")
+            log.error(f"❌ Fout bij verwijderen KB artikel {article_id}: {r.status_code} - {r.text[:500]}")
             
+    log.info(f"✅ Totaal {deleted_count} KB artikelen verwijderd van {len(all_ids)} gevonden")
     return deleted_count
 # --------------------------------------------------------------------------
 # ROUTES
@@ -781,3 +821,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
