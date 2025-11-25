@@ -2,7 +2,6 @@ import os, urllib.parse, logging, sys, time, threading, json, re
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
-
 # --------------------------------------------------------------------------
 # LOGGING
 # --------------------------------------------------------------------------
@@ -14,17 +13,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("halo-api")
 log.info("✅ Logging gestart")
-
 # --------------------------------------------------------------------------
 # CONFIG
 # --------------------------------------------------------------------------
 load_dotenv()
-required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET", "WEBEX_BOT_TOKEN"]
+required = ["HALO_AUTH_URL", "HALO_API_BASE", "HALO_CLIENT_ID", "HALO_CLIENT_SECRET", "WEBEX_BOT_TOKEN", "AUTHORIZED_USERS"]
 missing = [k for k in required if not os.getenv(k)]
 if missing:
     log.critical(f"❌ Ontbrekende .env-variabelen: {missing}")
     sys.exit(1)
-
 app = Flask(__name__)
 HALO_AUTH_URL  = os.getenv("HALO_AUTH_URL")
 HALO_API_BASE  = os.getenv("HALO_API_BASE").rstrip('/')
@@ -34,19 +31,18 @@ HALO_TICKET_TYPE_ID = int(os.getenv("HALO_TICKET_TYPE_ID", 66))
 HALO_CLIENT_ID_NUM  = int(os.getenv("HALO_CLIENT_ID_NUM", 12))
 HALO_SITE_ID        = int(os.getenv("HALO_SITE_ID", 18))
 WEBEX_TOKEN         = os.getenv("WEBEX_BOT_TOKEN")
+AUTHORIZED_USERS = [email.strip() for email in os.getenv("AUTHORIZED_USERS", "").split(",") if email.strip()]
+log.info(f"✅ Geautoriseerde gebruikers voor KB verwijdering: {AUTHORIZED_USERS}")
 WEBEX_HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}",
                  "Content-Type": "application/json"} if WEBEX_TOKEN else {}
-
 # Algemene settings
 DEDUPE_SECONDS = int(os.getenv("DEDUPE_SECONDS", 30))  # tijdsvenster voor het negeren van identieke webhook events
-
 # Optionele filtering/controle van status notificaties:
 # - STATUS_NOTIFY_WHITELIST: komma gescheiden namen waarvoor een melding gestuurd wordt (case-insensitive)
 #   Voorbeeld: "Assigned,In Progress"
 # - POLL_STATUS_ENABLED: "1" om de periodieke status polling aan te zetten, anders uit (default uit)
 STATUS_NOTIFY_WHITELIST = [s.strip().lower() for s in os.getenv("STATUS_NOTIFY_WHITELIST", "").split(',') if s.strip()]
 POLL_STATUS_ENABLED = os.getenv("POLL_STATUS_ENABLED", "0") in ["1", "true", "True"]
-
 # Gebruikers cache (alleen voor client 18 & site 18)
 USER_CACHE = {
     "users": [],
@@ -62,11 +58,9 @@ TICKET_STATUS_TRACKER = {}
 LAST_WEBHOOK_EVENTS = {}
 CACHE_DURATION = 24 * 60 * 60  # 24 uur
 MAX_PAGES = 3  # Max 3 pagina's (100 + 100 + 100 = 300 users)
-
 # Nieuwe variabelen voor HALO actie-ID en notitieveld
 ACTION_ID_PUBLIC = int(os.getenv("ACTION_ID_PUBLIC", 145))
 NOTE_FIELD_NAME = os.getenv("NOTE_FIELD_NAME", "Note")
-
 # --------------------------------------------------------------------------
 # Controleer of WEBEX_TOKEN is ingesteld
 # --------------------------------------------------------------------------
@@ -75,7 +69,6 @@ if not WEBEX_TOKEN:
     sys.exit(1)
 else:
     log.info("✅ Webex bot token is ingesteld")
-
 # --------------------------------------------------------------------------
 # HALO AUTH
 # --------------------------------------------------------------------------
@@ -96,7 +89,6 @@ def get_halo_headers():
     log.info(f"✅ HALO auth succesvol: token expires in {token_info.get('expires_in', 'onbekend')} seconden")
     return {"Authorization": f"Bearer {token_info['access_token']}",
             "Content-Type": "application/json"}
-
 # --------------------------------------------------------------------------
 # HELPER FUNCTIE VOOR HALO REQUESTS MET RATE LIMIT HANDLING
 # --------------------------------------------------------------------------
@@ -107,6 +99,8 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
                 r = requests.get(url, headers=headers, params=params, json=json, timeout=15)
             elif method == 'POST':
                 r = requests.post(url, headers=headers, params=params, json=json, timeout=15)
+            elif method == 'DELETE':
+                r = requests.delete(url, headers=headers, params=params, json=json, timeout=15)
             else:
                 raise ValueError(f"Onbekende methode: {method}")
         except Exception as e:
@@ -118,7 +112,6 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
                 continue
             else:
                 raise e
-
         # Rate limit handling
         if r.status_code == 429:
             retry_after = r.headers.get('Retry-After')
@@ -126,12 +119,9 @@ def halo_request(url, method='GET', headers=None, params=None, json=None, max_re
             log.warning(f"Rate limit bereikt, wachten {wait_time} seconden")
             time.sleep(wait_time)
             continue
-
         # Andere status codes
         return r
-
     return r  # Na max_retries, retourneer laatste response
-
 # --------------------------------------------------------------------------
 # STATUS NAAM CONVERSIE (ID → NAAM)
 # --------------------------------------------------------------------------
@@ -142,7 +132,6 @@ def get_status_name(status_id):
             status_id = int(status_id)
         if not isinstance(status_id, int):
             return str(status_id)
-            
         h = get_halo_headers()
         url = f"{HALO_API_BASE}/api/Status/{status_id}"
         r = halo_request(url, headers=h)
@@ -156,7 +145,6 @@ def get_status_name(status_id):
     except Exception as e:
         log.error(f"❌ Fout bij statusnaam conversie voor ID {status_id}: {e}")
         return str(status_id)
-
 # --------------------------------------------------------------------------
 # USERS
 # --------------------------------------------------------------------------
@@ -165,7 +153,6 @@ def fetch_users(client_id, site_id):
     all_users = []
     page = 0
     page_size = 100
-    
     while len(all_users) < USER_CACHE["max_users"]:
         params = {
             "client_id": client_id,
@@ -175,25 +162,20 @@ def fetch_users(client_id, site_id):
             "page_size": page_size
         }
         log.info(f"➡️ Fetching users page {page} (client={client_id}, site={site_id})")
-        
         r = halo_request(f"{HALO_API_BASE}/api/Users",
-                         params=params, 
+                         params=params,
                          headers=h)
-        
         if r.status_code != 200:
             log.warning(f"⚠️ /api/Users pagina {page} gaf {r.status_code}: {r.text[:200]}")
             break
-            
         response_json = r.json()
         users = []
         if isinstance(response_json, list):
             users = response_json
         elif isinstance(response_json, dict):
             users = response_json.get("users", []) or response_json.get("items", []) or response_json.get("data", [])
-        
         if not users:
             break
-            
         for u in users:
             if "id" in u: u["id"] = int(u["id"])
             if "client_id" in u: u["client_id"] = int(u["client_id"])
@@ -205,33 +187,26 @@ def fetch_users(client_id, site_id):
                 "@" in u["emailaddress"]
             ):
                 all_users.append(u)
-        
         if len(users) < page_size or len(all_users) >= USER_CACHE["max_users"]:
             break
-            
         page += 1
-    
     all_users = all_users[:USER_CACHE["max_users"]]
     log.info(f"✅ {len(all_users)} gebruikers opgehaald (client={client_id}, site={site_id})")
     return all_users
-
 def get_users():
     now = time.time()
     source = f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}"
-    
     if USER_CACHE["users"] and \
        (now - USER_CACHE["timestamp"] < CACHE_DURATION) and \
        USER_CACHE["source"] == source:
         log.info(f"✅ Gebruikers uit cache (bron: {source})")
         return USER_CACHE["users"]
-    
     users = fetch_users(HALO_CLIENT_ID_NUM, HALO_SITE_ID)
     USER_CACHE["users"] = users
     USER_CACHE["timestamp"] = now
     USER_CACHE["source"] = source
     log.info(f"✅ Gebruikers opgehaald en gecached (bron: {source})")
     return users
-
 def get_user(email):
     if not email:
         return None
@@ -241,8 +216,7 @@ def get_user(email):
             if u.get(field) and u[field].lower() == email:
                 return u
     return None
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 # WEBEX HELPERS
 # --------------------------------------------------------------------------
 def send_message(room_id, text):
@@ -250,7 +224,7 @@ def send_message(room_id, text):
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
         return
     try:
-        log.info(f"➡️ Sturen Webex bericht naar room {room_id}: '{text[:50]}...'") 
+        log.info(f"➡️ Sturen Webex bericht naar room {room_id}: '{text[:50]}...'")
         response = requests.post("https://webexapis.com/v1/messages",
                       headers=WEBEX_HEADERS,
                       json={"roomId": room_id, "markdown": text}, timeout=10)
@@ -259,7 +233,6 @@ def send_message(room_id, text):
     except Exception as e:
         log.error(f"❌ Webex send: {e}")
         return None
-
 def send_adaptive_card(room_id):
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
@@ -305,7 +278,6 @@ def send_adaptive_card(room_id):
         log.info(f"✅ Adaptive card verstuurd naar room {room_id}")
     except Exception as e:
         log.error(f"❌ Adaptive card versturen mislukt: {e}")
-
 # --------------------------------------------------------------------------
 # HALO TICKETS
 # --------------------------------------------------------------------------
@@ -328,7 +300,6 @@ def create_halo_ticket(form, room_id):
     )
     if form.get('impacttoelichting', '').strip():
         details += f"- **Impact toelichting:** {form['impacttoelichting']}\n"
-    
     body = {
         "summary": form["omschrijving"][:100],
         "details": details,
@@ -341,9 +312,7 @@ def create_halo_ticket(form, room_id):
     }
     url = f"{HALO_API_BASE}/api/Tickets"
     log.info(f"➡️ Creëer Halo ticket met body: {json.dumps(body, indent=2)}")
-    
     r = halo_request(url, method='POST', headers=h, json=[body])
-    
     if not r.ok:
         send_message(room_id, f"⚠️ Ticket aanmaken mislukt: {r.status_code}")
         log.error(f"❌ Halo ticket aanmaken mislukt: {r.status_code} - {r.text}")
@@ -355,34 +324,27 @@ def create_halo_ticket(form, room_id):
         ticket = response.get("data") or response.get("tickets", [None])[0] or response
     else:
         ticket = response
-    
     tid = str(ticket.get("TicketNumber") or ticket.get("id") or ticket.get("TicketID") or "")
     current_status = ticket.get("Status") or ticket.get("status") or ticket.get("StatusName") or "Unknown"
-    
     # Converteer status ID naar naam als nodig
     if isinstance(current_status, int) or (isinstance(current_status, str) and current_status.isdigit()):
         current_status = get_status_name(current_status)
-    
     if not tid:
         send_message(room_id, "❌ Ticket aangemaakt, maar geen ID gevonden")
         log.error("❌ Geen ticket ID gevonden in Halo response")
         return
     log.info(f"✅ Ticket aangemaakt: {tid}")
-    
     if room_id not in USER_TICKET_MAP:
         USER_TICKET_MAP[room_id] = []
     USER_TICKET_MAP[room_id].append(tid)
-    
     # Init tracker zonder assignee
     TICKET_STATUS_TRACKER[tid] = {"status": current_status, "assignee": None, "last_checked": time.time()}
-    
     send_message(room_id, f"✅ Ticket aangemaakt: **{tid}**")
     log.info(f"✅ Ticket {tid} toegevoegd aan room {room_id}")
     return tid
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 # PUBLIC NOTE FUNCTIE (CORRECTE IMPLEMENTATIE)
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 def add_public_note(ticket_id, text):
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
@@ -397,19 +359,16 @@ def add_public_note(ticket_id, text):
         }
     ]
     log.info(f"➡️ Sturen public note naar Halo voor ticket {ticket_id}: {text}")
-    
     r = halo_request(url, method='POST', headers=h, json=payload)
-    
     if r.status_code in [200, 201]:
         log.info(f"✅ Public note succesvol toegevoegd aan ticket {ticket_id}")
         return True
     else:
         log.error(f"❌ Public note mislukt: {r.status_code} - {r.text}")
         return False
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 # STATUS WIJZIGINGEN
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 def check_ticket_status_changes():
     h = get_halo_headers()
     for ticket_id, status_info in list(TICKET_STATUS_TRACKER.items()):
@@ -418,10 +377,8 @@ def check_ticket_status_changes():
             url = f"{HALO_API_BASE}/api/Tickets/{ticket_id}"
             log.info(f"➡️ Controleer status van ticket {ticket_id}")
             r = halo_request(url, headers=h, params={"includedetails": True})
-            
             if r.status_code == 200:
                 ticket_data = r.json()
-                
                 # Check alle mogelijke statusvelden (top-level en nested)
                 current_status = ticket_data.get("Status") or \
                                  ticket_data.get("status") or \
@@ -434,11 +391,9 @@ def check_ticket_status_changes():
                                  ticket_data.get("status", {}).get("Status") or \
                                  ticket_data.get("status", {}).get("StatusName") or \
                                  "Unknown"
-                
                 # Converteer status ID naar naam als nodig
                 if isinstance(current_status, int) or (isinstance(current_status, str) and current_status.isdigit()):
                     current_status = get_status_name(current_status)
-                
                 # Detecteer nieuwe toegewezen agent
                 current_assignee = ticket_data.get("assigned_to") or \
                                    ticket_data.get("AssignedTo") or \
@@ -447,7 +402,6 @@ def check_ticket_status_changes():
                                    ticket_data.get("Agent") or \
                                    ticket_data.get("assignee") or \
                                    ticket_data.get("Assignee")
-
                 assignee_changed = False
                 if current_assignee and current_assignee != status_info.get("assignee"):
                     assignee_changed = True
@@ -460,7 +414,6 @@ def check_ticket_status_changes():
                     if room_id:
                         send_message(room_id, f"✅ **Ticket #{ticket_id} geassigned aan {current_assignee}**")
                         log.info(f"✅ Assignment update gestuurd naar room {room_id}")
-
                 if current_status != status_info["status"]:
                     # Alleen melden als whitelist leeg is uitgeschakeld OF als de nieuwe status in de whitelist zit
                     if STATUS_NOTIFY_WHITELIST and current_status.lower() not in STATUS_NOTIFY_WHITELIST:
@@ -472,7 +425,6 @@ def check_ticket_status_changes():
                             if ticket_id in tickets:
                                 room_id = rid
                                 break
-
                         if room_id:
                             send_message(room_id, f"⚠️ **Statuswijziging voor ticket #{ticket_id}**\n- Oude status: {status_info['status']}\n- Nieuwe status: {current_status}")
                             log.info(f"✅ Statuswijziging gestuurd naar room {room_id}")
@@ -483,10 +435,9 @@ def check_ticket_status_changes():
                 log.warning(f"⚠️ Ticket status check mislukt voor {ticket_id}: {r.status_code}")
         except Exception as e:
             log.error(f"💥 Fout bij statuscheck voor ticket {ticket_id}: {e}")
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 # WEBEX EVENTS
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 def process_webex_event(payload):
     if not WEBEX_HEADERS:
         log.error("❌ WEBEX_HEADERS is niet ingesteld")
@@ -504,19 +455,25 @@ def process_webex_event(payload):
         if sender and sender.endswith("@webex.bot"):
             log.info("❌ Bericht is van de bot zelf, negeren")
             return
-        
+        # NIEUWE CHECK VOOR KB VERWIJDERING
+        if "/empty_kb" in text.lower() or "empty kb" in text.lower():
+            if sender in AUTHORIZED_USERS:
+                send_message(room_id, "⏳ Bezig met verwijderen van alle Knowledge Base artikelen...")
+                count = empty_knowledge_base()
+                send_message(room_id, f"✅ **{count} KB artikelen succesvol verwijderd**")
+            else:
+                send_message(room_id, "❌ ❌ **Geen toestemming!** Jij bent niet geautoriseerd om Knowledge Base te wissen. Neem contact op met de beheerder.")
+            return
         if "nieuwe melding" in text.lower():
             log.info("ℹ️ Bericht bevat 'nieuwe melding', stuur adaptive card")
             send_message(room_id, "👋 Hi! Je hebt 'nieuwe melding' gestuurd. Klik op de knop hieronder om een ticket aan te maken:\n\n"
                                  "Je kunt ook een bericht sturen met 'Ticket #<nummer>' om een reactie te geven aan een specifiek ticket.")
             send_adaptive_card(room_id)
             return
-        
         ticket_match = re.search(r'Ticket #(\d+)', text)
         if ticket_match:
             requested_tid = ticket_match.group(1)
             log.info(f"ℹ️ Bericht bevat ticket #{requested_tid}")
-            
             if room_id in USER_TICKET_MAP and requested_tid in USER_TICKET_MAP[room_id]:
                 log.info(f"✅ Ticket #{requested_tid} gevonden in room {room_id}")
                 success = add_public_note(requested_tid, text)
@@ -547,10 +504,9 @@ def process_webex_event(payload):
         create_halo_ticket(inputs, room_id)
     else:
         log.info(f"ℹ️ Onbekende resource type: {res}")
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 # HALO ACTION BUTTON WEBHOOK - GEREDUCEERDE LOGGING
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 @app.route("/halo-action", methods=["POST"])
 def halo_action():
     # --- CRUCIALE AUTHENTICATIE CHECK ---
@@ -558,10 +514,8 @@ def halo_action():
     if not auth or auth.username != "Webexbot" or auth.password != "Webexbot2025":
         log.error("❌ Ongeldige credentials voor Halo webhook")
         return {"status": "unauthorized"}, 401
-    
     # --- GEREDUCEERDE LOGGING VAN WEBHOOK DATA ---
     data = request.json if request.is_json else request.form.to_dict()
-    
     # Log alleen relevante velden in plaats van volledige JSON
     relevant_data = {
         "ticket_id": data.get("ticket_id") or data.get("TicketId") or data.get("TicketNumber"),
@@ -572,61 +526,51 @@ def halo_action():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     log.info(f"📥 HALO WEBHOOK DATA: {json.dumps(relevant_data, indent=2)}")
-    
     # Controleer alle mogelijke veldnamen voor ticket ID
     ticket_id = None
     for f in ["ticket_id", "TicketId", "TicketID", "TicketNumber", "id", "Ticket_Id", "ticketnumber", "Ticket_ID", "ticketid", "TicketID", "TicketID", "ticket_id", "TicketID"]:
         if f in data:
             ticket_id = data[f]
             break
-    
     # Controleer alle mogelijke veldnamen voor notitietekst
     note_text = None
     for f in ["outcome", "note", "text", "comment", "description", "public_note", "note_text", "comment_text", "action_description", "notecontent", "NoteContent", "note_body", "NoteBody", "note_text", "NoteText", "action_note", "ActionNote"]:
         if f in data:
             note_text = data[f]
             break
-    
     # Controleer alle mogelijke veldnamen voor status
     status_change = None
     for f in ["status", "Status", "status_name", "statusName", "status_id", "StatusID", "ticketstatus", "TicketStatus", "current_status", "NewStatus", "NewStatusName", "status_value", "StatusValue", "status_name", "StatusName", "status_text", "StatusText", "newstatus", "NewStatus", "status_id", "StatusID"]:
         if f in data:
             status_change = data[f]
             break
-    
     # Controleer alle mogelijke veldnamen voor toegewezen agent
     assigned_agent = None
     for f in ["assigned_to", "assignedTo", "assignedagent", "agent", "AssignedAgent", "assigned_by", "assignedBy", "assignedby", "AssignedBy", "assigned_to_name", "assignedToName", "agent_name", "AgentName", "assigned_to_id", "AssignedToID", "assigned_by_id", "AssignedByID"]:
         if f in data:
             assigned_agent = data[f]
             break
-    
     # Controleer alle mogelijke veldnamen voor actie ID
     action_id = None
     for f in ["actionid", "ActionId", "action_id", "action", "Action", "action_id", "action_id", "ActionID", "action_id", "ActionType", "action_type", "action_type_id", "ActionTypeID"]:
         if f in data:
             action_id = data[f]
             break
-    
     # Als we geen ticket_id hebben, log dit en stopt
     if not ticket_id:
         log.warning("❌ Geen ticket_id gevonden in webhook data")
         return {"status": "ignore"}
-    
     # Zorg dat ticket_id een string is voor consistentie
     ticket_id = str(ticket_id)
-    
     # Zoek de room waar dit ticket in zit
     room_id = None
     for rid, tickets in USER_TICKET_MAP.items():
         if ticket_id in tickets:
             room_id = rid
             break
-    
     if not room_id:
         log.warning(f"❌ Geen Webex-room gevonden voor ticket {ticket_id}")
         return {"status": "ignore"}
-    
     # Achterhaal auteur / agent naam (voor notities en assignments)
     note_author = None
     for f in ["note_author", "author", "created_by", "CreatedBy", "user", "User", "username", "Username", "agent", "Agent", "action_user", "ActionUser", "entered_by", "EnteredBy"]:
@@ -638,11 +582,9 @@ def halo_action():
     last_name = data.get("last_name") or data.get("LastName") or data.get("lastname")
     if (first_name or last_name) and not note_author:
         note_author = f"{first_name or ''} {last_name or ''}".strip()
-
     # Tracker initialiseren indien onbekend
     if ticket_id not in TICKET_STATUS_TRACKER:
         TICKET_STATUS_TRACKER[ticket_id] = {"status": None, "assignee": None, "last_checked": time.time()}
-
     # Dedupe helper (best effort binnen single process)
     def is_duplicate(kind: str, content: str):
         key_hash = hash(f"{kind}:{ticket_id}:{content.strip()}")
@@ -655,7 +597,6 @@ def halo_action():
             if now - v > DEDUPE_SECONDS * 2:
                 del LAST_WEBHOOK_EVENTS[k]
         return False
-
     # Public / agent note detection: stuur bij elke note_text tenzij leeg.
     # We beperken duplicates; actie_id hoeft niet exact te matchen.
     if note_text and str(note_text).strip():
@@ -666,7 +607,6 @@ def halo_action():
         author_segment = f" door {note_author}" if note_author else ""
         send_message(room_id, f"📥 **Public note{author_segment}**\n{note_text}")
         return {"status": "ok"}
-    
     # Verwerk statuswijzigingen (converteer ID naar naam)
     if status_change:
         # Converteer status ID naar naam als nodig
@@ -676,7 +616,6 @@ def halo_action():
             status_change = status_name
         else:
             status_name = status_change
-
         # Filter via whitelist (indien ingesteld). Alleen versturen als whitelist leeg OF status in whitelist.
         prev_status = TICKET_STATUS_TRACKER[ticket_id]["status"]
         if prev_status == status_name:
@@ -692,7 +631,6 @@ def halo_action():
             send_message(room_id, f"⚠️ Ticket #{ticket_id} status gewijzigd naar: **{status_name}**")
             TICKET_STATUS_TRACKER[ticket_id]["status"] = status_name
         return {"status": "ok"}
-    
     # Verwerk toewijzingen
     if assigned_agent:
         assignee_display = assigned_agent
@@ -709,14 +647,65 @@ def halo_action():
             send_message(room_id, f"✅ Ticket #{ticket_id} geassigned naar **{assignee_display}**")
             TICKET_STATUS_TRACKER[ticket_id]["assignee"] = assignee_display
         return {"status": "ok"}
-    
     # Als geen van de bovenstaande gevalen, log en stopt
     log.warning("❌ Geen herkenbare actie in webhook data")
     return {"status": "ignore"}
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
+# KB LEEMMAK FUNCTIE
+# --------------------------------------------------------------------------
+def empty_knowledge_base():
+    h = get_halo_headers()
+    all_ids = []
+    page = 0
+    page_size = 100
+    while True:
+        params = {
+            "pageinate": True,
+            "page_size": page_size,
+            "page_no": page
+        }
+        url = f"{HALO_API_BASE}/api/KBArticle"
+        r = halo_request(url, headers=h, params=params)
+        if r.status_code != 200:
+            log.error(f"❌ Fout bij ophalen KB artikelen: {r.status_code} - {r.text[:200]}")
+            break
+            
+        data = r.json()
+        # Handle verschillende mogelijke response formaten
+        if isinstance(data, dict) and "root" in data:
+            articles = data["root"]
+        elif isinstance(data, dict) and "data" in data:
+            articles = data["data"]
+        else:
+            articles = data if isinstance(data, list) else []
+            
+        if not articles:
+            break
+            
+        for article in articles:
+            article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID")
+            if article_id is not None:
+                all_ids.append(str(article_id))
+                
+        if len(articles) < page_size:
+            break
+            
+        page += 1
+        
+    deleted_count = 0
+    for article_id in all_ids:
+        url = f"{HALO_API_BASE}/api/KBArticle/{article_id}"
+        r = halo_request(url, method='DELETE', headers=h)
+        if r.status_code in [200, 204]:
+            deleted_count += 1
+            log.info(f"✅ KB artikel {article_id} verwijderd")
+        else:
+            log.error(f"❌ Fout bij verwijderen KB artikel {article_id}: {r.status_code} - {r.text[:200]}")
+            
+    return deleted_count
+# --------------------------------------------------------------------------
 # ROUTES
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 @app.route("/webex", methods=["POST"])
 def webex_hook():
     if not WEBEX_HEADERS:
@@ -724,7 +713,6 @@ def webex_hook():
         return {"status": "ignore"}
     threading.Thread(target=process_webex_event, args=(request.json,)).start()
     return {"status": "ok"}
-
 @app.route("/initialize", methods=["GET"])
 def initialize():
     if not WEBEX_HEADERS:
@@ -739,7 +727,6 @@ def initialize():
         "source": f"client{HALO_CLIENT_ID_NUM}_site{HALO_SITE_ID}",
         "cached_users": len(USER_CACHE["users"])
     }
-
 @app.route("/health", methods=["GET"])
 def health():
     return {
@@ -747,7 +734,6 @@ def health():
         "tickets_tracked": len(TICKET_STATUS_TRACKER),
         "rooms": len(USER_TICKET_MAP)
     }
-
 @app.route("/tickets/<room_id>", methods=["GET"])
 def list_room_tickets(room_id):
     tickets = USER_TICKET_MAP.get(room_id, [])
@@ -760,7 +746,6 @@ def list_room_tickets(room_id):
             "assignee": info.get("assignee")
         })
     return {"tickets": result}
-
 @app.route("/ticket/<ticket_id>", methods=["GET"])
 def ticket_details(ticket_id):
     h = get_halo_headers()
@@ -781,7 +766,6 @@ def ticket_details(ticket_id):
         "summary": data.get("Summary") or data.get("summary"),
         "details": data.get("Details") or data.get("details")
     }
-
 def status_check_loop():
     while True:
         try:
@@ -790,10 +774,9 @@ def status_check_loop():
         except Exception as e:
             log.error(f"💥 Fout bij status check loop: {e}")
             time.sleep(60)
-
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 # START
-# -------------------------------------------------------------------------- 
+# --------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
