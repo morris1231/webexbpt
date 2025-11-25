@@ -656,73 +656,69 @@ def halo_action():
 def empty_knowledge_base():
     h = get_halo_headers()
     all_ids = []
-    page = 0
-    page_size = 50  # Maximaal 50 per pagina (gezien HALO-API limiet)
+    page_no = 1
+    page_size = 50  # HALO API limiet
     while True:
         params = {
-            "paginate": True,  # ✅ CORRECTE SPELLING (geen "pageinate")
-            "pageSize": page_size,  # ✅ camelCase (geen snake_case)
-            "page": page
+            "paginate": True,
+            "page_size": page_size,
+            "page_no": page_no,
         }
         url = f"{HALO_API_BASE}/api/KBArticle"
-        log.info(f"➡️ Ophalen KB artikelen (pagina {page}, page_size={page_size})")
+        log.info(f"➡️ Ophalen KB artikelen (pagina {page_no}, page_size={page_size})")
         r = halo_request(url, headers=h, params=params)
         if r.status_code != 200:
             log.error(f"❌ Fout bij ophalen KB artikelen: {r.status_code} - {r.text[:500]}")
             break
+
         data = r.json()
-        log.info(f"📩 API Response (pagina {page}): {json.dumps(data, indent=2)[:500]}...")
-        
-        # Verwerk response data
-        articles = []
         if isinstance(data, dict):
-            # Check verschillende mogelijke response-structuren
-            for key in ["root", "data", "items", "articles", "KBArticles"]:
-                if key in data:
-                    articles = data[key]
-                    break
-            if not articles and isinstance(data, list):
-                articles = data
+            # volgens documentatie komt lijst meestal onder “root”
+            articles = data.get("root") or data.get("items") or data.get("data") or []
         elif isinstance(data, list):
             articles = data
-        
+        else:
+            articles = []
+
         if not articles:
-            log.info(f"✅ Geen artikelen meer gevonden (pagina {page})")
+            log.info(f"✅ Geen artikelen meer gevonden (pagina {page_no}) — stoppen.")
             break
-            
-        # Log eerste paar artikelen
-        for i, article in enumerate(articles[:3]):
-            article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID")
-            title = article.get("Title") or article.get("title")
-            log.info(f"🔍 Artikel {i+1}: ID={article_id}, Title={title}")
-        
-        # Verzamel alle IDs
+
+        log.info(f"📄 {len(articles)} artikelen ontvangen op pagina {page_no}")
         for article in articles:
-            article_id = article.get("id") or article.get("KBArticleID") or article.get("ArticleID") or article.get("ArticleId")
+            article_id = (
+                article.get("id")
+                or article.get("KBArticleID")
+                or article.get("ArticleID")
+            )
             if article_id:
                 all_ids.append(str(article_id))
             else:
-                log.warning(f"⚠️ Artikel heeft geen ID: {json.dumps(article, indent=2)[:200]}")
-        
-        # Stop als minder dan page_size artikelen
-        if len(articles) < page_size:
-            log.info(f"✅ Eind van pagina's bereikt (totaal {len(all_ids)} artikelen)")
-            break
-        page += 1
+                log.warning(f"⚠️ Artikel zonder ID: {json.dumps(article)[:200]}")
 
-    # Verwijder artikelen
+        # Als minder dan page_size, dan laatste pagina bereikt
+        if len(articles) < page_size:
+            log.info(f"✅ Laatste pagina bereikt ({len(articles)} artikelen)")
+            break
+
+        page_no += 1
+        # Kleine vertraging om rate‑limit te vermijden
+        time.sleep(0.2)
+
+    log.info(f"🔍 Totaal {len(all_ids)} KB artikelen gevonden => beginnen met verwijderen")
+
     deleted_count = 0
-    for i, article_id in enumerate(all_ids):
-        url = f"{HALO_API_BASE}/api/KBArticle/{article_id}"
-        log.info(f"➡️ Verwijderen KB artikel {i+1}/{len(all_ids)}: {article_id}")
-        r = halo_request(url, method='DELETE', headers=h)
-        if r.status_code in [200, 204]:
+    for i, article_id in enumerate(all_ids, start=1):
+        del_url = f"{HALO_API_BASE}/api/KBArticle/{article_id}"
+        log.info(f"🗑️ ({i}/{len(all_ids)}) Verwijderen artikel ID={article_id}")
+        r = halo_request(del_url, method="DELETE", headers=h)
+        if r.status_code in (200, 204):
             deleted_count += 1
-            log.info(f"✅ KB artikel {article_id} verwijderd")
+            log.info(f"✅ Artikel {article_id} verwijderd")
         else:
-            log.error(f"❌ Fout bij verwijderen KB artikel {article_id}: {r.status_code} - {r.text[:500]}")
-    
-    log.info(f"✅ Totaal {deleted_count} KB artikelen verwijderd van {len(all_ids)} gevonden")
+            log.error(f"❌ Fout bij verwijderen {article_id}: {r.status_code} - {r.text[:300]}")
+
+    log.info(f"✅ Klaar: {deleted_count}/{len(all_ids)} KB artikelen verwijderd")
     return deleted_count
 # --------------------------------------------------------------------------
 # ROUTES
@@ -802,5 +798,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     log.info(f"🚀 Start server op poort {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
